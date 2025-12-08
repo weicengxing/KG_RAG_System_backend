@@ -63,13 +63,14 @@ def get_user_by_email(email):
     return None
 
 
-def create_user(username, password_hash, email):
+def create_user(username, password_hash, email, password_strength=2):
     """创建新用户
     
     Args:
         username: 用户名
         password_hash: 密码哈希
         email: 邮箱地址
+        password_strength: 密码强度等级 (1-4)
         
     Returns:
         str: 操作结果 ("SUCCESS", "USERNAME_EXISTS", "EMAIL_EXISTS")
@@ -97,10 +98,17 @@ def create_user(username, password_hash, email):
             is_vip: false,
             twofa_enabled: false,
             twofa_filename: '',
-            twofa_hash: ''
+            twofa_hash: '',
+            password_strength: $password_strength
         }) RETURN u
         """
-        session.run(query, username=username, password=password_hash, email=email)
+        session.run(
+            query,
+            username=username,
+            password=password_hash,
+            email=email,
+            password_strength=password_strength or 2
+        )
     return "SUCCESS"
 
 

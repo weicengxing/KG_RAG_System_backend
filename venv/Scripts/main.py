@@ -17,6 +17,16 @@ import logging
 from typing import Optional
 import asyncio
 import hashlib
+import re
+from redis_utils import (
+    save_forgot_password_code,
+    verify_forgot_password_code,
+    delete_forgot_password_code,
+    create_qr_session,
+    get_qr_session,
+    confirm_qr_login,
+    delete_qr_session,
+)
 
 # 1. 定义更新资料的请求体模型
 class ProfileUpdateSchema(BaseModel):
@@ -43,6 +53,47 @@ def calc_profile_completion(user_stats: dict) -> int:
     # 至少有用户名邮箱两个基础字段，保持 0-100 的线性比例
     total = len(fields)
     return int((filled / total) * 100)
+
+
+def evaluate_password_strength(password: str) -> int:
+    """粗略评估密码复杂度，返回 1-4 等级"""
+    if not password:
+        return 1
+
+    length = len(password)
+    categories = sum([
+        bool(re.search(r"[a-z]", password)),
+        bool(re.search(r"[A-Z]", password)),
+        bool(re.search(r"[0-9]", password)),
+        bool(re.search(r"[^\w\s]", password))
+    ])
+
+    score = 0
+    if length >= 8:
+        score += 1
+    if length >= 12:
+        score += 1
+    if categories >= 3:
+        score += 1
+    if length >= 16 and categories == 4:
+        score += 1
+
+    # 限定范围 1-4
+    return max(1, min(score, 4))
+
+
+def build_security_rating(password_strength: int, twofa_enabled: bool) -> dict:
+    """基于密码强度与2FA状态生成安全评级"""
+    strength = password_strength or 2
+    has_2fa = bool(twofa_enabled)
+
+    if has_2fa and strength >= 4:
+        return {"level": "top_secret", "label": "绝密", "color": "purple"}
+    if strength >= 3:
+        return {"level": "high", "label": "高", "color": "green"}
+    if strength >= 2:
+        return {"level": "medium", "label": "中", "color": "yellow"}
+    return {"level": "low", "label": "低", "color": "red"}
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -78,6 +129,21 @@ class RegisterSchema(BaseModel):
     code: str
     password: str
     username: str # 依然保留用户名作为昵称
+
+class ForgotPasswordSendSchema(BaseModel):
+    username: str
+    email: EmailStr
+
+class ForgotPasswordResetSchema(BaseModel):
+    username: str
+    email: EmailStr
+    code: str
+    new_password: str
+
+class QRConfirmSchema(BaseModel):
+    qr_id: str
+    username: str
+    password: str
 
 class LoginSchema(BaseModel):
     username: str # 登录还是用用户名方便，或者你可以改成用邮箱登录
@@ -164,14 +230,29 @@ async def jwt_auth_middleware(request: Request, call_next):
     
     # 不需要认证的路径
     public_paths = ["/docs", "/openapi.json", "/redoc"]
-    # 不需要认证的 auth 路径
-    public_auth_paths = ["/auth/login", "/auth/register", "/auth/send-code", "/auth/verify-2fa"]
+    # 不需要认证的 auth 路径（精确匹配）
+    public_auth_paths = [
+        "/auth/login",
+        "/auth/register",
+        "/auth/send-code",
+        "/auth/verify-2fa",
+        "/auth/forgot-password/send-code",
+        "/auth/forgot-password/reset",
+    ]
+    # 允许匿名访问的二维码相关前缀（生成/检查/状态/确认）
+    qr_public_prefixes = [
+        "/auth/qr/generate",
+        "/auth/qr/check",
+        "/auth/qr/status",
+        "/auth/qr/confirm",
+    ]
 
     # 检查是否是公开路径
     path = request.url.path
     is_public = (
         any(path == p or (p != "/" and path.startswith(p)) for p in public_paths) or
-        path in public_auth_paths
+        path in public_auth_paths or
+        any(path.startswith(prefix) for prefix in qr_public_prefixes)
     )
 
     # 🔍 添加调试信息
@@ -404,13 +485,200 @@ def register(user: RegisterSchema):
         raise HTTPException(status_code=400, detail="用户名已存在")
         
     # 5. 创建用户 (加密密码)
+    password_strength = evaluate_password_strength(user.password)
     hashed_pw = get_password_hash(user.password)
-    database.create_user(user.username, hashed_pw, user.email)
+    database.create_user(user.username, hashed_pw, user.email, password_strength=password_strength)
     
     # 6. 注册成功后清除验证码
     del verification_codes[user.email]
     
     return {"message": "注册成功"}
+
+
+@app.post("/auth/forgot-password/send-code")
+async def send_forgot_password_code(data: ForgotPasswordSendSchema, background_tasks: BackgroundTasks):
+    """发送忘记密码验证码"""
+    user = database.get_user(data.username)
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+
+    user_email = (user.get("email") or "").lower()
+    if user_email != data.email.lower():
+        raise HTTPException(status_code=400, detail="用户名与邮箱不匹配")
+
+    code = email_utils.generate_code()
+    # 保存到 Redis，5分钟有效（配置在 redis_utils 中）
+    saved = save_forgot_password_code(data.email, code)
+    if not saved:
+        raise HTTPException(status_code=500, detail="验证码保存失败，请稍后重试")
+
+    background_tasks.add_task(email_utils.send_forgot_password_email, data.email, code)
+    return {"message": "验证码已发送，请在5分钟内使用"}
+
+
+@app.post("/auth/forgot-password/reset")
+async def reset_password(data: ForgotPasswordResetSchema):
+    """校验验证码后重置密码"""
+    # 验证验证码（包含存在性与正确性）
+    ok, msg = verify_forgot_password_code(data.email, data.code)
+    if not ok:
+        raise HTTPException(status_code=400, detail=msg or "验证码校验失败")
+
+    user = database.get_user(data.username)
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    if (user.get("email") or "").lower() != data.email.lower():
+        raise HTTPException(status_code=400, detail="用户名与邮箱不匹配")
+
+    new_password_strength = evaluate_password_strength(data.new_password)
+    new_password_hash = get_password_hash(data.new_password)
+    success = await db_async_manager.submit_password_update(
+        data.username,
+        new_password_hash,
+        new_password_strength
+    )
+    if not success:
+        raise HTTPException(status_code=500, detail="密码重置失败，请稍后再试")
+
+    # 删除验证码
+    delete_forgot_password_code(data.email)
+    return {"message": "密码重置成功，请使用新密码登录"}
+
+
+# ==================== 二维码登录相关 API ====================
+
+
+@app.get("/auth/qr-login-status")
+async def get_qr_login_status(request: Request):
+    """获取当前登录用户的二维码登录开关状态"""
+    username = getattr(request.state, "current_user", None)
+    if not username:
+        raise HTTPException(status_code=401, detail="未认证")
+
+    enabled = database.get_user_qr_login_status(username)
+    return {"qr_login_enabled": enabled}
+
+
+@app.post("/auth/qr-login/enable")
+async def enable_qr_login(request: Request):
+    """启用二维码登录"""
+    username = getattr(request.state, "current_user", None)
+    if not username:
+        raise HTTPException(status_code=401, detail="未认证")
+
+    updated = database.set_user_qr_login_status(username, True)
+    if not updated:
+        raise HTTPException(status_code=500, detail="启用失败，请稍后重试")
+    return {"message": "二维码登录已启用"}
+
+
+@app.post("/auth/qr-login/disable")
+async def disable_qr_login(request: Request):
+    """关闭二维码登录"""
+    username = getattr(request.state, "current_user", None)
+    if not username:
+        raise HTTPException(status_code=401, detail="未认证")
+
+    updated = database.set_user_qr_login_status(username, False)
+    if not updated:
+        raise HTTPException(status_code=500, detail="禁用失败，请稍后重试")
+    return {"message": "二维码登录已禁用"}
+
+
+@app.get("/auth/qr/status/{username}")
+async def public_qr_status(username: str):
+    """登录页用：查询指定用户是否启用二维码登录"""
+    enabled = database.get_user_qr_login_status(username)
+    return {"qr_login_enabled": enabled}
+
+
+@app.post("/auth/qr/generate")
+async def generate_qr(request: Request):
+    """生成二维码会话，返回二维码ID与扫码URL"""
+    qr_id = uuid.uuid4().hex
+    if not create_qr_session(qr_id):
+        raise HTTPException(status_code=500, detail="二维码生成失败，请稍后重试")
+
+    # 构造扫码URL，指向前端 h5.html
+    base_url = str(request.base_url).rstrip("/")
+    qr_url = f"https://ksg-702.pages.dev/h5.html?qr_id={qr_id}"
+
+    return {
+        "qr_id": qr_id,
+        "qr_url": qr_url,
+        "expires_in": 300
+    }
+
+
+@app.get("/auth/qr/check/{qr_id}")
+async def check_qr_status(qr_id: str):
+    """登录页轮询：检查二维码会话状态"""
+    session = get_qr_session(qr_id)
+    if not session:
+        return {"status": "expired"}
+
+    status = session.get("status", "pending")
+    if status == "confirmed":
+        # 取出令牌后删除会话，防止重复使用
+        token = session.get("token")
+        username = session.get("username")
+        delete_qr_session(qr_id)
+        return {
+            "status": "confirmed",
+            "access_token": token,
+            "username": username
+        }
+
+    return {"status": status}
+
+
+@app.post("/auth/qr/confirm")
+async def confirm_qr_login_api(data: QRConfirmSchema, request: Request):
+    """手机端 H5 提交账号密码确认登录"""
+    # 检查会话是否存在
+    session = get_qr_session(data.qr_id)
+    if not session:
+        raise HTTPException(status_code=400, detail="二维码不存在或已过期")
+    if session.get("status") == "confirmed":
+        return {"success": True}
+
+    # 校验用户与密码
+    user = database.get_user(data.username)
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+
+    if not verify_password(data.password, user["password"]):
+        raise HTTPException(status_code=400, detail="用户名或密码错误")
+
+    # 检查是否启用二维码登录
+    if not database.get_user_qr_login_status(data.username):
+        raise HTTPException(status_code=400, detail="该用户未启用二维码登录")
+
+    # 生成 token 并确认会话
+    access_token = create_access_token(data={"sub": data.username})
+    if not confirm_qr_login(data.qr_id, data.username, access_token):
+        raise HTTPException(status_code=500, detail="确认登录失败，请重试")
+
+    # 更新活跃时间 & 登录记录（异步）
+    try:
+        database.update_last_activity(data.username)
+        client_ip = request.client.host if request.client else "unknown"
+        user_agent = request.headers.get("User-Agent", "")
+        location = request.headers.get("X-Login-Location") or "扫码端"
+        now_ms = int(time.time() * 1000)
+        asyncio.create_task(
+            db_async_manager.submit_login_record(
+                data.username,
+                client_ip,
+                location,
+                user_agent,
+                now_ms
+            )
+        )
+    except Exception as e:
+        logger.error(f"记录扫码登录历史失败: {e}")
+
+    return {"success": True}
 
 @app.post("/auth/login")
 async def login(user: UserAuth, request: Request):
@@ -546,11 +814,12 @@ async def change_password(data: ChangePasswordSchema, request: Request):
     if not verify_password(data.current_password, db_user["password"]):
         raise HTTPException(status_code=400, detail="当前密码不正确")
 
+    new_password_strength = evaluate_password_strength(data.new_password)
     new_password_hash = get_password_hash(data.new_password)
     success = await db_async_manager.submit_password_update(
         username,
         new_password_hash,
-        data.password_strength or 2
+        new_password_strength
     )
     if not success:
         raise HTTPException(status_code=500, detail="密码更新失败，请稍后重试")
@@ -595,6 +864,28 @@ def get_current_user(request: Request):
         "request_count": user_stats.get("request_count", 0),
         "online_days": user_stats.get("online_days", 0),
         "twofa_enabled": user_stats.get("twofa_enabled", False)
+    }
+
+
+@app.get("/auth/security-rating")
+def get_security_rating(request: Request):
+    """返回账户安全评级（低/中/高/绝密）"""
+    username = getattr(request.state, "current_user", None)
+    if not username:
+        raise HTTPException(status_code=401, detail="未认证")
+
+    user_stats = database.get_user(username)
+    if not user_stats:
+        raise HTTPException(status_code=404, detail="用户不存在")
+
+    password_strength = user_stats.get("password_strength", 2) or 2
+    twofa_enabled = user_stats.get("twofa_enabled", False) or False
+    rating = build_security_rating(password_strength, twofa_enabled)
+
+    return {
+        "rating": rating,
+        "password_strength": password_strength,
+        "twofa_enabled": twofa_enabled
     }
 
 @app.post("/auth/upload-avatar")
