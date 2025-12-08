@@ -7,6 +7,7 @@ import database
 import email_utils # 引入刚才写的
 from datetime import datetime, timedelta
 import time
+from rate_limiter import check_rate_limit, is_rate_limiter_available
 
 app = FastAPI()
 verification_codes = {}  # 格式: {email: {"code": "123456", "created_at": timestamp, "expires_at": timestamp}}
@@ -32,6 +33,61 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 限流中间件（在JWT认证之前执行）
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    """限流中间件：检查IP、接口和全局限流"""
+    # 不需要限流的路径（健康检查、文档等）
+    exempt_paths = ["/", "/docs", "/openapi.json", "/redoc"]
+    path = request.url.path
+    
+    # 检查是否是豁免路径
+    is_exempt = any(path == p or path.startswith(p) for p in exempt_paths)
+    
+    if not is_exempt and is_rate_limiter_available():
+        # 获取客户端IP
+        client_ip = request.client.host
+        # 如果使用了代理，尝试从X-Forwarded-For获取真实IP
+        forwarded_for = request.headers.get("X-Forwarded-For")
+        if forwarded_for:
+            client_ip = forwarded_for.split(",")[0].strip()
+        
+        # 检查限流
+        allowed, limit_type, remaining, retry_after = check_rate_limit(
+            client_ip=client_ip,
+            endpoint=path
+        )
+        
+        if not allowed:
+            # 构建限流响应
+            error_detail = {
+                "detail": "请求过于频繁，请稍后再试",
+                "code": "RATE_LIMIT_EXCEEDED",
+                "limit_type": limit_type,  # "ip", "endpoint", "global"
+                "retry_after": retry_after  # 需要等待的秒数
+            }
+            
+            # 添加限流相关的响应头
+            response = JSONResponse(
+                status_code=429,  # Too Many Requests
+                content=error_detail
+            )
+            response.headers["X-RateLimit-Limit-Type"] = limit_type
+            response.headers["X-RateLimit-Remaining"] = str(remaining)
+            response.headers["Retry-After"] = str(retry_after)
+            
+            return response
+    
+    # 限流通过，继续处理请求
+    response = await call_next(request)
+    
+    # 如果限流器可用，添加限流信息到响应头（用于调试）
+    if is_rate_limiter_available() and not is_exempt:
+        # 这里可以添加更多限流信息到响应头
+        pass
+    
+    return response
 
 # JWT 认证中间件
 @app.middleware("http")
