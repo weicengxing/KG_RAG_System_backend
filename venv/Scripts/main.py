@@ -1,10 +1,11 @@
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Request, UploadFile, File
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Request, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, EmailStr
 from utils import verify_password, get_password_hash, create_access_token, create_refresh_token, decode_token, decode_token_with_exp
 import database
+from database_async import AsyncDatabaseManager
 import email_utils # 引入刚才写的
 from datetime import datetime, timedelta
 import time
@@ -13,6 +14,35 @@ import uuid
 import shutil
 from rate_limiter import check_rate_limit, is_rate_limiter_available
 import logging
+from typing import Optional
+import asyncio
+import hashlib
+
+# 1. 定义更新资料的请求体模型
+class ProfileUpdateSchema(BaseModel):
+    username: str
+    email: EmailStr
+    job_title: Optional[str] = ""
+    website: Optional[str] = ""
+    bio: Optional[str] = ""
+
+# 资料完成度计算
+def calc_profile_completion(user_stats: dict) -> int:
+    """根据填写字段数量计算资料完成度，范围 0-100"""
+    if not user_stats:
+        return 0
+    fields = [
+        user_stats.get("username"),
+        user_stats.get("email"),
+        user_stats.get("job_title"),
+        user_stats.get("website"),
+        user_stats.get("bio"),
+        user_stats.get("avatar"),
+    ]
+    filled = sum(1 for f in fields if f not in (None, "", 0))
+    # 至少有用户名邮箱两个基础字段，保持 0-100 的线性比例
+    total = len(fields)
+    return int((filled / total) * 100)
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -20,6 +50,7 @@ logger = logging.getLogger("jwt_auth")
 
 app = FastAPI()
 verification_codes = {}  # 格式: {email: {"code": "123456", "created_at": timestamp, "expires_at": timestamp}}
+db_async_manager = AsyncDatabaseManager(max_workers=5)
 
 # 头像存储目录 - 改为存储在assets目录下
 # 计算相对于项目根目录的绝对路径
@@ -29,7 +60,12 @@ project_root = os.path.dirname(os.path.dirname(current_dir))
 AVATAR_DIR = os.path.join(project_root, "assets", "avatars")
 os.makedirs(AVATAR_DIR, exist_ok=True)
 
+# 2FA 存储目录（按照需求存放在 venv 目录下）
+TWOFA_DIR = os.path.join(os.path.dirname(current_dir), "2FA")
+os.makedirs(TWOFA_DIR, exist_ok=True)
+
 print(f"[AVATAR DEBUG] 头像存储目录: {AVATAR_DIR}")
+print(f"[2FA DEBUG] 2FA存储目录: {TWOFA_DIR}")
 
 # 挂载静态文件目录，用于提供头像访问
 app.mount("/avatar", StaticFiles(directory=AVATAR_DIR), name="avatar")
@@ -45,6 +81,12 @@ class RegisterSchema(BaseModel):
 
 class LoginSchema(BaseModel):
     username: str # 登录还是用用户名方便，或者你可以改成用邮箱登录
+
+class ChangePasswordSchema(BaseModel):
+    current_password: str
+    new_password: str
+    # 前端已做强度校验，这里仅存储等级，默认中等
+    password_strength: int = 2
 
 # CORS 配置保持不变...
 origins = ["http://localhost:5173", "http://localhost:8080"]
@@ -123,7 +165,7 @@ async def jwt_auth_middleware(request: Request, call_next):
     # 不需要认证的路径
     public_paths = ["/docs", "/openapi.json", "/redoc"]
     # 不需要认证的 auth 路径
-    public_auth_paths = ["/auth/login", "/auth/register", "/auth/send-code"]
+    public_auth_paths = ["/auth/login", "/auth/register", "/auth/send-code", "/auth/verify-2fa"]
 
     # 检查是否是公开路径
     path = request.url.path
@@ -266,6 +308,58 @@ class UserAuth(BaseModel):
 def read_root():
     return {"message": "后端服务运行正常！", "status": "success"}
 
+# --- 工具方法 ---
+
+def compute_file_hash(content: bytes) -> str:
+    """计算文件的 SHA256 哈希"""
+    return hashlib.sha256(content).hexdigest()
+
+
+async def build_login_response(username: str, request: Request):
+    """统一生成登录成功返回，包含 token 与登录记录"""
+    # 更新最后活动时间
+    database.update_last_activity(username)
+
+    # 生成 token
+    access_token = create_access_token(data={"sub": username})
+    refresh_token = create_refresh_token(data={"sub": username})
+
+    # 记录登录历史
+    try:
+        client_ip = request.headers.get("X-Forwarded-For")
+        if client_ip:
+            client_ip = client_ip.split(",")[0].strip()
+        else:
+            client_ip = request.client.host if request.client else "unknown"
+
+        user_agent = request.headers.get("User-Agent", "")
+        location = request.headers.get("X-Login-Location")
+        if not location:
+            location = "本地" if client_ip in ("127.0.0.1", "::1", "localhost") else "未知"
+
+        now_ms = int(time.time() * 1000)
+        last_login = database.get_user_last_login_record(username)
+        if (last_login is None) or (now_ms - last_login >= 24 * 60 * 60 * 1000):
+            asyncio.create_task(
+                db_async_manager.submit_login_record(
+                    username,
+                    client_ip,
+                    location,
+                    user_agent,
+                    now_ms
+                )
+            )
+    except Exception as e:
+        logger.error(f"记录登录历史失败: {e}")
+
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "bearer",
+        "username": username
+    }
+
+
 # --- 新增 API ---
 
 @app.post("/auth/send-code")
@@ -319,7 +413,7 @@ def register(user: RegisterSchema):
     return {"message": "注册成功"}
 
 @app.post("/auth/login")
-def login(user: UserAuth):
+async def login(user: UserAuth, request: Request):
     # 1. 从数据库查用户
     db_user = database.get_user(user.username)
     if not db_user:
@@ -329,18 +423,149 @@ def login(user: UserAuth):
     if not verify_password(user.password, db_user["password"]):
         raise HTTPException(status_code=400, detail="用户名或密码错误")
     
-    # 3. 更新用户的最后活动时间
-    database.update_last_activity(user.username)
+    # 3. 如果开启了两步验证，要求上传图片验证
+    if db_user.get("twofa_enabled"):
+        return {"requires_2fa": True, "username": user.username}
     
-    # 4. 生成 Access Token 和 Refresh Token
-    access_token = create_access_token(data={"sub": user.username})
-    refresh_token = create_refresh_token(data={"sub": user.username})
-    return {
-        "access_token": access_token,
-        "refresh_token": refresh_token,
-        "token_type": "bearer",
-        "username": user.username
-    }
+    # 4. 正常登录流程
+    return await build_login_response(user.username, request)
+
+
+@app.post("/auth/enable-2fa")
+async def enable_twofa(request: Request, file: UploadFile = File(...)):
+    """启用两步验证并上传验证图片"""
+    username = getattr(request.state, "current_user", None)
+    if not username:
+        raise HTTPException(status_code=401, detail="未认证")
+
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="只能上传图片文件")
+
+    content = await file.read()
+    if len(content) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="图片大小不能超过5MB")
+
+    file_ext = os.path.splitext(file.filename)[1] if file.filename else ".jpg"
+    unique_filename = f"{username}_{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}{file_ext}"
+    file_path = os.path.join(TWOFA_DIR, unique_filename)
+
+    # 获取旧文件以便清理
+    info = database.get_user_2fa_info(username)
+    old_filename = info.get("twofa_filename") if info else ""
+
+    try:
+        with open(file_path, "wb") as f:
+            f.write(content)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"保存验证图片失败: {e}")
+
+    file_hash = compute_file_hash(content)
+    success = database.set_user_2fa(username, True, unique_filename, file_hash)
+    if not success:
+        # 回滚文件写入
+        try:
+            os.remove(file_path)
+        except Exception:
+            pass
+        raise HTTPException(status_code=500, detail="更新2FA状态失败")
+
+    # 清理旧文件
+    if old_filename:
+        old_path = os.path.join(TWOFA_DIR, old_filename)
+        if os.path.exists(old_path):
+            try:
+                os.remove(old_path)
+            except Exception:
+                pass
+
+    return {"message": "两步验证已启用"}
+
+
+@app.post("/auth/disable-2fa")
+async def disable_twofa(request: Request):
+    """关闭两步验证并删除验证图片"""
+    username = getattr(request.state, "current_user", None)
+    if not username:
+        raise HTTPException(status_code=401, detail="未认证")
+
+    info = database.get_user_2fa_info(username)
+    if info.get("twofa_filename"):
+        old_path = os.path.join(TWOFA_DIR, info["twofa_filename"])
+        if os.path.exists(old_path):
+            try:
+                os.remove(old_path)
+            except Exception:
+                pass
+
+    if not database.set_user_2fa(username, False, "", ""):
+        raise HTTPException(status_code=500, detail="关闭两步验证失败")
+
+    return {"message": "两步验证已关闭"}
+
+
+@app.post("/auth/verify-2fa")
+async def verify_twofa(request: Request, username: str = Form(...), file: UploadFile = File(...)):
+    """验证两步验证图片并完成登录"""
+    db_user = database.get_user(username)
+    if not db_user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+
+    if not db_user.get("twofa_enabled"):
+        raise HTTPException(status_code=400, detail="该用户未启用两步验证")
+
+    stored_hash = db_user.get("twofa_hash") or ""
+    stored_filename = db_user.get("twofa_filename") or ""
+    if not stored_hash or not stored_filename:
+        raise HTTPException(status_code=400, detail="两步验证信息不完整，请重新设置")
+
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="只能上传图片文件")
+
+    content = await file.read()
+    if len(content) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="图片大小不能超过5MB")
+
+    upload_hash = compute_file_hash(content)
+    if upload_hash != stored_hash:
+        raise HTTPException(status_code=400, detail="验证图片不匹配，请重试")
+
+    # 验证通过，完成登录
+    return await build_login_response(username, request)
+
+@app.put("/auth/change-password")
+async def change_password(data: ChangePasswordSchema, request: Request):
+    """校验旧密码后更新密码（前端已校验强度，这里只存储）"""
+    username = getattr(request.state, "current_user", None)
+    if not username:
+        raise HTTPException(status_code=401, detail="未认证")
+
+    db_user = database.get_user(username)
+    if not db_user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+
+    if not verify_password(data.current_password, db_user["password"]):
+        raise HTTPException(status_code=400, detail="当前密码不正确")
+
+    new_password_hash = get_password_hash(data.new_password)
+    success = await db_async_manager.submit_password_update(
+        username,
+        new_password_hash,
+        data.password_strength or 2
+    )
+    if not success:
+        raise HTTPException(status_code=500, detail="密码更新失败，请稍后重试")
+
+    return {"message": "密码已更新，请重新登录"}
+
+@app.get("/auth/login-history")
+async def get_login_history(request: Request):
+    """获取当前用户最近的登录历史"""
+    username = getattr(request.state, "current_user", None)
+    if not username:
+        raise HTTPException(status_code=401, detail="未认证")
+
+    records = database.get_login_history(username, limit=50)
+    return {"records": records}
 
 @app.get("/auth/me")
 def get_current_user(request: Request):
@@ -355,14 +580,21 @@ def get_current_user(request: Request):
     if not user_stats:
         raise HTTPException(status_code=404, detail="用户不存在")
     
+    profile_completion = calc_profile_completion(user_stats)
+    
     return {
         "username": user_stats.get("username", ""),
         "email": user_stats.get("email", ""),
         "avatar": user_stats.get("avatar", ""),
+        "job_title": user_stats.get("job_title", ""),
+        "website": user_stats.get("website", ""),
+        "bio": user_stats.get("bio", ""),
+        "profile_completion": profile_completion,
         "created_at": user_stats.get("created_at"),
         "last_activity": user_stats.get("last_activity"),
         "request_count": user_stats.get("request_count", 0),
-        "online_days": user_stats.get("online_days", 0)
+        "online_days": user_stats.get("online_days", 0),
+        "twofa_enabled": user_stats.get("twofa_enabled", False)
     }
 
 @app.post("/auth/upload-avatar")
@@ -392,29 +624,16 @@ async def upload_avatar(request: Request, file: UploadFile = File(...)):
     user_stats = database.get_user_stats(username)
     old_avatar = user_stats.get("avatar", "") if user_stats else None
     
-    # 保存头像文件
-    file_path = os.path.join(AVATAR_DIR, unique_filename)
-    try:
-        with open(file_path, "wb") as f:
-            f.write(content)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"保存头像失败: {str(e)}")
-    
-    # 删除旧头像
-    if old_avatar:
-        old_file_path = os.path.join(AVATAR_DIR, old_avatar)
-        if os.path.exists(old_file_path):
-            try:
-                os.remove(old_file_path)
-            except Exception:
-                pass  # 删除失败不影响新头像保存
-    
-    # 更新数据库
-    success = database.update_user_avatar(username, unique_filename)
+    # 使用线程池异步写文件并更新数据库
+    success = await db_async_manager.submit_avatar_save(
+        username=username,
+        filename=unique_filename,
+        content=content,
+        avatar_dir=AVATAR_DIR,
+        old_avatar=old_avatar
+    )
+
     if not success:
-        # 如果数据库更新失败，删除已保存的文件
-        if os.path.exists(file_path):
-            os.remove(file_path)
         raise HTTPException(status_code=500, detail="更新头像信息失败")
     
     return {"avatar": unique_filename, "message": "头像上传成功"}
@@ -464,6 +683,73 @@ def delete_account(request: Request):
                 pass  # 删除失败不影响账户删除
     
     return {"message": "账户已成功删除"}
+
+@app.put("/auth/update-profile")
+async def update_profile(data: ProfileUpdateSchema, request: Request):
+    """保存更改：更新个人资料"""
+    current_username = getattr(request.state, "current_user", None)
+    if not current_username:
+        raise HTTPException(status_code=401, detail="未认证")
+
+    # 简单校验：如果改了用户名，检查新用户名是否已存在
+    if data.username != current_username:
+        existing = database.get_user(data.username)
+        if existing:
+            raise HTTPException(status_code=400, detail="该用户名已被占用")
+
+    success, updated_user_or_msg = await db_async_manager.submit_profile_update(
+        current_username, data.dict()
+    )
+    if not success:
+        raise HTTPException(status_code=400, detail=updated_user_or_msg or "保存失败，请稍后重试")
+
+    updated_user = updated_user_or_msg
+    profile_completion = calc_profile_completion(updated_user)
+    
+    # 返回更新后的数据，前端会用这个更新 Store
+    return {
+        "message": "保存成功",
+        "username": updated_user.get("username"),
+        "email": updated_user.get("email"),
+        "job_title": updated_user.get("job_title", ""),
+        "website": updated_user.get("website", ""),
+        "bio": updated_user.get("bio", ""),
+        "avatar": updated_user.get("avatar", ""),
+        "profile_completion": profile_completion
+    }
+
+@app.post("/auth/save-profile")
+async def save_profile(data: ProfileUpdateSchema, request: Request):
+    """新接口：保存用户在资料页的编辑信息"""
+    current_username = getattr(request.state, "current_user", None)
+    if not current_username:
+        raise HTTPException(status_code=401, detail="未认证")
+
+    # 允许用户名修改，但需要唯一性校验
+    if data.username != current_username:
+        existing = database.get_user(data.username)
+        if existing:
+            raise HTTPException(status_code=400, detail="该用户名已被占用")
+
+    success, updated_user_or_msg = await db_async_manager.submit_profile_update(
+        current_username, data.dict()
+    )
+    if not success:
+        raise HTTPException(status_code=400, detail=updated_user_or_msg or "保存失败，请稍后重试")
+
+    updated_user = updated_user_or_msg
+    profile_completion = calc_profile_completion(updated_user)
+
+    return {
+        "message": "保存成功",
+        "username": updated_user.get("username"),
+        "email": updated_user.get("email"),
+        "job_title": updated_user.get("job_title", ""),
+        "website": updated_user.get("website", ""),
+        "bio": updated_user.get("bio", ""),
+        "avatar": updated_user.get("avatar", ""),
+        "profile_completion": profile_completion
+    }
 
 if __name__ == "__main__":
     import uvicorn

@@ -94,7 +94,10 @@ def create_user(username, password_hash, email):
             created_at: timestamp(),
             last_activity: timestamp(),
             request_count: 0,
-            is_vip: false
+            is_vip: false,
+            twofa_enabled: false,
+            twofa_filename: '',
+            twofa_hash: ''
         }) RETURN u
         """
         session.run(query, username=username, password=password_hash, email=email)
@@ -118,6 +121,8 @@ def get_user(username):
                u.last_activity as last_activity, u.created_at as created_at,
                u.request_count as request_count,
                u.twofa_enabled as twofa_enabled,
+               u.twofa_filename as twofa_filename,
+               u.twofa_hash as twofa_hash,
                u.password_strength as password_strength
         """
         result = session.run(query, uid=username).single()
@@ -130,6 +135,8 @@ def get_user(username):
                 "created_at": result.get("created_at"),
                 "request_count": result.get("request_count", 0),
                 "twofa_enabled": result.get("twofa_enabled", False) or False,
+                "twofa_filename": result.get("twofa_filename") or "",
+                "twofa_hash": result.get("twofa_hash") or "",
                 "password_strength": result.get("password_strength", 2) or 2
             }
     return None
@@ -174,6 +181,62 @@ def get_user_2fa_status(username):
         if result:
             return result.get("twofa_enabled", False) or False
     return False
+
+
+def get_user_2fa_info(username):
+    """获取用户2FA文件信息
+
+    Args:
+        username: 用户名
+
+    Returns:
+        dict: 包含 twofa_enabled、twofa_filename、twofa_hash
+    """
+    with driver.session() as session:
+        query = """
+        MATCH (u:User {username: $username})
+        RETURN u.twofa_enabled as twofa_enabled,
+               u.twofa_filename as twofa_filename,
+               u.twofa_hash as twofa_hash
+        """
+        result = session.run(query, username=username).single()
+        if result:
+            return {
+                "twofa_enabled": result.get("twofa_enabled", False) or False,
+                "twofa_filename": result.get("twofa_filename") or "",
+                "twofa_hash": result.get("twofa_hash") or ""
+            }
+    return {"twofa_enabled": False, "twofa_filename": "", "twofa_hash": ""}
+
+
+def set_user_2fa(username, enabled: bool, filename: str = "", file_hash: str = ""):
+    """设置用户2FA状态与文件信息
+
+    Args:
+        username: 用户名
+        enabled: 是否启用2FA
+        filename: 图片文件名
+        file_hash: 图片哈希
+
+    Returns:
+        bool: 更新是否成功
+    """
+    with driver.session() as session:
+        query = """
+        MATCH (u:User {username: $username})
+        SET u.twofa_enabled = $enabled,
+            u.twofa_filename = $filename,
+            u.twofa_hash = $file_hash
+        RETURN u.username as username
+        """
+        result = session.run(
+            query,
+            username=username,
+            enabled=enabled,
+            filename=filename or "",
+            file_hash=file_hash or ""
+        ).single()
+        return result is not None
 
 
 def get_user_qr_login_status(username):
@@ -310,7 +373,8 @@ def get_user_stats(username):
         RETURN u.username as username, u.email as email,
                u.created_at as created_at, u.last_activity as last_activity,
                u.request_count as request_count, u.avatar as avatar,
-               u.job_title as job_title, u.website as website, u.bio as bio
+               u.job_title as job_title, u.website as website, u.bio as bio,
+               u.twofa_enabled as twofa_enabled
         """
         result = session.run(query, username=username).single()
         if result:
@@ -336,7 +400,8 @@ def get_user_stats(username):
                 "avatar": result.get("avatar", ""),
                 "job_title": result.get("job_title", ""),
                 "website": result.get("website", ""),
-                "bio": result.get("bio", "")
+                "bio": result.get("bio", ""),
+                "twofa_enabled": result.get("twofa_enabled", False) or False
             }
     return None
 
@@ -591,6 +656,28 @@ def get_login_history(username, limit=50):
                 "formatted_time": format_login_time(login_time)
             })
         return records
+
+
+def get_user_last_login_record(username):
+    """获取用户最近一次登录时间（毫秒时间戳）
+
+    Args:
+        username: 用户名
+
+    Returns:
+        int or None: 最近一次登录时间
+    """
+    with driver.session() as session:
+        query = """
+        MATCH (u:User {username: $username})-[:HAS_LOGIN]->(l:LoginHistory)
+        RETURN l.login_time as login_time
+        ORDER BY l.login_time DESC
+        LIMIT 1
+        """
+        result = session.run(query, username=username).single()
+        if result:
+            return result.get("login_time")
+    return None
 
 
 if __name__ == "__main__":

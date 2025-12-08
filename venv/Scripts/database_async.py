@@ -406,6 +406,37 @@ class AsyncDatabaseManager:
         finally:
             self._active_tasks -= 1
 
+    async def submit_login_record(
+        self,
+        username: str,
+        ip: str,
+        location: str,
+        user_agent: str,
+        login_time: int
+    ) -> bool:
+        """异步提交登录历史写入任务，使用线程池避免阻塞请求线程"""
+        self._active_tasks += 1
+
+        try:
+            result = await self.loop.run_in_executor(
+                self.executor,
+                partial(create_login_record_sync, username, ip, location, user_agent, login_time)
+            )
+
+            if result:
+                logger.debug(f"📊 异步登录记录写入成功: {username} @ {ip}")
+            else:
+                logger.error(f"📊 异步登录记录写入失败: {username}")
+
+            return result
+
+        except Exception as e:
+            logger.error(f"❌ 异步登录记录异常: {username}, 错误: {e}")
+            return False
+
+        finally:
+            self._active_tasks -= 1
+
     async def warmup_qr_login_cache(self):
         """预热二维码登录状态缓存
         
@@ -467,15 +498,7 @@ def update_last_activity_and_count(username: str) -> bool:
 
 
 def update_user_profile_sync(username: str, profile_data: dict) -> tuple:
-    """同步更新用户资料
-
-    Args:
-        username: 当前用户名
-        profile_data: 资料数据字典
-
-    Returns:
-        tuple: (成功标志, 错误信息或新用户名)
-    """
+    """同步更新用户资料，返回完整用户数据"""
     if not driver:
         logger.error("❌ 数据库驱动未初始化")
         return False, "数据库连接失败"
@@ -501,7 +524,7 @@ def update_user_profile_sync(username: str, profile_data: dict) -> tuple:
                 if session.run(check_email_query, email=new_email, username=username).single():
                     return False, "邮箱已被占用"
 
-            # 构建更新语句
+            # 构建更新语句并返回所有需要的字段
             update_query = """
             MATCH (u:User {username: $username})
             SET u.username = $new_username,
@@ -509,7 +532,12 @@ def update_user_profile_sync(username: str, profile_data: dict) -> tuple:
                 u.job_title = $job_title,
                 u.website = $website,
                 u.bio = $bio
-            RETURN u.username as username
+            RETURN u.username as username,
+                   u.email as email,
+                   u.job_title as job_title,
+                   u.website as website,
+                   u.bio as bio,
+                   u.avatar as avatar
             """
 
             result = session.run(
@@ -523,8 +551,16 @@ def update_user_profile_sync(username: str, profile_data: dict) -> tuple:
             ).single()
 
             if result:
-                logger.info(f"✅ 用户资料更新成功: {username} -> {result['username']}")
-                return True, result["username"]
+                updated_user = {
+                    "username": result.get("username", ""),
+                    "email": result.get("email", ""),
+                    "job_title": result.get("job_title", ""),
+                    "website": result.get("website", ""),
+                    "bio": result.get("bio", ""),
+                    "avatar": result.get("avatar", "")
+                }
+                logger.info(f"✅ 用户资料更新成功: {username} -> {updated_user['username']}")
+                return True, updated_user
             return False, "用户不存在"
 
     except Exception as e:
@@ -759,6 +795,45 @@ def verify_2fa_image_sync(username: str, content: bytes, twofa_dir: str) -> bool
 
     except Exception as e:
         logger.error(f"❌ 2FA验证异常: {username}, 错误: {e}")
+        return False
+
+
+def create_login_record_sync(username: str, ip: str, location: str, user_agent: str, login_time: int) -> bool:
+    """同步写入登录历史记录"""
+    try:
+        if not driver:
+            logger.error("❌ 数据库驱动未初始化")
+            return False
+
+        with driver.session() as session:
+            result = session.run(
+                """
+                MATCH (u:User {username: $username})
+                CREATE (l:LoginHistory {
+                    ip: $ip,
+                    location: $location,
+                    user_agent: $user_agent,
+                    login_time: $login_time
+                })
+                CREATE (u)-[:HAS_LOGIN]->(l)
+                RETURN l
+                """,
+                username=username,
+                ip=ip,
+                location=location,
+                user_agent=user_agent,
+                login_time=login_time
+            ).single()
+
+            if result:
+                logger.info(f"✅ 登录历史记录已写入: {username} @ {ip}")
+                return True
+            else:
+                logger.error(f"❌ 登录历史写入失败: {username}")
+                return False
+
+    except Exception as e:
+        logger.error(f"❌ 写入登录历史异常: {username}, 错误: {e}")
         return False
 
 
