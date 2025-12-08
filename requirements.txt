@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+neo4j
+python-dotenv
+pydantic
+langchain
+openai
+requests
+passlib[bcrypt]
+python-jose[cryptography]
+python-multipart
+email-validator
+redis

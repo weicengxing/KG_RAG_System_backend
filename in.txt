@@ -1,0 +1,30 @@
+#1.
+cd KG_RAG_System
+cd backend
+cd frontend
+cd venv/Scripts
+python main.py
+python database.py
+# 2. 激活虚拟环境 (PowerShell 示例)
+.\venv\Scripts\activate
+
+#启动项目
+cd backend
+.\venv\Scripts\activate
+cd venv/Scripts
+python main.py
+python database.py
+
+
+
+
+
+
+ set ANTHROPIC_AUTH_TOKEN=sk-OrBcGlhaqz79WvGUsm22Nr4Vw5EjEUW8732MgJ0488KheXSH
+set  ANTHROPIC_BASE_URL=https://anyrouter.top
+
+
+https://api.code-relay.com/
+set ANTHROPIC_AUTH_TOKEN=sk-jJjJrhbR8dXagd0MXNkt3X8AtykVi6QUpNojJKBzEb3XferQ
+set  ANTHROPIC_BASE_URL=https://api.code-relay.com
+
