@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import FileResponse, StreamingResponse
 from database import driver
 from auth_deps import get_current_user
+from auth_deps import get_current_user, get_current_user_from_query
 
 # 配置日志
 logger = logging.getLogger(__name__)
@@ -143,7 +144,7 @@ async def get_song_list(
 
 @router.get("/songs/stream")
 async def get_song_list_stream(
-    current_user: str = Depends(get_current_user),
+    current_user: str = Depends(get_current_user_from_query),
     fetch_size: int = 1  # 批次大小，1表示逐条返回，可以设置为更大的值如100来提高性能
 ):
     """流式获取歌曲列表（SSE）- 真正的异步边查边发
@@ -574,4 +575,8 @@ async def get_song_lyrics(
     except Exception as e:
         logger.error(f"获取歌词失败: {e}")
         raise HTTPException(status_code=500, detail="获取歌词失败")
+    
 
+# 使用流式，LRU，连接池（前端），边查边发，异步，队列，生产者消费者。
+# 以后的改进点，可以引入CDN，懒加载，热点音乐Zset排序，一段时间清空一次重排，一是可以避免数值无限增长，而是实时反映热点。
+# 另外可以考虑引入Elasticsearch等搜索引擎，提升搜索性能
