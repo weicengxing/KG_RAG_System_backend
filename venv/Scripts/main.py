@@ -155,11 +155,12 @@ class ChangePasswordSchema(BaseModel):
     password_strength: int = 2
 
 # CORS 配置保持不变...
-origins = ["http://localhost:5173", "http://localhost:8080"]
+origins = ["http://localhost:5173", "http://localhost:8080" ,"https://kg-rag-system-frontend.pages.dev"]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
     allow_credentials=True,
+    allow_origin_regex=r"https://systemfrontend.*\.cool",
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -601,7 +602,7 @@ async def generate_qr(request: Request):
 
     # 构造扫码URL，指向前端 h5.html
     base_url = str(request.base_url).rstrip("/")
-    qr_url = f"https://ksg-702.pages.dev/h5.html?qr_id={qr_id}"
+    qr_url = f"https://kg-rag-system-frontend.pages.dev/h5.html?qr_id={qr_id}"
 
     return {
         "qr_id": qr_id,
@@ -783,7 +784,24 @@ async def verify_twofa(request: Request, username: str = Form(...), file: Upload
 
     stored_hash = db_user.get("twofa_hash") or ""
     stored_filename = db_user.get("twofa_filename") or ""
+
+    # 兼容旧数据：如果哈希缺失但文件存在，尝试从文件补全哈希
+    if (not stored_hash) and stored_filename:
+        candidate_path = os.path.join(TWOFA_DIR, stored_filename)
+        if os.path.exists(candidate_path):
+            try:
+                with open(candidate_path, "rb") as f:
+                    stored_hash = hashlib.sha256(f.read()).hexdigest()
+                    print(f"[2FA DEBUG] 补全哈希成功: {stored_filename}, hash={stored_hash[:12]}...")
+            except Exception as e:
+                print(f"[2FA DEBUG] 读取旧2FA文件失败: {candidate_path}, err={e}")
+                stored_hash = ""
+        else:
+            print(f"[2FA DEBUG] 旧2FA文件不存在: {candidate_path}")
+
+    # 如果依然不完整，要求重新设置
     if not stored_hash or not stored_filename:
+        print(f"[2FA DEBUG] 信息不完整: hash={bool(stored_hash)}, filename={bool(stored_filename)}, user={username}")
         raise HTTPException(status_code=400, detail="两步验证信息不完整，请重新设置")
 
     if not file.content_type or not file.content_type.startswith("image/"):
@@ -795,6 +813,7 @@ async def verify_twofa(request: Request, username: str = Form(...), file: Upload
 
     upload_hash = compute_file_hash(content)
     if upload_hash != stored_hash:
+        print(f"[2FA DEBUG] 哈希不匹配: stored={stored_hash[:12] if stored_hash else 'None'}, upload={upload_hash[:12]}..., user={username}")
         raise HTTPException(status_code=400, detail="验证图片不匹配，请重试")
 
     # 验证通过，完成登录

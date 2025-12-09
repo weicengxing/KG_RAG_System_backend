@@ -62,10 +62,8 @@ def decode_token_with_exp(token: str):
     except jwt.ExpiredSignatureError:
         # Token已过期，但我们仍然需要payload来获取用户信息
         try:
-            # ✅ 关键：使用 options={"verify_exp": False} 来解码过期token
-            # - 仍验证签名（保证token未被篡改）
-            # - 只跳过过期时间校验（允许获取payload中的用户信息）
-            # 这样可以安全地获取payload中的用户信息，用于后续的24小时活动窗口检查
+            # 使用 options={"verify_signature": False} 来获取payload（不验证签名）
+            # 但这样不安全，所以我们直接解码不验证
             payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM], options={"verify_exp": False})
             return payload, True, "Token已过期"
         except JWTError as e:
