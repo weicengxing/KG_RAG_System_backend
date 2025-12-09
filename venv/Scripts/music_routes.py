@@ -376,7 +376,7 @@ async def play_song(
         return FileResponse(
             path=str(file_path_obj),
             media_type=media_type,
-            filename=file_path_obj.name
+            filename=file_path_obj.name,
             headers={
                 "Cache-Control": "public, max-age=31536000, immutable", # 缓存1年，文件不变
                 "Accept-Ranges": "bytes" # 支持拖动进度条
