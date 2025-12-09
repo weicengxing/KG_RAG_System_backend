@@ -56,18 +56,18 @@ REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", None)  # 如果没有密码，设�
 
 # IP级别限流：每个IP的令牌桶容量和填充速率
 # 容量：100个令牌
-# 填充速率：10个令牌/秒（即每秒最多10个请求）
+# 填充速率：100个令牌/秒（即每秒最多10个请求）
 RATE_LIMIT_IP_CAPACITY = int(os.getenv("RATE_LIMIT_IP_CAPACITY", 100))
-RATE_LIMIT_IP_REFILL_RATE = float(os.getenv("RATE_LIMIT_IP_REFILL_RATE", 10.0))
+RATE_LIMIT_IP_REFILL_RATE = float(os.getenv("RATE_LIMIT_IP_REFILL_RATE", 100.0))
 
 # 接口级别限流：每个接口的令牌桶容量和填充速率
 # 容量：200个令牌
-# 填充速率：20个令牌/秒
+# 填充速率：200个令牌/秒
 RATE_LIMIT_ENDPOINT_CAPACITY = int(os.getenv("RATE_LIMIT_ENDPOINT_CAPACITY", 200))
-RATE_LIMIT_ENDPOINT_REFILL_RATE = float(os.getenv("RATE_LIMIT_ENDPOINT_REFILL_RATE", 20.0))
+RATE_LIMIT_ENDPOINT_REFILL_RATE = float(os.getenv("RATE_LIMIT_ENDPOINT_REFILL_RATE", 200.0))
 
 # 全局限流：全局令牌桶容量和填充速率
 # 容量：1000个令牌
-# 填充速率：100个令牌/秒
+# 填充速率：1000个令牌/秒
 RATE_LIMIT_GLOBAL_CAPACITY = int(os.getenv("RATE_LIMIT_GLOBAL_CAPACITY", 1000))
-RATE_LIMIT_GLOBAL_REFILL_RATE = float(os.getenv("RATE_LIMIT_GLOBAL_REFILL_RATE", 100.0))
+RATE_LIMIT_GLOBAL_REFILL_RATE = float(os.getenv("RATE_LIMIT_GLOBAL_REFILL_RATE", 1000.0))
