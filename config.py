@@ -6,19 +6,17 @@
 import os
 from dotenv import load_dotenv
 
-# 加载 .env 文件
 load_dotenv()
-
-# 数据库配置（替换成cpolar的公网地址+端口）
-NEO4J_URI = os.getenv("NEO4J_URI", "neo4j://20.tcp.vip.cpolar.cn:11740")  # 对应7687的公网地址
+# Neo4j配置（优先读环境变量，没有则用默认值）
+NEO4J_URI = os.getenv("NEO4J_URI", "neo4j://127.0.0.1:7687")
 NEO4J_USERNAME = os.getenv("NEO4J_USERNAME", "neo4j")
-NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "12345678")  # 保持你的本地密码
+NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "12345678")
 
-# Redis配置（替换成cpolar的公网地址+端口）
-REDIS_HOST = os.getenv("REDIS_HOST", "20.tcp.vip.cpolar.cn")  # 对应6379的公网地址
-REDIS_PORT = int(os.getenv("REDIS_PORT", 10023))  # 替换成cpolar显示的Redis端口
+# Redis配置
+REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
+REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
 REDIS_DB = int(os.getenv("REDIS_DB", 0))
-REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", None)  # 本地Redis无密码则保持None
+REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", None)
 
 # JWT配置
 SECRET_KEY = os.getenv("SECRET_KEY", "MY_SUPER_SECRET_KEY_FOR_THESIS")

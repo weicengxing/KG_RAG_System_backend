@@ -4,6 +4,7 @@
 """
 
 import os
+import base64
 import json
 import logging
 import asyncio
@@ -13,6 +14,10 @@ from fastapi.responses import FileResponse, StreamingResponse
 from database import driver
 from auth_deps import get_current_user
 from auth_deps import get_current_user, get_current_user_from_query
+from pydantic import BaseModel
+from typing import List, Dict
+class BatchImageRequest(BaseModel):
+    filenames: List[str]
 
 # 配置日志
 logger = logging.getLogger(__name__)
@@ -575,7 +580,79 @@ async def get_song_lyrics(
     except Exception as e:
         logger.error(f"获取歌词失败: {e}")
         raise HTTPException(status_code=500, detail="获取歌词失败")
+
+@router.get("/songs/all")
+async def get_all_songs(
+    current_user: str = Depends(get_current_user)
+):
+    """
+    [列表接口] 获取所有歌曲的基本信息
+    注意：这里不返回 Base64 图片，保持响应轻量快速
+    """
+    try:
+        songs = get_songs_from_neo4j()
+        
+        # 如果数据库没数据，可以保留你的文件系统扫描兜底逻辑(此处省略以保持简洁)
+        
+        # 简单处理：确保 created_at 用于排序
+        songs.sort(key=lambda x: x.get("created_at", 0), reverse=True)
+        
+        return {
+            "success": True,
+            "songs": songs,
+            "total": len(songs)
+        }
+    except Exception as e:
+        logger.error(f"获取歌曲列表失败: {e}")
+        raise HTTPException(status_code=500, detail="获取列表失败")
     
+# 额外新增简化接口：一次性获取所有歌曲列表（不分页、不流式），适用于简化版前端逻辑，一是比较性能差距，二是我的免费服务器不支持高并发场景
+#算了还是改成懒加载吧
+@router.post("/images/batch")
+async def get_batch_images(
+    req: BatchImageRequest,
+    current_user: str = Depends(get_current_user)
+):
+    """
+    [新增] 批量获取图片接口 (懒加载专用)
+    接收文件名列表，返回 {filename: base64_string} 的字典
+    """
+    results = {}
+    
+    # 去重
+    unique_filenames = set(req.filenames)
+    
+    for filename in unique_filenames:
+        if not filename:
+            continue
+            
+        # 安全检查
+        if '..' in filename or '/' in filename or '\\' in filename:
+            continue
+
+        image_path = IMAGE_DIR / filename
+        if image_path.exists():
+            try:
+                # 判断 MIME
+                ext = image_path.suffix.lower()
+                mime_type = "image/jpeg"
+                if ext == ".png": mime_type = "image/png"
+                elif ext == ".gif": mime_type = "image/gif"
+                elif ext == ".webp": mime_type = "image/webp"
+
+                with open(image_path, "rb") as img_file:
+                    b64_data = base64.b64encode(img_file.read()).decode('utf-8')
+                    results[filename] = f"data:{mime_type};base64,{b64_data}"
+            except Exception as e:
+                logger.error(f"批量读取图片失败 {filename}: {e}")
+                results[filename] = "" # 失败返回空，前端显示默认
+        else:
+            results[filename] = "" # 文件不存在
+            
+    return {
+        "success": True,
+        "data": results
+    }
 
 # 使用流式，LRU，连接池（前端），边查边发，异步，队列，生产者消费者。
 # 以后的改进点，可以引入CDN，懒加载，热点音乐Zset排序，一段时间清空一次重排，一是可以避免数值无限增长，而是实时反映热点。
