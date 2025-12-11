@@ -876,3 +876,81 @@ def update_password_sync(username: str, new_password_hash: str, password_strengt
     except Exception as e:
         logger.error(f"❌ 更新密码失败: {username}, 错误: {e}")
         return False
+
+
+# ==================== 小说保存相关函数 ====================
+
+def save_novel_to_db_sync(novel_data: dict) -> bool:
+    """同步保存小说信息到数据库
+
+    Args:
+        novel_data: 小说数据字典，包含id, title, path, quan, uploader
+
+    Returns:
+        bool: 是否保存成功
+    """
+    if not driver:
+        logger.error("❌ 数据库驱动未初始化")
+        return False
+
+    try:
+        with driver.session() as session:
+            session.run(
+                """
+                CREATE (n:Novel {
+                    id: $id,
+                    title: $title,
+                    path: $path,
+                    quan: $quan,
+                    created_at: timestamp(),
+                    uploader: $uploader
+                })
+                """, 
+                id=novel_data["id"],
+                title=novel_data["title"],
+                path=novel_data["path"],
+                quan=novel_data["quan"],
+                uploader=novel_data.get("uploader", "")
+            )
+        logger.info(f"✅ 小说信息已保存到数据库: ID={novel_data['id']}, 标题={novel_data['title']}")
+        return True
+    except Exception as e:
+        logger.error(f"❌ 保存小说信息到数据库失败: {e}")
+        return False
+
+
+# 给AsyncDatabaseManager添加小说保存方法
+async def submit_novel_save(self, novel_data: dict) -> bool:
+    """异步提交小说保存任务
+
+    Args:
+        novel_data: 小说数据字典
+
+    Returns:
+        bool: 保存是否成功
+    """
+    self._active_tasks += 1
+
+    try:
+        result = await self.loop.run_in_executor(
+            self.executor,
+            partial(save_novel_to_db_sync, novel_data)
+        )
+
+        if result:
+            logger.debug(f"📊 异步小说保存成功: ID={novel_data.get('id')}, 标题={novel_data.get('title')}")
+        else:
+            logger.error(f"📊 异步小说保存失败: ID={novel_data.get('id')}, 标题={novel_data.get('title')}")
+
+        return result
+
+    except Exception as e:
+        logger.error(f"❌ 异步小说保存异常: {e}")
+        return False
+
+    finally:
+        self._active_tasks -= 1
+
+
+# 将方法添加到AsyncDatabaseManager类
+AsyncDatabaseManager.submit_novel_save = submit_novel_save

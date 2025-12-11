@@ -534,3 +534,166 @@ def delayed_delete_cache(username: str, delay_seconds: float = 0.3):
 
     thread = threading.Thread(target=_delete, daemon=True)
     thread.start()
+
+
+# ==================== 分布式锁相关 ====================
+
+DISTRIBUTED_LOCK_PREFIX = "dist_lock:"
+
+
+class RedisDistributedLock:
+    """Redis分布式锁
+    
+    使用Redis实现分布式锁，支持自动续期和锁竞争
+    """
+    
+    def __init__(self, lock_name: str, expire_time: int = 30, auto_renew: bool = True):
+        """初始化分布式锁
+        
+        Args:
+            lock_name: 锁名称
+            expire_time: 锁过期时间（秒），默认30秒
+            auto_renew: 是否自动续期，默认True
+        """
+        self.lock_name = lock_name
+        self.expire_time = expire_time
+        self.auto_renew = auto_renew
+        self.lock_key = f"{DISTRIBUTED_LOCK_PREFIX}{lock_name}"
+        self.lock_value = None
+        self.renew_thread = None
+        self._stop_renew = threading.Event()
+    
+    def acquire(self, timeout: int = 10) -> bool:
+        """获取分布式锁
+        
+        Args:
+            timeout: 获取锁的超时时间（秒），默认10秒
+        
+        Returns:
+            bool: 是否成功获取锁
+        """
+        if not redis_client:
+            logger.error("❌ Redis 未连接，无法获取分布式锁")
+            return False
+        
+        import uuid
+        import time
+        
+        self.lock_value = str(uuid.uuid4())
+        start_time = time.time()
+        
+        while time.time() - start_time < timeout:
+            try:
+                # 使用SETNX命令尝试获取锁
+                if redis_client.setnx(self.lock_key, self.lock_value):
+                    # 获取成功，设置过期时间
+                    redis_client.expire(self.lock_key, self.expire_time)
+                    logger.info(f"🔒 分布式锁获取成功: {self.lock_name}")
+                    
+                    # 如果需要自动续期，启动续期线程
+                    if self.auto_renew:
+                        self._start_renew_thread()
+                    
+                    return True
+                
+                # 锁已被占用，等待重试
+                time.sleep(0.1)
+                
+            except Exception as e:
+                logger.error(f"❌ 获取分布式锁失败: {self.lock_name}, 错误: {e}")
+                time.sleep(0.5)
+        
+        logger.warning(f"⚠️ 获取分布式锁超时: {self.lock_name}, 超时时间: {timeout}秒")
+        return False
+    
+    def _start_renew_thread(self):
+        """启动锁续期线程"""
+        def renew_lock():
+            renew_interval = self.expire_time / 3  # 每1/3过期时间续期一次
+            while not self._stop_renew.is_set():
+                try:
+                    # 检查锁是否仍然属于当前实例
+                    current_value = redis_client.get(self.lock_key)
+                    if current_value == self.lock_value:
+                        # 续期锁
+                        redis_client.expire(self.lock_key, self.expire_time)
+                        logger.debug(f"🔄 分布式锁续期: {self.lock_name}")
+                    else:
+                        # 锁已不属于当前实例，停止续期
+                        logger.warning(f"⚠️ 分布式锁所有权已变更: {self.lock_name}")
+                        break
+                    
+                    # 等待下次续期
+                    time.sleep(renew_interval)
+                except Exception as e:
+                    logger.error(f"❌ 分布式锁续期失败: {self.lock_name}, 错误: {e}")
+                    break
+        
+        self.renew_thread = threading.Thread(target=renew_lock, daemon=True)
+        self.renew_thread.start()
+        logger.info(f"🔄 启动分布式锁自动续期: {self.lock_name}")
+    
+    def release(self) -> bool:
+        """释放分布式锁
+        
+        Returns:
+            bool: 是否成功释放锁
+        """
+        if not redis_client:
+            logger.error("❌ Redis 未连接，无法释放分布式锁")
+            return False
+        
+        # 停止续期线程
+        if self.renew_thread:
+            self._stop_renew.set()
+            self.renew_thread.join(timeout=1.0)
+        
+        try:
+            # 使用Lua脚本确保原子性：只有锁的值匹配时才删除
+            lua_script = """
+            if redis.call("get", KEYS[1]) == ARGV[1] then
+                return redis.call("del", KEYS[1])
+            else
+                return 0
+            end
+            """
+            
+            result = redis_client.eval(lua_script, 1, self.lock_key, self.lock_value)
+            
+            if result == 1:
+                logger.info(f"🔓 分布式锁释放成功: {self.lock_name}")
+                return True
+            else:
+                logger.warning(f"⚠️ 分布式锁释放失败（锁值不匹配或已过期）: {self.lock_name}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"❌ 释放分布式锁失败: {self.lock_name}, 错误: {e}")
+            return False
+    
+    def __enter__(self):
+        """上下文管理器入口"""
+        if not self.acquire():
+            raise RuntimeError(f"无法获取分布式锁: {self.lock_name}")
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """上下文管理器出口"""
+        self.release()
+
+
+def acquire_distributed_lock(lock_name: str, expire_time: int = 30, timeout: int = 10) -> Optional[RedisDistributedLock]:
+    """获取分布式锁（快捷函数）
+    
+    Args:
+        lock_name: 锁名称
+        expire_time: 锁过期时间（秒）
+        timeout: 获取锁的超时时间（秒）
+    
+    Returns:
+        Optional[RedisDistributedLock]: 成功返回锁对象，失败返回None
+    """
+    lock = RedisDistributedLock(lock_name, expire_time)
+    if lock.acquire(timeout):
+        return lock
+    return None
