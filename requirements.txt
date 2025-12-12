@@ -76,3 +76,9 @@ pip==25.3
 
 # 文档处理库
 python-docx==1.1.0
+
+# MongoDB 依赖
+motor==3.7.1
+
+# 运行服务器依赖
+"uvicorn[standard]"==0.22.0

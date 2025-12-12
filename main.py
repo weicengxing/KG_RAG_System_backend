@@ -14,7 +14,11 @@ import uuid
 import shutil
 from rate_limiter import check_rate_limit, is_rate_limiter_available
 import logging
+from snowflake import id_generator
+from chat_routes import router as chat_router
 from typing import Optional
+from config import MONGO_DB_NAME
+from motor.motor_asyncio import AsyncIOMotorClient
 import asyncio
 import hashlib
 import re
@@ -250,6 +254,9 @@ async def jwt_auth_middleware(request: Request, call_next):
 
     # 检查是否是公开路径
     path = request.url.path
+    if path.startswith("/api/chat/ws"):
+        print(f"[JWT DEBUG] WebSocket路径，放行由内部鉴权: {path}")
+        return await call_next(request)
     is_public = (
         any(path == p or (p != "/" and path.startswith(p)) for p in public_paths) or
         path in public_auth_paths or
@@ -381,6 +388,9 @@ app.include_router(music_router)
 from novel_routes import router as novel_router
 app.include_router(novel_router)
 
+# 注册聊天室路由
+from chat_routes import router as chat_router
+app.include_router(chat_router)
 # 定义请求体模型
 class UserAuth(BaseModel):
     username: str
@@ -442,8 +452,6 @@ async def build_login_response(username: str, request: Request):
     }
 
 
-# --- 新增 API ---
-
 @app.post("/auth/send-code")
 async def send_code(data: EmailSchema, background_tasks: BackgroundTasks):
     # 生成验证码
@@ -464,36 +472,81 @@ async def send_code(data: EmailSchema, background_tasks: BackgroundTasks):
     return {"message": "验证码已发送，请在5分钟内使用"}
 
 @app.post("/auth/register")
-def register(user: RegisterSchema):
-    # 1. 校验验证码是否存在
+async def register(user: RegisterSchema):  # <--- 改成 async def
     code_data = verification_codes.get(user.email)
     if not code_data:
         raise HTTPException(status_code=400, detail="请先获取验证码")
     
-    # 2. 校验验证码是否过期
-    current_time = time.time()
-    if current_time > code_data["expires_at"]:
-        # 过期后删除该验证码
+    if time.time() > code_data["expires_at"]:
         del verification_codes[user.email]
-        raise HTTPException(status_code=400, detail="验证码已过期，请重新获取")
+        raise HTTPException(status_code=400, detail="验证码已过期")
     
-    # 3. 校验验证码是否正确
     if code_data["code"] != user.code:
         raise HTTPException(status_code=400, detail="验证码错误")
     
-    # 4. 校验是否已注册
-    if database.get_user(user.username):
-        raise HTTPException(status_code=400, detail="用户名已存在")
-        
-    # 5. 创建用户 (加密密码)
+    # 2. 生成雪花ID (所有系统通用的唯一标识)
+    # 重点：为了前端兼容性，用字符串
+    user_id = id_generator.next_id() 
+    
+    # 3. 创建用户 (加密密码)
     password_strength = evaluate_password_strength(user.password)
     hashed_pw = get_password_hash(user.password)
-    database.create_user(user.username, hashed_pw, user.email, password_strength=password_strength)
     
-    # 6. 注册成功后清除验证码
+    # 4. Neo4j 存储 (这里是一个同步函数，可以直接调)
+    # 如果 database.create_user 很慢，可以考虑放入 threadpool_executor 异步执行
+    result = database.create_user(
+        user_id=user_id,     # 传入 ID
+        username=user.username, 
+        password_hash=hashed_pw, 
+        email=user.email, 
+        password_strength=password_strength
+    )
+    
+    if result == "USERNAME_EXISTS":
+        raise HTTPException(status_code=400, detail="用户名已存在")
+    if result == "EMAIL_EXISTS":
+        raise HTTPException(status_code=400, detail="邮箱已注册")
+    
+    # 5. MongoDB 存储 (聊天系统副本) - 异步操作
+    # 只有 Neo4j 成功了才存 Mongo
+    try:
+        await create_mongo_user(user_id, user.username, user.email)
+    except Exception as e:
+        # 极其罕见的情况：Neo4j 成功但 Mongo 失败
+        # 实际生产中可能需要发消息队列做补偿，或者手动回滚 Neo4j
+        print(f"Mongo create failed: {e}") 
+        # 暂时只打印 log，不阻断注册流程，
+        # 用户登录聊天时可以再做一个 'lazy check'：如果 Mongo 没号自动补一个
+    
+    # 6. 清除验证码
     del verification_codes[user.email]
     
-    return {"message": "注册成功"}
+    return {"message": "注册成功", "user_id": user_id}
+
+
+async def create_mongo_user(user_id: str, username: str, email: str):
+    """
+    在 MongoDB 创建用户副本
+    确保聊天系统能直接通过 _id 找到人
+    """
+    # 假设这里是你的 motor client，如果已在 config/main 初始化，直接 import 过来
+    from chat_routes import mongo_client 
+    if not mongo_client:
+         # 还没连的情况 (fallback)
+         from config import MONGO_URI
+         client = AsyncIOMotorClient(MONGO_URI)
+         db = client[MONGO_DB_NAME]
+    else:
+         db = mongo_client[MONGO_DB_NAME]
+    
+    await db.users.insert_one({
+        "_id": user_id,       # 重点！Mongo 的 _id 直接使用雪花ID
+        "username": username,
+        "email": email,
+        "avatar": "https://i.pravatar.cc/150?u=" + user_id, # 随机默认头像
+        "status": "online",
+        "created_at": time.time()
+    })
 
 
 @app.post("/auth/forgot-password/send-code")

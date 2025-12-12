@@ -70,3 +70,7 @@ RATE_LIMIT_ENDPOINT_REFILL_RATE = float(os.getenv("RATE_LIMIT_ENDPOINT_REFILL_RA
 # 填充速率：1000个令牌/秒
 RATE_LIMIT_GLOBAL_CAPACITY = int(os.getenv("RATE_LIMIT_GLOBAL_CAPACITY", 10000))
 RATE_LIMIT_GLOBAL_REFILL_RATE = float(os.getenv("RATE_LIMIT_GLOBAL_REFILL_RATE", 10000.0))
+
+# ==================== MongoDB 配置 ====================
+MONGO_URI = "mongodb://localhost:27017" 
+MONGO_DB_NAME = "chat_app_db"

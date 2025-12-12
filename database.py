@@ -63,17 +63,14 @@ def get_user_by_email(email):
     return None
 
 
-def create_user(username, password_hash, email, password_strength=2):
+
+def create_user(user_id, username, password_hash, email, password_strength=2): # <--- 增加 user_id 参数
     """创建新用户
     
     Args:
+        user_id: 雪花算法生成的唯一ID (String)
         username: 用户名
-        password_hash: 密码哈希
-        email: 邮箱地址
-        password_strength: 密码强度评分 (默认为2)
-        
-    Returns:
-        str: 操作结果 ("SUCCESS", "USERNAME_EXISTS", "EMAIL_EXISTS")
+        ...
     """
     with driver.session() as session:
         # 1. 检查用户名是否存在
@@ -86,9 +83,10 @@ def create_user(username, password_hash, email, password_strength=2):
         if session.run(check_email, email=email).single():
             return "EMAIL_EXISTS"
         
-        # 3. 创建新用户 (增加了 password_strength 字段)
+        # 3. 创建新用户 (核心修改：添加 id 属性)
         query = """
         CREATE (u:User {
+            id: $user_id,             // <--- 这里的 user_id 是最重要的唯一标识
             username: $username,
             password: $password,
             email: $email,
@@ -96,11 +94,13 @@ def create_user(username, password_hash, email, password_strength=2):
             created_at: timestamp(),
             last_activity: timestamp(),
             request_count: 0,
-            is_vip: false
+            is_vip: false,
+            avatar: "default_avatar.png" // 建议加一个默认头像
         }) RETURN u
         """
         session.run(
             query, 
+            user_id=user_id,          # <--- 传参
             username=username, 
             password=password_hash, 
             email=email, 
