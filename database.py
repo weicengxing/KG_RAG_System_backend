@@ -147,6 +147,35 @@ def get_user(username):
             }
     return None
 
+def get_user_by_id(user_id):
+    """根据用户ID获取用户信息
+
+    Args:
+        user_id: 用户雪花ID
+
+    Returns:
+        dict: 用户信息，如果不存在则返回None
+    """
+    with driver.session() as session:
+        query = """
+        MATCH (u:User {id: $user_id})
+        RETURN u.id as id, u.username as username, u.email as email,
+               u.avatar as avatar, u.status as status,
+               u.last_activity as last_activity, u.created_at as created_at
+        """
+        result = session.run(query, user_id=user_id).single()
+        if result:
+            return {
+                "id": result.get("id", ""),
+                "username": result["username"],
+                "email": result.get("email", ""),
+                "avatar": result.get("avatar", ""),
+                "status": result.get("status", "offline"),
+                "last_activity": result.get("last_activity"),
+                "created_at": result.get("created_at")
+            }
+    return None
+
 def set_user_2fa(username, enabled, filename, file_hash):
     """设置用户2FA状态及文件信息
     

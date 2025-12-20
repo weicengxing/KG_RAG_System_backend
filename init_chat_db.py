@@ -1,4 +1,3 @@
-# init_chat_db.py
 import asyncio
 from motor.motor_asyncio import AsyncIOMotorClient
 import time
@@ -17,9 +16,61 @@ async def init_data():
     
     print("👤 创建测试用户...")
     users = [
-        {"_id": "user_1", "username": "开发者 (我)", "avatar": "https://api.dicebear.com/7.x/avataaars/svg?seed=Felix", "status": "online"},
-        {"_id": "user_2", "username": "Sarah Chen", "avatar": "https://api.dicebear.com/7.x/avataaars/svg?seed=Sarah", "status": "online"},
-        {"_id": "user_3", "username": "Mike Design", "avatar": "https://api.dicebear.com/7.x/avataaars/svg?seed=Mike", "status": "busy"},
+          {
+    "username": "听安",  # 键用双引号包裹（Python 单引号/双引号均可）
+    "email": "jiccao4lyk@witusp.com",
+    "avatar": "听安_1765364810808_c067ea0f.jpg",
+    "status": "online"
+  },
+  
+  {
+    "username": "故事",
+    "email": "matjoo6pmy@obeamb.com",
+    "avatar": None,  # 替换 null 为 None（Python 空值）
+    "status": "online"
+  },
+ 
+  {
+    "username": "双节",
+    "email": "fuisazqt8o@obeamb.com",
+    "avatar": "双节_1765200193252_83ab568a.jpg",
+    "status": "online"
+  },
+
+  {
+    "username": "张远昭",
+    "email": "2997657261@qq.com",
+    "avatar": None,  # 替换 null 为 None
+    "status": "online"
+  },
+  
+  {
+    "username": "没接",
+    "email": "dalkui3ls0@zorrag.com",
+    "avatar": "没接_1765346499224_7cc7d43e.jpg",
+    "status": "online"
+  },
+  
+  {
+    "username": "梅",
+    "email": "1989697277@qq.com",
+    "avatar": "梅_1765369848822_8b617dd7.png",
+    "status": "online"
+  },
+  
+  {
+    "username": "哈哈哈",
+    "email": "tifhuhet0l@obeamb.com",
+    "avatar": "哈哈哈_1765439945029_c9a58189.jpg",
+    "status": "online"
+  },
+
+  {
+    "username": "测试000",
+    "email": "vamlemlj6l@zorrag.com",
+    "avatar": "default_avatar.png",
+    "status": "online"
+  },
     ]
     await db.users.insert_many(users)
 

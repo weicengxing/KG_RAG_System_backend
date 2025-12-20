@@ -8,11 +8,15 @@ import json
 import time
 import asyncio
 import logging
+import os
+import uuid
+from pathlib import Path
 from typing import List, Optional
 from datetime import datetime
 import database
-from utils import decode_token_with_exp 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, HTTPException, Depends,status
+from utils import decode_token_with_exp
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, HTTPException, Depends, status, UploadFile, File, Header
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 # 引入 Motor (MongoDB 异步驱动)
@@ -42,14 +46,46 @@ mongo_client: Optional[AsyncIOMotorClient] = None
 db = None
 redis_async: Optional[aioredis.Redis] = None
 
+# ==================== 文件存储配置 ====================
+
+# 文件存储根路径
+BASE_DIR = Path(__file__).resolve().parent
+ASSETS_DIR = BASE_DIR / "assets"
+
+# 不同类型文件的存储路径
+FILE_STORAGE = {
+    "image": ASSETS_DIR / "chat_pic",
+    "document": ASSETS_DIR / "chat_fil",
+    "video": ASSETS_DIR / "chat_ved"
+}
+
+# 文件类型映射 (根据扩展名判断)
+FILE_TYPE_MAP = {
+    # 图片
+    ".jpg": "image", ".jpeg": "image", ".png": "image", ".gif": "image",
+    ".webp": "image", ".bmp": "image", ".svg": "image",
+    # 文档
+    ".pdf": "document", ".doc": "document", ".docx": "document",
+    ".txt": "document", ".md": "document", ".xls": "document",
+    ".xlsx": "document", ".ppt": "document", ".pptx": "document",
+    # 视频
+    ".mp4": "video", ".avi": "video", ".mov": "video",
+    ".wmv": "video", ".flv": "video", ".mkv": "video"
+}
+
+# 每个子文件夹最多存储的文件数
+MAX_FILES_PER_FOLDER = 500
+
 # ==================== 数据模型 (Pydantic) ====================
 
 class Message(BaseModel):
     msg_id: str
     sender_id: str
-    content: str
+    content: str  # 文本消息时为文本内容,文件消息时为文件路径
     ts: float
-    type: str = "text"  # text, image, file
+    type: str = "text"  # text, image, document, video
+    filename: Optional[str] = None  # 文件消息时的原始文件名
+    file_size: Optional[int] = None  # 文件大小(字节)
 
 class ChatSession(BaseModel):
     chat_id: str
@@ -59,6 +95,78 @@ class ChatSession(BaseModel):
     last_message: str
     last_time: str
     unread: int
+
+# ==================== 文件管理辅助函数 ====================
+
+def get_file_type(filename: str) -> str:
+    """根据文件扩展名判断文件类型"""
+    ext = Path(filename).suffix.lower()
+    return FILE_TYPE_MAP.get(ext, "document")  # 默认当做文档处理
+
+def get_or_create_subfolder(file_type: str) -> Path:
+    """
+    获取或创建用于存储文件的子文件夹
+    逻辑: 查找未满的最新子文件夹,如果都满了则创建新的
+    """
+    base_path = FILE_STORAGE[file_type]
+    base_path.mkdir(parents=True, exist_ok=True)
+
+    # 查找所有已存在的子文件夹
+    subfolders = sorted([d for d in base_path.iterdir() if d.is_dir()])
+
+    # 检查最新的子文件夹是否未满
+    if subfolders:
+        latest_folder = subfolders[-1]
+        file_count = len(list(latest_folder.glob("*")))
+        if file_count < MAX_FILES_PER_FOLDER:
+            return latest_folder
+
+    # 创建新的子文件夹 (命名规则: subfolder_0, subfolder_1, ...)
+    new_index = len(subfolders)
+    new_folder = base_path / f"subfolder_{new_index}"
+    new_folder.mkdir(parents=True, exist_ok=True)
+    logger.info(f"📁 创建新子文件夹: {new_folder}")
+
+    return new_folder
+
+async def save_uploaded_file(file: UploadFile) -> dict:
+    """
+    保存上传的文件并返回文件信息
+    返回格式: {"file_path": "相对路径", "file_type": "类型", "filename": "原始文件名", "size": 文件大小}
+    """
+    try:
+        # 1. 判断文件类型
+        file_type = get_file_type(file.filename)
+
+        # 2. 获取存储文件夹
+        storage_folder = get_or_create_subfolder(file_type)
+
+        # 3. 生成唯一文件名 (保留原始扩展名)
+        file_ext = Path(file.filename).suffix
+        unique_filename = f"{uuid.uuid4().hex}{file_ext}"
+        file_path = storage_folder / unique_filename
+
+        # 4. 保存文件
+        with open(file_path, "wb") as f:
+            content = await file.read()
+            f.write(content)
+
+        # 5. 计算相对路径 (相对于 assets 目录)
+        relative_path = file_path.relative_to(ASSETS_DIR)
+
+        logger.info(f"✅ 文件已保存: {relative_path} ({len(content)} bytes)")
+
+        return {
+            "file_path": str(relative_path).replace("\\", "/"),  # 统一使用正斜杠
+            "file_type": file_type,
+            "filename": file.filename,
+            "size": len(content)
+        }
+
+    except Exception as e:
+        logger.error(f"❌ 保存文件失败: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
+
 
 # ==================== 核心服务类: ChatManager ====================
 
@@ -165,41 +273,45 @@ class ChatManager:
             raise e
 
     async def get_chat_history(self, chat_id: str, limit: int = 50, before_ts: float = None):
-        """加载历史记录 (利用分桶索引)"""
+        """
+        极致优化版历史记录查询：
+        1. 充分利用 (chat_id, created_at) 复合索引
+        2. 使用 before_ts 在查询层过滤掉新桶，实现毫秒级响应
+        """
         try:
-            # 构建查询
+            # --- 核心改进：查询条件 ---
             query = {"chat_id": chat_id}
+            
             if before_ts:
-                # 优化：如果提供了时间戳，可以过滤掉明显更新的桶
-                # 但实际上只用 sort _id 倒序即可命中索引
-                pass
+                # 改进点：不再是在内存里 filter，而是直接告诉 Mongo：
+                # “请给我找桶的【创建时间】早于我当前最老消息时间戳的那些桶”
+                # 这样 Mongo 会直接通过 B-Tree 索引跳过所有新桶
+                query["created_at"] = {"$lt": before_ts}
 
-            # 倒序查询桶 (最新的桶在前)
-            # 假设一个桶 50 条，取 limit 条需要遍历 ceil(limit/50) 个桶
-            # 这里简单处理，取最近的 5 个桶一般足够覆盖 250 条消息
-            cursor = db.chat_history.find(query).sort("_id", -1).limit(5)
+            # --- 核心改进：排序与性能 ---
+            # 按照创建时间倒序排，每次拿 2 个桶（约100条消息），确保能凑够 limit=50 条
+            cursor = db.chat_history.find(query).sort("created_at", -1).limit(2)
             
             all_messages = []
             async for bucket in cursor:
-                # 桶内消息是正序的，我们需要将其反转或保持原样，取决于前端需求
-                # 这里保持原样 (旧 -> 新)，但在合并桶时要注意顺序
                 msgs = bucket.get("messages", [])
                 
-                # 如果有 before_ts 过滤 (游标分页)
+                # 即使桶被定位到了，桶内消息数组中可能仍有部分消息比 before_ts 新（针对同一个桶内的分页）
                 if before_ts:
                     msgs = [m for m in msgs if m['ts'] < before_ts]
                 
-                # 将当前桶的消息加到总列表的前面 (因为我们是倒序遍历桶)
+                # 桶内是旧->新，我们要把旧桶的消息放在列表前面
                 all_messages = msgs + all_messages
                 
+                # 如果凑够了用户需要的条数，就停下，不再读取更多文档
                 if len(all_messages) >= limit:
                     break
             
-            # 截取最后 limit 条
+            # 返回最后 limit 条（最靠近当前时间的旧消息）
             return all_messages[-limit:]
             
         except Exception as e:
-            logger.error(f"❌ 获取历史记录失败: {chat_id}, {e}")
+            logger.error(f"❌ 高效获取历史记录失败: {chat_id}, {e}")
             return []
 
 chat_manager = ChatManager()
@@ -303,21 +415,22 @@ async def websocket_endpoint(
                 logger.warning(f"[WS] ⚠️ Token 已过期但处于宽限期(24h)内，允许连接 - User: {user_id}")
 
         # 5. 身份一致性检查 (防止 A 用户拿着 B 用户的 Token 连接)
-        token_username = payload.get("sub")
-        # 前端传来的 Token decoded 后显示的 username 必须等于 URL 里的 user_id
-        # 这里你需要确认你的 JWT payload "sub" 字段存的是 username 还是 user_id
-        # 如果 user_id 是数据库ID，而 sub 也是数据库ID，直接对比即可
-        # 你的日志显示 sub 是 "\u6ca1..." 这种，看起来像中文名或ID
-        
-        # 为了兼容性，转字符串比较
-        if str(token_username) != str(user_id):
-            logger.warning(f"[WS] ❌ 连接拒绝: 身份不匹配 (TokenSub: {token_username} != URLPath: {user_id})")
+        # 兼容新旧两种 token 格式
+        # 新格式: {"user_id": "xxx", "username": "xxx"}
+        # 旧格式: {"sub": "username"}
+        token_user_id = payload.get("user_id") or payload.get("sub")
+        token_username = payload.get("username") or payload.get("sub")
+
+        # 前端传来的 URL 路径中的 user_id 必须等于 Token 中的 user_id
+        # 为了兼容性,转字符串比较
+        if str(token_user_id) != str(user_id):
+            logger.warning(f"[WS] ❌ 连接拒绝: 身份不匹配 (Token user_id: {token_user_id} != URLPath: {user_id})")
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             return
 
         # (可选) 更新活跃时间
         try:
-            database.update_last_activity(str(token_username))
+            database.update_last_activity(str(token_user_id))
         except Exception:
             pass
 
@@ -352,17 +465,26 @@ async def websocket_endpoint(
             if msg_obj.get("type") == "message":
                 target_id = msg_obj.get("target_id")
                 content = msg_obj.get("content")
-                
+                msg_type = msg_obj.get("msg_type", "text")  # 消息类型: text, image, document, video
+                filename = msg_obj.get("filename")  # 文件消息时的原始文件名
+                file_size = msg_obj.get("file_size")  # 文件大小
+
                 if target_id and content:
                     current_ts = time.time()
                     msg_content = {
-                        "msg_id": f"{user_id}-{int(current_ts * 1000)}", 
+                        "msg_id": f"{user_id}-{int(current_ts * 1000)}",
                         "sender_id": user_id,
                         "receiver_id": target_id,
                         "content": content,
                         "ts": current_ts,
-                        "type": "text"
+                        "type": msg_type
                     }
+
+                    # 如果是文件消息,添加文件相关信息
+                    if msg_type in ["image", "document", "video"]:
+                        msg_content["filename"] = filename
+                        msg_content["file_size"] = file_size
+
                     await chat_manager.send_personal_message(msg_content)
 
     except WebSocketDisconnect:
@@ -381,37 +503,42 @@ async def websocket_endpoint(
 @router.get("/contacts")
 async def get_contacts(user_id: str = Query(..., description="当前用户ID")):
     """
-    获取会话列表逻辑：
-    1. 拿到所有用户
-    2. 聚合查询最后一条聊天记录
+    获取好友列表（只显示已添加的好友）
+    1. 从 MongoDB contacts 集合查询好友关系
+    2. 从 Neo4j 查询好友用户信息
+    3. 聚合查询最后一条聊天记录
     """
-    if not db:
+    if db is None:
         raise HTTPException(status_code=503, detail="Database uninitialized")
 
     contacts_list = []
-    
-    # 1. 获取除自己以外的所有用户 (简化版，实际可能是获取好友列表)
-    users_cursor = db.users.find({"_id": {"$ne": user_id}})
-    
-    async for user in users_cursor:
-        partner_id = user["_id"]
-        
-        # 2. 计算 chat_id
-        ids = sorted([user_id, partner_id])
+
+    # 1. 从 MongoDB contacts 集合获取好友列表
+    friends_cursor = db.contacts.find({"owner_id": user_id})
+
+    async for contact in friends_cursor:
+        friend_id = contact["friend_id"]
+
+        # 2. 从 Neo4j 查询好友用户信息 (同步调用)
+        friend_user = database.get_user_by_id(friend_id)
+        if not friend_user:
+            continue  # 好友用户不存在，跳过
+
+        # 3. 计算 chat_id
+        ids = sorted([user_id, friend_id])
         chat_id = f"{ids[0]}_{ids[1]}"
-        
-        # 3. 查找该会话最新的一条消息
-        # 技巧：按 _id 倒序取第一个桶，再取桶里最后一条消息
+
+        # 4. 查找该会话最新的一条消息
         last_bucket = await db.chat_history.find_one(
             {"chat_id": chat_id},
             sort=[("_id", -1)]
         )
-        
+
         last_msg_text = ""
         last_time_display = ""
-        
+
         if last_bucket and last_bucket.get("messages"):
-            last_msg_obj = last_bucket["messages"][-1] # 取最后一条
+            last_msg_obj = last_bucket["messages"][-1]
             last_msg_text = last_msg_obj.get("content", "")
             # 格式化时间
             ts = last_msg_obj.get("ts", 0)
@@ -419,19 +546,19 @@ async def get_contacts(user_id: str = Query(..., description="当前用户ID")):
             dt = datetime.datetime.fromtimestamp(ts)
             last_time_display = dt.strftime("%H:%M")
 
-        # 4. 组装数据
+        # 5. 组装数据
         contacts_list.append({
-            "id": partner_id,
-            "username": user.get("username", "Unknown"),
-            "avatar": user.get("avatar", ""),
+            "id": friend_id,
+            "username": friend_user.get("username", "Unknown"),
+            "avatar": friend_user.get("avatar", "https://i.pravatar.cc/150?u=" + friend_id),
             "lastMessage": last_msg_text,
-            "time": last_time_display,
-            "unread": 0, # 这里后面可以用 Redis 计算
+            "lastTime": last_time_display,
+            "unread": 0,  # TODO: 后面可以用 Redis 计算
             "active": False,
-            "status": user.get("status", "offline"),
-            "messages": [] # 初始不加载历史，点击后再通过 /history 接口加载
+            "status": friend_user.get("status", "offline"),
+            "messages": []  # 初始不加载历史，点击后再加载
         })
-        
+
     return contacts_list
 
 @router.get("/history", response_model=List[Message])
@@ -441,8 +568,220 @@ async def get_messages(
     before_ts: Optional[float] = Query(None, description="游标时间戳")
 ):
     """获取聊天历史记录 (懒加载)"""
-    if not db:
+    if db is None:
         raise HTTPException(status_code=503, detail="Database not initialized")
-        
+
     msgs = await chat_manager.get_chat_history(chat_id, limit, before_ts)
     return msgs
+
+# ==================== 文件上传与访问接口 ====================
+
+async def get_current_user_id(authorization: str = Header(None)) -> str:
+    """从 Header 获取 Token 并解析出 user_id"""
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Missing Token")
+
+    token = authorization.split(" ")[1] if " " in authorization else authorization
+    payload, is_expired, error = decode_token_with_exp(token)
+
+    if not payload or is_expired:
+        raise HTTPException(status_code=401, detail="Token invalid or expired")
+
+    username = payload.get("username") or payload.get("sub")
+    if not username:
+        raise HTTPException(status_code=401, detail="Invalid token payload")
+
+    # 从 MongoDB 查询用户获取 _id
+    user = await db.users.find_one({"username": username})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    return str(user["_id"])
+
+@router.post("/upload_file")
+async def upload_file(
+    file: UploadFile = File(...),
+    current_user_id: str = Depends(get_current_user_id)
+):
+    """
+    上传聊天文件接口
+    支持图片、文档、视频等多种格式
+    返回文件信息供前端构造消息
+    """
+    # 检查文件大小 (限制50MB)
+    MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
+
+    # 先读取一小部分来检查
+    content = await file.read()
+    if len(content) > MAX_FILE_SIZE:
+        raise HTTPException(status_code=413, detail="File too large (max 50MB)")
+
+    # 重置文件指针
+    await file.seek(0)
+
+    # 保存文件
+    file_info = await save_uploaded_file(file)
+
+    return {
+        "success": True,
+        "data": file_info
+    }
+
+@router.get("/files/{file_path:path}")
+async def get_file(file_path: str):
+    """
+    获取聊天文件
+    路径格式: chat_pic/subfolder_0/xxxxx.jpg
+    """
+    try:
+        # 构建完整路径
+        full_path = ASSETS_DIR / file_path
+
+        # 安全检查: 确保路径在 assets 目录下 (防止路径遍历攻击)
+        if not str(full_path.resolve()).startswith(str(ASSETS_DIR.resolve())):
+            raise HTTPException(status_code=403, detail="Access denied")
+
+        # 检查文件是否存在
+        if not full_path.exists() or not full_path.is_file():
+            raise HTTPException(status_code=404, detail="File not found")
+
+        # 返回文件
+        return FileResponse(
+            path=str(full_path),
+            filename=full_path.name,
+            media_type="application/octet-stream"
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ 获取文件失败: {file_path}, {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve file")
+
+# ==================== 消息撤回接口 ====================
+
+class RecallMessageInput(BaseModel):
+    msg_id: str
+    chat_id: str
+
+@router.post("/recall")
+async def recall_message(
+    data: RecallMessageInput,
+    current_user_id: str = Depends(get_current_user_id)
+):
+    """
+    撤回消息接口
+    1. 验证消息是否属于当前用户
+    2. 验证消息是否在2分钟内
+    3. 更新MongoDB中的消息状态
+    4. 通过Redis通知双方
+    """
+    if db is None:
+        raise HTTPException(status_code=503, detail="Database not initialized")
+
+    try:
+        # 1. 查找包含该消息的桶
+        bucket = await db.chat_history.find_one({
+            "chat_id": data.chat_id,
+            "messages.msg_id": data.msg_id
+        })
+
+        if not bucket:
+            raise HTTPException(status_code=404, detail="Message not found")
+
+        # 2. 查找具体的消息
+        message = None
+        for msg in bucket.get("messages", []):
+            if msg["msg_id"] == data.msg_id:
+                message = msg
+                break
+
+        if not message:
+            raise HTTPException(status_code=404, detail="Message not found in bucket")
+
+        # 3. 验证消息是否属于当前用户
+        if message["sender_id"] != current_user_id:
+            raise HTTPException(status_code=403, detail="You can only recall your own messages")
+
+        # 4. 验证消息是否在2分钟内
+        current_time = time.time()
+        time_diff = current_time - message["ts"]
+        if time_diff > 120:  # 120秒 = 2分钟
+            raise HTTPException(status_code=400, detail="Message can only be recalled within 2 minutes")
+
+        # 5. 更新MongoDB中的消息状态
+        # 使用位置更新操作符 $ 来更新数组中匹配的元素
+        result = await db.chat_history.update_one(
+            {
+                "chat_id": data.chat_id,
+                "messages.msg_id": data.msg_id
+            },
+            {
+                "$set": {
+                    "messages.$.type": "recalled",
+                    "messages.$.content": "撤回了一条消息"
+                }
+            }
+        )
+
+        if result.modified_count == 0:
+            raise HTTPException(status_code=500, detail="Failed to update message")
+
+        # 6. 通过Redis Pub/Sub通知双方
+        # 解析chat_id获取双方用户ID
+        user_ids = data.chat_id.split("_")
+        receiver_id = user_ids[0] if user_ids[1] == current_user_id else user_ids[1]
+
+        recall_payload = json.dumps({
+            "type": "message_recalled",
+            "data": {
+                "msg_id": data.msg_id,
+                "chat_id": data.chat_id,
+                "recaller_id": current_user_id
+            }
+        })
+
+        # 通知接收者
+        await redis_async.publish(f"chat:user:{receiver_id}", recall_payload)
+        # 通知发送者（多端同步）
+        await redis_async.publish(f"chat:user:{current_user_id}", recall_payload)
+
+        logger.info(f"✅ 消息已撤回: {data.msg_id} by {current_user_id}")
+
+        return {
+            "success": True,
+            "message": "Message recalled successfully"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ 撤回消息失败: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to recall message: {str(e)}")
+
+
+# 技术栈:
+# WebSocket - FastAPI WebSocket处理实时通信
+# MongoDB (Motor) - 分桶存储聊天历史(每桶50条消息)
+# Redis Pub/Sub - 消息广播与多端同步
+# Neo4j - 用户系统主数据库
+# 核心流程:
+# WebSocket鉴权 (chat_routes.py:261-329)
+# 验证token有效性
+# 支持24小时宽限期(即使token过期)
+# 检查身份一致性(token中的sub必须等于URL中的user_id)
+# 消息发送 (chat_routes.py:103-130)
+# 生成chat_id: 两个用户ID排序后拼接(如user1_user2)
+# 分桶存储到MongoDB
+# 通过Redis Pub/Sub广播给发送者和接收者
+# 分桶存储策略 (chat_routes.py:132-165)
+# 每个桶最多50条消息
+# 原子更新: 优先追加到未满的桶,满了就创建新桶
+# 索引优化: (chat_id, _id) 和 (chat_id, count)
+# 联系人列表 (chat_routes.py:381-435)
+# 从MongoDB的users集合获取除自己外的所有用户
+# 聚合查询每个会话的最后一条消息
+# 返回格式化的联系人列表
+# 高性能分桶设计,避免单文档过大
+# Redis Pub/Sub实现多端实时同步
+# 支持离线消息(存MongoDB,上线后拉取)
