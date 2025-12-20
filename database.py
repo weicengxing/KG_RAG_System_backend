@@ -122,7 +122,7 @@ def get_user(username):
         query = """
         MATCH (u:User)
         WHERE u.username = $uid OR u.email = $uid
-        RETURN u.username as username, u.password as password, u.email as email,
+        RETURN u.id as id, u.username as username, u.password as password, u.email as email,
                u.last_activity as last_activity, u.created_at as created_at,
                u.request_count as request_count,
                u.twofa_enabled as twofa_enabled,
@@ -133,6 +133,7 @@ def get_user(username):
         result = session.run(query, uid=username).single()
         if result:
             return {
+                "id": result.get("id", ""),
                 "username": result["username"],
                 "password": result["password"],
                 "email": result.get("email", ""),

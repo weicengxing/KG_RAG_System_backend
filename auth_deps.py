@@ -48,3 +48,10 @@ async def get_current_user_from_query(
     except Exception as e:
         print(f"[Auth Deps] SSE Token 验证失败: {e}")
         raise HTTPException(status_code=401, detail="认证失败")
+
+
+
+#     这个认证模块体现了精细化设计：
+# 方面设计亮点架构普通接口与SSE接口分离，各司其职性能普通接口复用中间件结果，
+# SSE独立验证兼容性解决EventSource API无法传Header的限制安全性SSE建立时严格验证，
+# 防止过期Token连接可维护性代码清晰，注释详细，易于理解和扩展

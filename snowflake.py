@@ -55,3 +55,13 @@ class SnowflakeGenerator:
 
 # 初始化单例
 id_generator = SnowflakeGenerator(machine_id=1, datacenter_id=1)
+
+# 这是一个分布式唯一ID生成器，基于 Twitter Snowflake 算法。
+# 核心功能：
+# 在分布式系统中生成 全局唯一、趋势递增 的64位整数ID，通过组合时间戳、
+# 、机器ID、数据中心ID
+# 和序列号来保证唯一性，每毫秒最多生成4096个ID，无需依赖数据库，线程安全。
+
+#
+#数据中心ID (datacenter_id) 是用来标识不同物理机房或云服务区域的编号
+#每个机房内还可以有多台服务器，用 machine_id 区分

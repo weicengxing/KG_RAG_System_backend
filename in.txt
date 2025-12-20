@@ -1,7 +1,9 @@
 #1.
 cd KG_RAG_System
 cd backend
+cd KG_RAG_System
 cd frontend
+npm run dev
 cd venv/Scripts
 python main.py
 python database.py
@@ -11,20 +13,56 @@ python database.py
 #启动项目
 cd backend
 .\venv\Scripts\activate
-cd venv/Scripts
+#cd venv/Scripts
 python main.py
 python database.py
 
 
 
 
-
-
- set ANTHROPIC_AUTH_TOKEN=sk-OrBcGlhaqz79WvGUsm22Nr4Vw5EjEUW8732MgJ0488KheXSH
+set ANTHROPIC_AUTH_TOKEN=sk-OrBcGlhaqz79WvGUsm22Nr4Vw5EjEUW8732MgJ0488KheXSH
 set  ANTHROPIC_BASE_URL=https://anyrouter.top
+claude
+
 
 
 https://api.code-relay.com/
-set ANTHROPIC_AUTH_TOKEN=sk-jJjJrhbR8dXagd0MXNkt3X8AtykVi6QUpNojJKBzEb3XferQ
-set  ANTHROPIC_BASE_URL=https://api.code-relay.com
+set ANTHROPIC_AUTH_TOKEN=sk-0Lr7p1OU6rnWCVlOdSXbEtCV6TbL6Od8
+set  ANTHROPIC_BASE_URL=https://api.univibe.cc/anthropic
+
+netstat -ano | findstr 6379
+taskkill /F /PID 4768
+
+
+
+git add .
+git commit -m "kg0.0.0"
+git push
+
+cpolar start-all --config D:\Cpolar\cpolar.yml
+
+
+我给你看一段前端代码，你只需要关注其中的SSE流式传输的功能，你看完就只用说看完了，我给你发后端代码
+
+这是我的JWT验证，请你给我修改后的需要替换的或者新增的所有函数的完整代码，其他不用给
+
+请你给我修改后的前端完整代码，不要有任何省略
+
+后端路径是backend，帮我找到所有跟创建用户相关的函数和他所在的文件，只用找创建用户
+
+
+ATATT3xFfGF0ZX36Du2L5sso745S3c65LzB9akonWII8ThaXgQClIppEhmeHvdFWbYzSjPW4a_6pKtZgLvULnwSLLASLlrB6LfzDLX3A6THbnGu0ESW5HoRhRyWjTJMUOSWfnPZeCbf-QOnDwJTMVgUAaqhKOPXBsjTmAhhiFuST3qY0BHnslfE=CAE00B4D
+
+
+
+
+
+帮我介绍一下这个文件实现的功能，最后总结一下
+
+
+
+
+
+
+
 

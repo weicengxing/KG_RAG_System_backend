@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, EmailStr
-from utils import verify_password, get_password_hash, create_access_token, create_refresh_token, decode_token, decode_token_with_exp
+from utils import verify_password, get_password_hash, create_access_token, create_refresh_token, decode_token, decode_token_with_exp, extract_user_info_from_payload, create_token_with_user_info
 import database
 from database_async import AsyncDatabaseManager
 import email_utils # 引入刚才写的
@@ -15,11 +15,13 @@ import shutil
 from rate_limiter import check_rate_limit, is_rate_limiter_available
 import logging
 from snowflake import id_generator
+from api import social_routes
 from chat_routes import router as chat_router
 from typing import Optional
 from config import MONGO_DB_NAME
 from motor.motor_asyncio import AsyncIOMotorClient
 import asyncio
+from database_asy_mon_re import db_manager
 import hashlib
 import re
 from redis_utils import (
@@ -309,15 +311,18 @@ async def jwt_auth_middleware(request: Request, call_next):
             print(f"[JWT DEBUG] ❌ Token完全无效: {error_msg}")
             return JSONResponse(status_code=401, content={"detail": error_msg or "认证失败"})
 
-        username = payload.get("sub")
+        # 使用新的工具函数提取用户信息（支持新旧格式）
+        user_id, username = extract_user_info_from_payload(payload)
+        
         if not username:
             print(f"[JWT DEBUG] ❌ Token中缺少用户信息")
             return JSONResponse(status_code=401, content={"detail": "Token中缺少用户信息"})
 
-        print(f"[JWT DEBUG] ✅ Token有效，用户: {username}")
+        print(f"[JWT DEBUG] ✅ Token有效，用户ID: {user_id}, 用户名: {username}")
 
-        # 存储用户信息到request.state
+        # 存储用户信息到request.state（保持向后兼容）
         request.state.current_user = username
+        request.state.current_user_id = user_id  # 新增：存储用户ID
         request.state.token_expired = is_expired
         request.state.new_token = None
 
@@ -360,7 +365,18 @@ async def jwt_auth_middleware(request: Request, call_next):
                 )
 
             # 在24小时内，创建新的access token并添加到响应header
-            new_token = create_access_token(data={"sub": username})
+            # 使用新的格式创建token（包含用户ID和用户名）
+            if user_id:
+                new_token = create_token_with_user_info(user_id, username)
+            else:
+                # 如果旧token没有user_id，需要从数据库获取
+                db_user = database.get_user(username)
+                if db_user and db_user.get("id"):
+                    user_id = db_user.get("id")
+                    new_token = create_token_with_user_info(user_id, username)
+                else:
+                    new_token = create_access_token(data={"sub": username})
+                    
             request.state.new_token = new_token
             print(f"[JWT DEBUG] ✅ 生成新token成功")
 
@@ -388,6 +404,8 @@ app.include_router(music_router)
 from novel_routes import router as novel_router
 app.include_router(novel_router)
 
+# 注册社交路由
+app.include_router(social_routes.router)
 # 注册聊天室路由
 from chat_routes import router as chat_router
 app.include_router(chat_router)
@@ -408,13 +426,26 @@ def compute_file_hash(content: bytes) -> str:
 
 
 async def build_login_response(username: str, request: Request):
-    """统一生成登录成功返回，包含 token 与登录记录"""
+    """统一生成登录成功返回，包含 token 与登录记录（新格式）"""
     # 更新最后活动时间
     database.update_last_activity(username)
-
-    # 生成 token
-    access_token = create_access_token(data={"sub": username})
-    refresh_token = create_refresh_token(data={"sub": username})
+    
+    # 从数据库获取用户信息，包括雪花ID
+    db_user = database.get_user(username)
+    if not db_user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    
+    user_id = db_user.get("id", "")
+    
+    # 生成 token（新格式：包含用户ID和用户名）
+    if user_id:
+        # 使用新格式创建token
+        access_token = create_token_with_user_info(user_id, username)
+        refresh_token = create_refresh_token(data={"user_id": user_id, "username": username})
+    else:
+        # 向后兼容：如果没有用户ID，使用旧格式
+        access_token = create_access_token(data={"sub": username})
+        refresh_token = create_refresh_token(data={"sub": username})
 
     # 记录登录历史
     try:
@@ -448,7 +479,8 @@ async def build_login_response(username: str, request: Request):
         "access_token": access_token,
         "refresh_token": refresh_token,
         "token_type": "bearer",
-        "username": username
+        "username": username,
+        "user_id": user_id if user_id else None
     }
 
 
@@ -487,7 +519,6 @@ async def register(user: RegisterSchema):  # <--- 改成 async def
     # 2. 生成雪花ID (所有系统通用的唯一标识)
     # 重点：为了前端兼容性，用字符串
     user_id = id_generator.next_id() 
-    
     # 3. 创建用户 (加密密码)
     password_strength = evaluate_password_strength(user.password)
     hashed_pw = get_password_hash(user.password)
@@ -708,8 +739,17 @@ async def confirm_qr_login_api(data: QRConfirmSchema, request: Request):
     if not database.get_user_qr_login_status(data.username):
         raise HTTPException(status_code=400, detail="该用户未启用二维码登录")
 
-    # 生成 token 并确认会话
-    access_token = create_access_token(data={"sub": data.username})
+    # 从数据库获取用户信息，包括雪花ID
+    user_id = user.get("id", "")
+    
+    # 生成 token（新格式：包含用户ID和用户名）
+    if user_id:
+        # 使用新格式创建token
+        access_token = create_token_with_user_info(user_id, data.username)
+    else:
+        # 向后兼容：如果没有用户ID，使用旧格式
+        access_token = create_access_token(data={"sub": data.username})
+        
     if not confirm_qr_login(data.qr_id, data.username, access_token):
         raise HTTPException(status_code=500, detail="确认登录失败，请重试")
 
@@ -1114,7 +1154,30 @@ async def save_profile(data: ProfileUpdateSchema, request: Request):
         "profile_completion": profile_completion
     }
 
+@app.on_event("startup")
+async def startup():
+    # 初始化 Mongo 和 Async Redis
+    await db_manager.connect()
+
+@app.on_event("shutdown")
+async def shutdown():
+    # 释放资源
+    await db_manager.close()
+
 if __name__ == "__main__":
     import uvicorn
     # 启动服务，端口8000
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+
+
+
+
+# 这个系统实现了：
+
+# ✅ 分布式唯一ID生成（雪花算法）
+# ✅ 完整的认证体系（密码、2FA、二维码登录）
+# ✅ 安全机制（密码强度评估、登录历史、限流）
+# ✅ 24小时活动窗口（无感续期token）
+# ✅ 双数据库架构（Neo4j + MongoDB）
+# ✅ 异步性能优化（线程池处理慢操作）
