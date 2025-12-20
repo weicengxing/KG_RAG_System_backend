@@ -81,11 +81,12 @@ MAX_FILES_PER_FOLDER = 500
 class Message(BaseModel):
     msg_id: str
     sender_id: str
-    content: str  # 文本消息时为文本内容,文件消息时为文件路径
+    content: str  # 文本消息时为文本内容,文件消息时为文件路径,群邀请卡片时为群组ID
     ts: float
-    type: str = "text"  # text, image, document, video
+    type: str = "text"  # text, image, document, video, group_invite_card
     filename: Optional[str] = None  # 文件消息时的原始文件名
     file_size: Optional[int] = None  # 文件大小(字节)
+    group_data: Optional[dict] = None  # 群邀请卡片消息的群组数据
 
 class ChatSession(BaseModel):
     chat_id: str
@@ -216,26 +217,85 @@ class ChatManager:
         """
         sender = msg_data['sender_id']
         receiver = msg_data['receiver_id']
-        
+
         # 1. 生成 chat_id (确保顺序一致，如 "min_max")
         ids = sorted([sender, receiver])
         chat_id = f"{ids[0]}_{ids[1]}"
-        
+
         # 2. 存入 MongoDB (极速分桶写入)
         await self._save_to_mongodb(chat_id, msg_data)
-        
+
         # 3. 序列化消息
         payload = json.dumps({
             "type": "new_message",
             "chat_id": chat_id,
             "data": msg_data
         })
-        
+
         # 4. 广播消息 (无论用户是否在线，先推到 Redis)
         # 推送给接收者
         await redis_async.publish(f"chat:user:{receiver}", payload)
         # 推送给发送者 (为了多设备同步，或者简单的 ACK)
         await redis_async.publish(f"chat:user:{sender}", payload)
+
+    async def send_group_message(self, msg_data: dict):
+        """发送群聊消息流程:
+        1. 验证用户是否是群成员
+        2. 获取发送者用户信息（头像、用户名）
+        3. 存入 MongoDB (分桶，chat_id格式为 group:群组ID)
+        4. 推送给所有群成员 (Redis Pub/Sub)
+        """
+        sender = msg_data['sender_id']
+        group_id = msg_data['group_id']
+
+        # 1. 验证群组存在且用户是成员
+        group = await db.groups.find_one({"_id": group_id})
+        if not group:
+            logger.error(f"❌ 群组不存在: {group_id}")
+            return
+
+        if sender not in group.get("members", []):
+            logger.error(f"❌ 用户 {sender} 不是群 {group_id} 的成员")
+            return
+
+        # 2. 获取发送者的用户信息（用于前端显示头像和名字）
+        sender_info = None
+        try:
+            # 尝试不同的查询方式（兼容不同的ID类型）
+            sender_info = await db.users.find_one({"_id": sender})
+            if not sender_info:
+                try:
+                    sender_info = await db.users.find_one({"_id": int(sender)})
+                except (ValueError, TypeError):
+                    pass
+        except Exception as e:
+            logger.warning(f"⚠️ 查询发送者信息失败: {sender}, {e}")
+
+        # 将发送者信息附加到消息数据中
+        if sender_info:
+            msg_data['sender_username'] = sender_info.get('username', 'Unknown')
+            msg_data['sender_avatar'] = sender_info.get('avatar', '')
+        else:
+            msg_data['sender_username'] = 'Unknown'
+            msg_data['sender_avatar'] = ''
+
+        # 3. 生成 chat_id (群聊格式: group:群组ID)
+        chat_id = f"group:{group_id}"
+
+        # 4. 存入 MongoDB (复用分桶机制)
+        await self._save_to_mongodb(chat_id, msg_data)
+
+        # 5. 序列化消息
+        payload = json.dumps({
+            "type": "new_group_message",
+            "chat_id": chat_id,
+            "group_id": group_id,
+            "data": msg_data
+        })
+
+        # 6. 广播给所有群成员
+        for member_id in group.get("members", []):
+            await redis_async.publish(f"chat:user:{member_id}", payload)
 
     async def _save_to_mongodb(self, chat_id: str, msg_data: dict):
         """MongoDB 分桶写入策略 (Atomic Update)"""
@@ -451,6 +511,53 @@ async def websocket_endpoint(
         while True:
             data = await websocket.receive_text()
             
+            # === Token检查逻辑（类似main.py中间件）===
+            try:
+                payload, is_expired, error_msg = decode_token_with_exp(token)
+                
+                if payload is None:
+                    logger.warning(f"[WS] Token无效，断开连接: {user_id}")
+                    await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+                    break
+                    
+                if is_expired:
+                    # 检查24小时窗口
+                    exp_timestamp = payload.get("exp", 0)
+                    current_timestamp = time.time()
+                    grace_period_seconds = 24 * 60 * 60
+                    
+                    if current_timestamp > (exp_timestamp + grace_period_seconds):
+                        logger.warning(f"[WS] Token彻底过期，断开连接: {user_id}")
+                        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+                        break
+                    else:
+                        # 在宽限期内，生成新token
+                        from utils import create_token_with_user_info, create_access_token
+                        
+                        if payload.get("user_id"):
+                            new_token = create_token_with_user_info(
+                                payload["user_id"], 
+                                payload.get("username", "")
+                            )
+                        else:
+                            new_token = create_access_token(data={"sub": payload.get("sub")})
+                        
+                        # 通过WebSocket发送新token给前端
+                        await websocket.send_text(json.dumps({
+                            "type": "token_refresh",
+                            "new_token": new_token
+                        }))
+                        
+                        # 更新token变量和活跃时间
+                        token = new_token
+                        database.update_last_activity(user_id)
+                        logger.info(f"[WS] Token已刷新: {user_id}")
+            
+            except Exception as e:
+                logger.error(f"[WS] Token检查异常: {e}")
+                await websocket.close(code=status.WS_1011_INTERNAL_ERROR)
+                break
+            
             try:
                 msg_obj = json.loads(data)
             except json.JSONDecodeError:
@@ -465,7 +572,7 @@ async def websocket_endpoint(
             if msg_obj.get("type") == "message":
                 target_id = msg_obj.get("target_id")
                 content = msg_obj.get("content")
-                msg_type = msg_obj.get("msg_type", "text")  # 消息类型: text, image, document, video
+                msg_type = msg_obj.get("msg_type", "text")  # 消息类型: text, image, document, video, group_invite_card
                 filename = msg_obj.get("filename")  # 文件消息时的原始文件名
                 file_size = msg_obj.get("file_size")  # 文件大小
 
@@ -485,7 +592,37 @@ async def websocket_endpoint(
                         msg_content["filename"] = filename
                         msg_content["file_size"] = file_size
 
+                    # 如果是群邀请卡片消息,添加群组信息
+                    if msg_type == "group_invite_card":
+                        msg_content["group_data"] = msg_obj.get("group_data", {})
+
                     await chat_manager.send_personal_message(msg_content)
+
+            # 发送群聊消息
+            if msg_obj.get("type") == "group_message":
+                group_id = msg_obj.get("group_id")
+                content = msg_obj.get("content")
+                msg_type = msg_obj.get("msg_type", "text")
+                filename = msg_obj.get("filename")
+                file_size = msg_obj.get("file_size")
+
+                if group_id and content:
+                    current_ts = time.time()
+                    msg_content = {
+                        "msg_id": f"{user_id}-{int(current_ts * 1000)}",
+                        "sender_id": user_id,
+                        "group_id": group_id,
+                        "content": content,
+                        "ts": current_ts,
+                        "type": msg_type
+                    }
+
+                    # 如果是文件消息,添加文件相关信息
+                    if msg_type in ["image", "document", "video"]:
+                        msg_content["filename"] = filename
+                        msg_content["file_size"] = file_size
+
+                    await chat_manager.send_group_message(msg_content)
 
     except WebSocketDisconnect:
         logger.info(f"[WS] 用户主动断开: {user_id}")
@@ -503,32 +640,32 @@ async def websocket_endpoint(
 @router.get("/contacts")
 async def get_contacts(user_id: str = Query(..., description="当前用户ID")):
     """
-    获取好友列表（只显示已添加的好友）
+    获取好友列表和群组列表（已合并）
     1. 从 MongoDB contacts 集合查询好友关系
-    2. 从 Neo4j 查询好友用户信息
-    3. 聚合查询最后一条聊天记录
+    2. 从 MongoDB groups 集合查询用户加入的群组
+    3. 返回统一格式的联系人列表
     """
     if db is None:
         raise HTTPException(status_code=503, detail="Database uninitialized")
 
     contacts_list = []
 
-    # 1. 从 MongoDB contacts 集合获取好友列表
+    # 1. 获取好友列表
     friends_cursor = db.contacts.find({"owner_id": user_id})
 
     async for contact in friends_cursor:
         friend_id = contact["friend_id"]
 
-        # 2. 从 Neo4j 查询好友用户信息 (同步调用)
+        # 从 Neo4j 查询好友用户信息
         friend_user = database.get_user_by_id(friend_id)
         if not friend_user:
-            continue  # 好友用户不存在，跳过
+            continue
 
-        # 3. 计算 chat_id
+        # 计算 chat_id
         ids = sorted([user_id, friend_id])
         chat_id = f"{ids[0]}_{ids[1]}"
 
-        # 4. 查找该会话最新的一条消息
+        # 查找最后一条消息
         last_bucket = await db.chat_history.find_one(
             {"chat_id": chat_id},
             sort=[("_id", -1)]
@@ -540,23 +677,60 @@ async def get_contacts(user_id: str = Query(..., description="当前用户ID")):
         if last_bucket and last_bucket.get("messages"):
             last_msg_obj = last_bucket["messages"][-1]
             last_msg_text = last_msg_obj.get("content", "")
-            # 格式化时间
             ts = last_msg_obj.get("ts", 0)
             import datetime
             dt = datetime.datetime.fromtimestamp(ts)
             last_time_display = dt.strftime("%H:%M")
 
-        # 5. 组装数据
         contacts_list.append({
             "id": friend_id,
             "username": friend_user.get("username", "Unknown"),
             "avatar": friend_user.get("avatar", "https://i.pravatar.cc/150?u=" + friend_id),
             "lastMessage": last_msg_text,
             "lastTime": last_time_display,
-            "unread": 0,  # TODO: 后面可以用 Redis 计算
+            "unread": 0,
             "active": False,
             "status": friend_user.get("status", "offline"),
-            "messages": []  # 初始不加载历史，点击后再加载
+            "messages": [],
+            "type": "private"  # 标识为私聊
+        })
+
+    # 2. 获取群组列表
+    groups_cursor = db.groups.find({"members": user_id})
+
+    async for group in groups_cursor:
+        group_id = group["_id"]
+        chat_id = f"group:{group_id}"
+
+        # 查找群组最后一条消息
+        last_bucket = await db.chat_history.find_one(
+            {"chat_id": chat_id},
+            sort=[("_id", -1)]
+        )
+
+        last_msg_text = ""
+        last_time_display = ""
+
+        if last_bucket and last_bucket.get("messages"):
+            last_msg_obj = last_bucket["messages"][-1]
+            last_msg_text = last_msg_obj.get("content", "")
+            ts = last_msg_obj.get("ts", 0)
+            import datetime
+            dt = datetime.datetime.fromtimestamp(ts)
+            last_time_display = dt.strftime("%H:%M")
+
+        contacts_list.append({
+            "id": group_id,
+            "username": group.get("group_name", "未命名群组"),
+            "avatar": group.get("group_avatar", ""),
+            "lastMessage": last_msg_text,
+            "lastTime": last_time_display,
+            "unread": 0,
+            "active": False,
+            "status": "online",  # 群组总是显示为在线
+            "messages": [],
+            "type": "group",  # 标识为群聊
+            "member_count": len(group.get("members", []))
         })
 
     return contacts_list

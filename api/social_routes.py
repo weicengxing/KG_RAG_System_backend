@@ -9,6 +9,8 @@ import time
 import logging
 import uuid
 import json
+import os
+import base64
 from typing import List, Literal, Optional
 from fastapi import APIRouter, HTTPException, Depends, Query, Header, status
 from pydantic import BaseModel, Field
@@ -23,6 +25,52 @@ from utils import decode_token_with_exp
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/social", tags=["Social"])
+
+# 头像目录路径
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+AVATAR_DIR = os.path.join(project_root, "assets", "avatars")
+
+# ==================== 辅助函数 ====================
+
+async def get_avatar_base64(avatar_filename: str) -> Optional[str]:
+    """读取头像文件并转换为 base64"""
+    if not avatar_filename:
+        logger.info("❌ 头像文件名为空")
+        return None
+
+    # 如果是 URL，直接返回 None（让前端用原 URL）
+    if avatar_filename.startswith('http://') or avatar_filename.startswith('https://'):
+        logger.info(f"⚠️ 头像是 URL，跳过转换: {avatar_filename}")
+        return None
+
+    try:
+        file_path = os.path.join(AVATAR_DIR, avatar_filename)
+        logger.info(f"📂 尝试读取头像: {file_path}")
+
+        if not os.path.exists(file_path):
+            logger.warning(f"❌ 头像文件不存在: {file_path}")
+            return None
+
+        with open(file_path, 'rb') as f:
+            avatar_bytes = f.read()
+            avatar_base64 = base64.b64encode(avatar_bytes).decode('utf-8')
+
+            # 判断文件类型
+            if avatar_filename.lower().endswith('.png'):
+                mime_type = 'image/png'
+            elif avatar_filename.lower().endswith('.jpg') or avatar_filename.lower().endswith('.jpeg'):
+                mime_type = 'image/jpeg'
+            elif avatar_filename.lower().endswith('.gif'):
+                mime_type = 'image/gif'
+            else:
+                mime_type = 'image/jpeg'  # 默认
+
+            data_url = f"data:{mime_type};base64,{avatar_base64}"
+            logger.info(f"✅ 头像转换成功，大小: {len(avatar_base64)} 字符, MIME: {mime_type}")
+            return data_url
+    except Exception as e:
+        logger.error(f"❌ 读取头像失败: {avatar_filename}, {e}")
+        return None
 
 # ==================== 依赖注入 (Helpers) ====================
 
@@ -338,22 +386,22 @@ async def handle_request(
             upsert=True
         )
 
-        # C. 插入一条 System Message 到 Chat History 分桶
+        # C. 插入一条打招呼消息到 Chat History 分桶（使用申请人的打招呼内容）
         chat_id = get_chat_id(current_user_id, partner_id)
-        sys_msg = {
-            "msg_id": f"sys-{uuid.uuid4()}",
-            "sender_id": "system",
-            "receiver_id": "all",
-            "content": "You are now connected. Say Hello! 👋",
+        greeting_msg = {
+            "msg_id": str(uuid.uuid4()),
+            "sender_id": partner_id,  # 发送者是申请人
+            "receiver_id": current_user_id,  # 接收者是当前用户
+            "content": request_doc.get("request_msg", "Hi, I'd like to be your friend."),  # 使用打招呼内容
             "ts": ts,
-            "type": "system",
+            "type": "text",  # 正常文本消息类型
         }
 
         # 尝试插入到未满的桶，如果没有则创建新桶
         result = await db.chat_history.update_one(
             {"chat_id": chat_id, "count": {"$lt": 50}},
             {
-                "$push": {"messages": sys_msg},
+                "$push": {"messages": greeting_msg},
                 "$inc": {"count": 1},
                 "$set": {"last_updated": ts}
             }
@@ -364,7 +412,7 @@ async def handle_request(
             await db.chat_history.insert_one({
                 "chat_id": chat_id,
                 "count": 1,
-                "messages": [sys_msg],
+                "messages": [greeting_msg],
                 "last_updated": ts,
                 "created_at": ts
             })
@@ -378,55 +426,144 @@ async def handle_request(
         await pipeline.execute()
 
         # 2. 获取双方用户信息（用于前端增量更新好友列表）
-        # 注意：user_id 可能是字符串格式的雪花ID，需要转换
-        try:
-            current_user_info = await db.users.find_one({"_id": int(current_user_id)})
-        except (ValueError, TypeError):
-            current_user_info = await db.users.find_one({"_id": current_user_id})
+        # 查询用户信息的辅助函数
+        async def get_user_info(user_id: str):
+            """兼容多种ID类型的用户查询"""
+            # 方案1：先尝试字符串ID
+            user = await db.users.find_one({"_id": user_id})
+            if user:
+                return user
+            # 方案2：尝试整数ID
+            try:
+                user = await db.users.find_one({"_id": int(user_id)})
+                if user:
+                    return user
+            except (ValueError, TypeError):
+                pass
+            return None
 
-        try:
-            partner_user_info = await db.users.find_one({"_id": int(partner_id)})
-        except (ValueError, TypeError):
-            partner_user_info = await db.users.find_one({"_id": partner_id})
+        current_user_info = await get_user_info(current_user_id)
+        partner_user_info = await get_user_info(partner_id)
 
         if not current_user_info:
             logger.error(f"❌ 查询当前用户信息失败: {current_user_id}")
         if not partner_user_info:
             logger.error(f"❌ 查询对方用户信息失败: {partner_id}")
 
-        # 3. 通知发起人 (partner_id)
-        msg_payload = json.dumps({
-            "type": "new_message", # 复用 new_message 让聊天列表顶起来
-            "data": sys_msg        # 直接推送那条系统消息
-        })
+        # 3. 发送好友通过事件（包含完整用户信息、头像 base64 和打招呼消息）
+        greeting_content = request_doc.get("request_msg", "Hi, I'd like to be your friend.")
 
-        # 发送好友通过事件（包含完整用户信息）
+        # 读取双方头像并转换为 base64（如果是本地文件）
+        current_user_avatar_base64 = await get_avatar_base64(current_user_info.get("avatar", "") if current_user_info else "")
+        partner_user_avatar_base64 = await get_avatar_base64(partner_user_info.get("avatar", "") if partner_user_info else "")
+
+        logger.info(f"🖼️ 当前用户头像 base64: {'有数据' if current_user_avatar_base64 else '无数据（可能是URL）'}")
+        logger.info(f"🖼️ 对方用户头像 base64: {'有数据' if partner_user_avatar_base64 else '无数据（可能是URL）'}")
+
+        # 发送给发起人（partner_id）的通知
+        partner_data = {
+             "friend_id": str(current_user_id),  # 确保是字符串格式
+             "username": current_user_info.get("username", "Unknown") if current_user_info else "Unknown",
+             "avatar": current_user_info.get("avatar", "") if current_user_info else "",
+             "avatar_base64": current_user_avatar_base64,  # base64 数据（如果有）
+             "lastMessage": greeting_content,  # 添加打招呼内容
+             "lastTime": ts
+        }
         event_payload_for_partner = json.dumps({
              "type": "friend_accepted",
-             "data": {
-                 "friend_id": current_user_id,
-                 "username": current_user_info.get("username", "Unknown"),
-                 "avatar": current_user_info.get("avatar", "")
-             }
+             "data": partner_data
         })
 
         # 发送给接收者（当前用户）的通知
+        current_data = {
+             "friend_id": str(partner_id),  # 确保是字符串格式
+             "username": partner_user_info.get("username", "Unknown") if partner_user_info else "Unknown",
+             "avatar": partner_user_info.get("avatar", "") if partner_user_info else "",
+             "avatar_base64": partner_user_avatar_base64,  # base64 数据（如果有）
+             "lastMessage": greeting_content,  # 添加打招呼内容
+             "lastTime": ts
+        }
         event_payload_for_current = json.dumps({
              "type": "friend_accepted",
-             "data": {
-                 "friend_id": partner_id,
-                 "username": partner_user_info.get("username", "Unknown"),
-                 "avatar": partner_user_info.get("avatar", "")
-             }
+             "data": current_data
         })
 
-        await redis.publish(f"chat:user:{partner_id}", msg_payload)
+        logger.info(f"📤 发送给 {partner_id} 的通知数据: avatar_base64={'有' if partner_data.get('avatar_base64') else '无'}")
+        logger.info(f"📤 发送给 {current_user_id} 的通知数据: avatar_base64={'有' if current_data.get('avatar_base64') else '无'}")
+
+        # 发送通知到Redis
         await redis.publish(f"chat:user:{partner_id}", event_payload_for_partner)
-        # 通知自己刷新
         await redis.publish(f"chat:user:{current_user_id}", event_payload_for_current)
+
+        logger.info(f"✅ 好友关系已建立，通知已发送: {current_user_id} <-> {partner_id}")
 
         return {"message": "Friend accepted"}
         
     except Exception as e:
         logger.error(f"Handle Friend Transaction Failed: {e}")
         raise HTTPException(status_code=500, detail="Transaction failed, please try again")
+
+
+@router.post("/delete_friend")
+async def delete_friend(
+    body: dict,
+    current_user_id: str = Depends(get_current_user_id)
+):
+    """
+    删除好友
+    删除双方的contacts关系，并清空聊天记录
+    """
+    db = db_manager.db
+    redis = db_manager.redis
+
+    friend_id = body.get("friend_id", "").strip()
+    if not friend_id:
+        raise HTTPException(status_code=400, detail="friend_id is required")
+
+    try:
+        # 1. 检查好友关系是否存在
+        exists = await db.contacts.find_one({
+            "owner_id": current_user_id,
+            "friend_id": friend_id
+        })
+
+        if not exists:
+            raise HTTPException(status_code=404, detail="Friend relationship not found")
+
+        # 2. 生成chat_id（用于删除聊天记录）
+        chat_id = get_chat_id(current_user_id, friend_id)
+
+        # 3. 删除聊天历史记录（所有相关的桶）
+        delete_result = await db.chat_history.delete_many({"chat_id": chat_id})
+        logger.info(f"删除了 {delete_result.deleted_count} 个聊天记录桶")
+
+        # 4. 删除双方的contacts记录
+        await db.contacts.delete_one({
+            "owner_id": current_user_id,
+            "friend_id": friend_id
+        })
+
+        await db.contacts.delete_one({
+            "owner_id": friend_id,
+            "friend_id": current_user_id
+        })
+
+        # 5. 更新 Redis 缓存
+        pipeline = redis.pipeline()
+        pipeline.srem(f"friends:{current_user_id}", friend_id)
+        pipeline.srem(f"friends:{friend_id}", current_user_id)
+        await pipeline.execute()
+
+        logger.info(f"✅ 好友关系已删除: {current_user_id} <-> {friend_id}, 聊天记录已清空")
+
+        return {
+            "message": "Friend deleted successfully",
+            "friend_id": friend_id,
+            "deleted_messages": delete_result.deleted_count
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ 删除好友失败: {e}")
+        raise HTTPException(status_code=500, detail="Failed to delete friend")

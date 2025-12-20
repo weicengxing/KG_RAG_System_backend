@@ -39,6 +39,27 @@ class DatabaseManager:
             [("owner_id", 1), ("friend_id", 1)],
             unique=True
         )
+
+        # 索引C: 群组成员查询优化 (members数组索引) - 保留用于群内成员验证
+        await self.db.groups.create_index([("members", 1)])
+
+        # 索引D: 群组所有者查询优化
+        await self.db.groups.create_index([("owner_id", 1)])
+
+        # 索引E: 用户-群组关系表 (数据冗余策略，提升查询效率)
+        # user_groups 集合: {user_id, group_id, role, joined_at}
+        await self.db.user_groups.create_index(
+            [("user_id", 1), ("group_id", 1)],
+            unique=True
+        )
+        # 反向索引：通过group_id查询所有成员
+        await self.db.user_groups.create_index([("group_id", 1)])
+        # 通过user_id查询所有群组（最常用的查询）
+        await self.db.user_groups.create_index([("user_id", 1)])
+
+        # 索引F: 群组邀请码索引
+        await self.db.groups.create_index([("invite_code", 1)], unique=True, sparse=True)
+
         logger.info("✅ Database (Mongo) connected & Indexes checked.")
 
         # 2. Redis 异步初始化
