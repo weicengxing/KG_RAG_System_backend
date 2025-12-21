@@ -20,6 +20,8 @@ from motor.motor_asyncio import AsyncIOMotorClientSession
 from database_asy_mon_re import db_manager
 # 引入之前写好的工具用来解密Token获取ID
 from utils import decode_token_with_exp
+# 引入 Neo4j 数据库操作模块（用于查询用户信息）
+import database
 
 # 基础日志配置
 logger = logging.getLogger(__name__)
@@ -426,24 +428,11 @@ async def handle_request(
         await pipeline.execute()
 
         # 2. 获取双方用户信息（用于前端增量更新好友列表）
-        # 查询用户信息的辅助函数
-        async def get_user_info(user_id: str):
-            """兼容多种ID类型的用户查询"""
-            # 方案1：先尝试字符串ID
-            user = await db.users.find_one({"_id": user_id})
-            if user:
-                return user
-            # 方案2：尝试整数ID
-            try:
-                user = await db.users.find_one({"_id": int(user_id)})
-                if user:
-                    return user
-            except (ValueError, TypeError):
-                pass
-            return None
-
-        current_user_info = await get_user_info(current_user_id)
-        partner_user_info = await get_user_info(partner_id)
+        # 从 Neo4j 查询用户信息（与 chat_routes.py 的 contacts 接口保持一致）
+        current_user_info = database.get_user_by_id(current_user_id)
+        partner_user_info = database.get_user_by_id(partner_id)
+        
+        
 
         if not current_user_info:
             logger.error(f"❌ 查询当前用户信息失败: {current_user_id}")

@@ -1,4 +1,10 @@
 #1.
+D:
+cd KG_RAG_System
+set ANTHROPIC_AUTH_TOKEN=sk-OrBcGlhaqz79WvGUsm22Nr4Vw5EjEUW8732MgJ0488KheXSH
+set  ANTHROPIC_BASE_URL=https://anyrouter.top
+claude
+
 cd KG_RAG_System
 cd backend
 cd KG_RAG_System
@@ -36,7 +42,7 @@ taskkill /F /PID 4768
 
 
 git add .
-git commit -m "kg0.0.0"
+git commit -m "kg_0.0.1"
 git push
 
 cpolar start-all --config D:\Cpolar\cpolar.yml
@@ -54,7 +60,7 @@ cpolar start-all --config D:\Cpolar\cpolar.yml
 ATATT3xFfGF0ZX36Du2L5sso745S3c65LzB9akonWII8ThaXgQClIppEhmeHvdFWbYzSjPW4a_6pKtZgLvULnwSLLASLlrB6LfzDLX3A6THbnGu0ESW5HoRhRyWjTJMUOSWfnPZeCbf-QOnDwJTMVgUAaqhKOPXBsjTmAhhiFuST3qY0BHnslfE=CAE00B4D
 
 
-
+这是前段代码，后端在backend
 
 
 帮我介绍一下这个文件实现的功能，最后总结一下

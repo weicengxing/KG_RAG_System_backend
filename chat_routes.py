@@ -179,12 +179,60 @@ class ChatManager:
     def __init__(self):
         self.active_connections: dict[str, WebSocket] = {}
         self.BUCKET_SIZE = 50  # 每个桶存储的消息数量
+
+    async def increment_unread_count(self, user_id: str, chat_id: str):
+        """增加用户对指定会话的未读消息数"""
+        try:
+            await db.unread_counts.update_one(
+                {"user_id": user_id, "chat_id": chat_id},
+                {
+                    "$inc": {"unread_count": 1},
+                    "$set": {"last_updated": time.time()}
+                },
+                upsert=True
+            )
+        except Exception as e:
+            logger.error(f"❌ 增加未读数失败 user={user_id}, chat={chat_id}: {e}")
+
+    async def reset_unread_count(self, user_id: str, chat_id: str):
+        """清零用户对指定会话的未读消息数"""
+        try:
+            await db.unread_counts.update_one(
+                {"user_id": user_id, "chat_id": chat_id},
+                {
+                    "$set": {
+                        "unread_count": 0,
+                        "last_updated": time.time()
+                    }
+                },
+                upsert=True
+            )
+        except Exception as e:
+            logger.error(f"❌ 清零未读数失败 user={user_id}, chat={chat_id}: {e}")
+
+    async def get_unread_count(self, user_id: str, chat_id: str) -> int:
+        """获取用户对指定会话的未读消息数"""
+        try:
+            doc = await db.unread_counts.find_one(
+                {"user_id": user_id, "chat_id": chat_id}
+            )
+            return doc.get("unread_count", 0) if doc else 0
+        except Exception as e:
+            logger.error(f"❌ 获取未读数失败 user={user_id}, chat={chat_id}: {e}")
+            return 0
     
     async def connect(self, websocket: WebSocket, user_id: str):
         await websocket.accept()
         self.active_connections[user_id] = websocket
         logger.info(f"🔌 WebSocket 连接建立: {user_id}")
-        
+
+        # 将用户添加到Redis在线用户集合
+        try:
+            await redis_async.sadd("online_users", user_id)
+            logger.info(f"✅ 用户已上线: {user_id}")
+        except Exception as e:
+            logger.error(f"❌ 添加在线用户失败: {user_id}, {e}")
+
         # 用户上线，启动 Redis 订阅任务
         asyncio.create_task(self._subscribe_to_user_channel(user_id, websocket))
 
@@ -192,6 +240,20 @@ class ChatManager:
         if user_id in self.active_connections:
             del self.active_connections[user_id]
             logger.info(f"🔌 WebSocket 连接断开: {user_id}")
+
+            # 从Redis在线用户集合中移除用户
+            try:
+                asyncio.create_task(self._remove_online_user(user_id))
+            except Exception as e:
+                logger.error(f"❌ 移除在线用户失败: {user_id}, {e}")
+
+    async def _remove_online_user(self, user_id: str):
+        """从Redis在线集合中移除用户"""
+        try:
+            await redis_async.srem("online_users", user_id)
+            logger.info(f"✅ 用户已下线: {user_id}")
+        except Exception as e:
+            logger.error(f"❌ 移除在线用户失败: {user_id}, {e}")
 
     async def _subscribe_to_user_channel(self, user_id: str, websocket: WebSocket):
         """订阅 Redis 频道，接收发给该用户的消息"""
@@ -214,6 +276,7 @@ class ChatManager:
         1. 存入 MongoDB (分桶)
         2. 推送给接收者 (Redis Pub/Sub)
         3. 推送给发送者 (多端同步)
+        4. 增加接收者的未读消息数
         """
         sender = msg_data['sender_id']
         receiver = msg_data['receiver_id']
@@ -225,14 +288,17 @@ class ChatManager:
         # 2. 存入 MongoDB (极速分桶写入)
         await self._save_to_mongodb(chat_id, msg_data)
 
-        # 3. 序列化消息
+        # 3. 增加接收者的未读消息数
+        await self.increment_unread_count(receiver, chat_id)
+
+        # 4. 序列化消息
         payload = json.dumps({
             "type": "new_message",
             "chat_id": chat_id,
             "data": msg_data
         })
 
-        # 4. 广播消息 (无论用户是否在线，先推到 Redis)
+        # 5. 广播消息 (无论用户是否在线，先推到 Redis)
         # 推送给接收者
         await redis_async.publish(f"chat:user:{receiver}", payload)
         # 推送给发送者 (为了多设备同步，或者简单的 ACK)
@@ -243,7 +309,8 @@ class ChatManager:
         1. 验证用户是否是群成员
         2. 获取发送者用户信息（头像、用户名）
         3. 存入 MongoDB (分桶，chat_id格式为 group:群组ID)
-        4. 推送给所有群成员 (Redis Pub/Sub)
+        4. 增加所有群成员（除发送者外）的未读消息数
+        5. 推送给所有群成员 (Redis Pub/Sub)
         """
         sender = msg_data['sender_id']
         group_id = msg_data['group_id']
@@ -285,7 +352,12 @@ class ChatManager:
         # 4. 存入 MongoDB (复用分桶机制)
         await self._save_to_mongodb(chat_id, msg_data)
 
-        # 5. 序列化消息
+        # 5. 增加所有群成员（除发送者外）的未读消息数
+        for member_id in group.get("members", []):
+            if member_id != sender:
+                await self.increment_unread_count(member_id, chat_id)
+
+        # 6. 序列化消息
         payload = json.dumps({
             "type": "new_group_message",
             "chat_id": chat_id,
@@ -293,7 +365,7 @@ class ChatManager:
             "data": msg_data
         })
 
-        # 6. 广播给所有群成员
+        # 7. 广播给所有群成员
         for member_id in group.get("members", []):
             await redis_async.publish(f"chat:user:{member_id}", payload)
 
@@ -386,15 +458,17 @@ async def startup_event():
         # Mongo Init
         mongo_client = AsyncIOMotorClient(MONGO_URI)
         db = mongo_client[MONGO_DB_NAME]
-        
+
         # 1. 检查索引是否存在，不存在再创建（避免报错）
         # 这里不需要每次都 create_index，motor 会自动处理幂等性，但为了稳妥可以保留
         try:
             await db.chat_history.create_index([("chat_id", 1), ("_id", -1)])
             await db.chat_history.create_index([("chat_id", 1), ("count", 1)])
+            # 为未读消息数集合创建唯一索引
+            await db.unread_counts.create_index([("user_id", 1), ("chat_id", 1)], unique=True)
         except Exception:
             pass # 索引可能已存在
-            
+
         logger.info("✅ MongoDB (Motor) 连接成功")
         
         # 2. Redis 连接逻辑修复 (Fix AuthenticationError)
@@ -643,12 +717,21 @@ async def get_contacts(user_id: str = Query(..., description="当前用户ID")):
     获取好友列表和群组列表（已合并）
     1. 从 MongoDB contacts 集合查询好友关系
     2. 从 MongoDB groups 集合查询用户加入的群组
-    3. 返回统一格式的联系人列表
+    3. 从 Redis 查询在线用户状态
+    4. 返回统一格式的联系人列表
     """
     if db is None:
         raise HTTPException(status_code=503, detail="Database uninitialized")
 
     contacts_list = []
+
+    # 获取Redis中所有在线用户
+    try:
+        online_users = await redis_async.smembers("online_users")
+        logger.info(f"📊 当前在线用户: {online_users}")
+    except Exception as e:
+        logger.error(f"❌ 获取在线用户列表失败: {e}")
+        online_users = set()
 
     # 1. 获取好友列表
     friends_cursor = db.contacts.find({"owner_id": user_id})
@@ -682,15 +765,21 @@ async def get_contacts(user_id: str = Query(..., description="当前用户ID")):
             dt = datetime.datetime.fromtimestamp(ts)
             last_time_display = dt.strftime("%H:%M")
 
+        # 判断好友是否在线
+        friend_status = "online" if friend_id in online_users else "offline"
+
+        # 获取未读消息数
+        unread_count = await chat_manager.get_unread_count(user_id, chat_id)
+
         contacts_list.append({
             "id": friend_id,
             "username": friend_user.get("username", "Unknown"),
             "avatar": friend_user.get("avatar", "https://i.pravatar.cc/150?u=" + friend_id),
             "lastMessage": last_msg_text,
             "lastTime": last_time_display,
-            "unread": 0,
+            "unread": unread_count,
             "active": False,
-            "status": friend_user.get("status", "offline"),
+            "status": friend_status,  # 根据Redis在线集合设置状态
             "messages": [],
             "type": "private"  # 标识为私聊
         })
@@ -719,13 +808,16 @@ async def get_contacts(user_id: str = Query(..., description="当前用户ID")):
             dt = datetime.datetime.fromtimestamp(ts)
             last_time_display = dt.strftime("%H:%M")
 
+        # 获取未读消息数
+        unread_count = await chat_manager.get_unread_count(user_id, chat_id)
+
         contacts_list.append({
             "id": group_id,
             "username": group.get("group_name", "未命名群组"),
             "avatar": group.get("group_avatar", ""),
             "lastMessage": last_msg_text,
             "lastTime": last_time_display,
-            "unread": 0,
+            "unread": unread_count,
             "active": False,
             "status": "online",  # 群组总是显示为在线
             "messages": [],
@@ -735,20 +827,7 @@ async def get_contacts(user_id: str = Query(..., description="当前用户ID")):
 
     return contacts_list
 
-@router.get("/history", response_model=List[Message])
-async def get_messages(
-    chat_id: str = Query(..., description="会话ID"),
-    limit: int = Query(50, description="获取条数"),
-    before_ts: Optional[float] = Query(None, description="游标时间戳")
-):
-    """获取聊天历史记录 (懒加载)"""
-    if db is None:
-        raise HTTPException(status_code=503, detail="Database not initialized")
-
-    msgs = await chat_manager.get_chat_history(chat_id, limit, before_ts)
-    return msgs
-
-# ==================== 文件上传与访问接口 ====================
+# ==================== 辅助函数 ====================
 
 async def get_current_user_id(authorization: str = Header(None)) -> str:
     """从 Header 获取 Token 并解析出 user_id"""
@@ -771,6 +850,40 @@ async def get_current_user_id(authorization: str = Header(None)) -> str:
         raise HTTPException(status_code=404, detail="User not found")
 
     return str(user["_id"])
+
+# ==================== API 接口 ====================
+
+@router.get("/history", response_model=List[Message])
+async def get_messages(
+    chat_id: str = Query(..., description="会话ID"),
+    limit: int = Query(50, description="获取条数"),
+    before_ts: Optional[float] = Query(None, description="游标时间戳")
+):
+    """获取聊天历史记录 (懒加载)"""
+    if db is None:
+        raise HTTPException(status_code=503, detail="Database not initialized")
+
+    msgs = await chat_manager.get_chat_history(chat_id, limit, before_ts)
+    return msgs
+
+@router.post("/mark_read")
+async def mark_as_read(
+    chat_id: str = Query(..., description="会话ID"),
+    current_user_id: str = Depends(get_current_user_id)
+):
+    """标记会话为已读，清零未读消息数"""
+    if db is None:
+        raise HTTPException(status_code=503, detail="Database not initialized")
+
+    try:
+        await chat_manager.reset_unread_count(current_user_id, chat_id)
+        logger.info(f"✅ 已标记为已读: user={current_user_id}, chat={chat_id}")
+        return {"success": True, "message": "Marked as read"}
+    except Exception as e:
+        logger.error(f"❌ 标记已读失败: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to mark as read: {str(e)}")
+
+# ==================== 文件上传与访问接口 ====================
 
 @router.post("/upload_file")
 async def upload_file(

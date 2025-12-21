@@ -113,8 +113,7 @@ db_async_manager = AsyncDatabaseManager(max_workers=5)
 # 计算相对于项目根目录的绝对路径
 import os
 current_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(os.path.dirname(current_dir))
-AVATAR_DIR = os.path.join(project_root, "assets", "avatars")
+AVATAR_DIR = os.path.join(current_dir, "assets", "avatars")
 os.makedirs(AVATAR_DIR, exist_ok=True)
 
 # 2FA 存储目录（按照需求存放在 venv 目录下）

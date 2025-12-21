@@ -95,7 +95,7 @@ def create_user(user_id, username, password_hash, email, password_strength=2): #
             last_activity: timestamp(),
             request_count: 0,
             is_vip: false,
-            avatar: "default_avatar.png" // 建议加一个默认头像
+            avatar: "https://i.pravatar.cc/150?u=" + $user_id
         }) RETURN u
         """
         session.run(
