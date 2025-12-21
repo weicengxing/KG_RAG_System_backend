@@ -87,6 +87,13 @@ class Message(BaseModel):
     filename: Optional[str] = None  # 文件消息时的原始文件名
     file_size: Optional[int] = None  # 文件大小(字节)
     group_data: Optional[dict] = None  # 群邀请卡片消息的群组数据
+    sender_username: Optional[str] = None  # 群聊消息中发送者的用户名
+    sender_avatar: Optional[str] = None  # 群聊消息中发送者的头像文件名
+    sender_avatar_base64: Optional[str] = None  # 群聊消息中发送者的头像base64数据（后端直接返回）
+
+    class Config:
+        # 允许额外的字段（向后兼容）
+        extra = "allow"
 
 class ChatSession(BaseModel):
     chat_id: str
@@ -307,12 +314,12 @@ class ChatManager:
     async def send_group_message(self, msg_data: dict):
         """发送群聊消息流程:
         1. 验证用户是否是群成员
-        2. 获取发送者用户信息（头像、用户名）
+        2. 获取发送者用户信息（头像、用户名）- 从 Neo4j 数据库读取
         3. 存入 MongoDB (分桶，chat_id格式为 group:群组ID)
         4. 增加所有群成员（除发送者外）的未读消息数
         5. 推送给所有群成员 (Redis Pub/Sub)
         """
-        sender = msg_data['sender_id']
+        sender = str(msg_data['sender_id'])  # 🔧 统一转换为字符串
         group_id = msg_data['group_id']
 
         # 1. 验证群组存在且用户是成员
@@ -325,26 +332,62 @@ class ChatManager:
             logger.error(f"❌ 用户 {sender} 不是群 {group_id} 的成员")
             return
 
-        # 2. 获取发送者的用户信息（用于前端显示头像和名字）
+        # 2. 从 Neo4j 获取发送者的用户信息（用于前端显示头像和名字）
+        # 【修复】确保从 Neo4j 查询真实的头像路径，而不是用时间戳拼接
         sender_info = None
         try:
-            # 尝试不同的查询方式（兼容不同的ID类型）
-            sender_info = await db.users.find_one({"_id": sender})
-            if not sender_info:
-                try:
-                    sender_info = await db.users.find_one({"_id": int(sender)})
-                except (ValueError, TypeError):
-                    pass
+            # 从 Neo4j 获取完整的用户信息
+            sender_info = database.get_user_by_id(sender)
+            if sender_info:
+                logger.info(f"✅ 成功从 Neo4j 获取发送者信息: {sender} -> username={sender_info.get('username')}, avatar={sender_info.get('avatar')}")
+            else:
+                logger.warning(f"⚠️ Neo4j 中找不到发送者: {sender}，将使用默认值")
         except Exception as e:
-            logger.warning(f"⚠️ 查询发送者信息失败: {sender}, {e}")
+            logger.error(f"❌ 从 Neo4j 查询发送者信息失败: {sender}, 错误: {e}")
 
         # 将发送者信息附加到消息数据中
         if sender_info:
             msg_data['sender_username'] = sender_info.get('username', 'Unknown')
-            msg_data['sender_avatar'] = sender_info.get('avatar', '')
+            avatar_filename = sender_info.get('avatar', '')
+            msg_data['sender_avatar'] = avatar_filename  # 保留文件名用于存储
+
+            # 将头像文件读取并转为 base64 发给前端
+            if avatar_filename:
+                # 如果是完整URL（默认头像），直接使用
+                if avatar_filename.startswith('http://') or avatar_filename.startswith('https://'):
+                    msg_data['sender_avatar_base64'] = avatar_filename
+                else:
+                    # 如果是文件名，从文件系统读取并转为 base64
+                    try:
+                        from pathlib import Path
+                        import base64
+                        avatar_path = Path(__file__).resolve().parent / "assets" / "avatars" / avatar_filename
+
+                        if avatar_path.exists() and avatar_path.is_file():
+                            with open(avatar_path, "rb") as f:
+                                avatar_bytes = f.read()
+                                ext = avatar_path.suffix.lower()
+                                mime_type = {
+                                    '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+                                    '.png': 'image/png', '.gif': 'image/gif',
+                                    '.webp': 'image/webp'
+                                }.get(ext, 'image/jpeg')
+                                msg_data['sender_avatar_base64'] = f"data:{mime_type};base64,{base64.b64encode(avatar_bytes).decode('utf-8')}"
+                        else:
+                            msg_data['sender_avatar_base64'] = ''
+                    except Exception as e:
+                        logger.error(f"❌ 读取发送者头像文件失败: {avatar_filename}, 错误: {e}")
+                        msg_data['sender_avatar_base64'] = ''
+            else:
+                msg_data['sender_avatar_base64'] = ''
+
+            logger.info(f"📎 群聊消息已附加发送者信息: msg_id={msg_data.get('msg_id')}, username={msg_data['sender_username']}, avatar={avatar_filename}, has_base64={bool(msg_data.get('sender_avatar_base64'))}")
         else:
+            # 【修复】即使查询失败，也要设置默认值，确保字段存在
             msg_data['sender_username'] = 'Unknown'
             msg_data['sender_avatar'] = ''
+            msg_data['sender_avatar_base64'] = ''
+            logger.warning(f"⚠️ 群聊消息使用默认发送者信息: sender_id={sender}, msg_id={msg_data.get('msg_id')}")
 
         # 3. 生成 chat_id (群聊格式: group:群组ID)
         chat_id = f"group:{group_id}"
@@ -358,16 +401,37 @@ class ChatManager:
                 await self.increment_unread_count(member_id, chat_id)
 
         # 6. 序列化消息
-        payload = json.dumps({
-            "type": "new_group_message",
-            "chat_id": chat_id,
-            "group_id": group_id,
-            "data": msg_data
-        })
+        # 【调试】打印消息数据，确认字段存在
+        logger.info(f"🔍 准备广播群聊消息: msg_id={msg_data.get('msg_id')}, sender_id={sender}, "
+                   f"sender_username={msg_data.get('sender_username')}, "
+                   f"sender_avatar={msg_data.get('sender_avatar')}, "
+                   f"has_avatar_base64={bool(msg_data.get('sender_avatar_base64'))}")
+
+        try:
+            payload = json.dumps({
+                "type": "new_group_message",
+                "chat_id": chat_id,
+                "group_id": group_id,
+                "data": msg_data
+            })
+
+            # 【检查】payload 大小
+            payload_size_kb = len(payload) / 1024
+            logger.info(f"📦 消息 payload 大小: {payload_size_kb:.2f}KB")
+
+            if payload_size_kb > 1024:  # 超过 1MB
+                logger.warning(f"⚠️ 消息 payload 过大: {payload_size_kb:.2f}KB，可能导致传输失败")
+
+        except Exception as e:
+            logger.error(f"❌ JSON 序列化失败: {e}")
+            return
 
         # 7. 广播给所有群成员
         for member_id in group.get("members", []):
-            await redis_async.publish(f"chat:user:{member_id}", payload)
+            try:
+                await redis_async.publish(f"chat:user:{member_id}", payload)
+            except Exception as e:
+                logger.error(f"❌ Redis 发布失败 (member={member_id}): {e}")
 
     async def _save_to_mongodb(self, chat_id: str, msg_data: dict):
         """MongoDB 分桶写入策略 (Atomic Update)"""
@@ -409,39 +473,115 @@ class ChatManager:
         极致优化版历史记录查询：
         1. 充分利用 (chat_id, created_at) 复合索引
         2. 使用 before_ts 在查询层过滤掉新桶，实现毫秒级响应
+        3. 【新增】对于群聊消息，自动从 Neo4j 补充缺失的发送者信息
         """
         try:
             # --- 核心改进：查询条件 ---
             query = {"chat_id": chat_id}
-            
+
             if before_ts:
                 # 改进点：不再是在内存里 filter，而是直接告诉 Mongo：
-                # “请给我找桶的【创建时间】早于我当前最老消息时间戳的那些桶”
+                # "请给我找桶的【创建时间】早于我当前最老消息时间戳的那些桶"
                 # 这样 Mongo 会直接通过 B-Tree 索引跳过所有新桶
                 query["created_at"] = {"$lt": before_ts}
 
             # --- 核心改进：排序与性能 ---
             # 按照创建时间倒序排，每次拿 2 个桶（约100条消息），确保能凑够 limit=50 条
             cursor = db.chat_history.find(query).sort("created_at", -1).limit(2)
-            
+
             all_messages = []
             async for bucket in cursor:
                 msgs = bucket.get("messages", [])
-                
+
                 # 即使桶被定位到了，桶内消息数组中可能仍有部分消息比 before_ts 新（针对同一个桶内的分页）
                 if before_ts:
                     msgs = [m for m in msgs if m['ts'] < before_ts]
-                
+
                 # 桶内是旧->新，我们要把旧桶的消息放在列表前面
                 all_messages = msgs + all_messages
-                
+
                 # 如果凑够了用户需要的条数，就停下，不再读取更多文档
                 if len(all_messages) >= limit:
                     break
-            
+
+            # 对于群聊消息，将头像文件读取并转为 base64 发给前端
+            is_group_chat = chat_id.startswith("group:")
+            if is_group_chat and all_messages:
+                logger.info(f"📋 群聊历史消息加载: chat_id={chat_id}, 消息数={len(all_messages)}")
+
+                # 收集需要加载头像的发送者（避免重复读取）
+                avatar_cache = {}
+
+                for msg in all_messages:
+                    sender_id = msg.get('sender_id')
+                    avatar_filename = msg.get('sender_avatar', '')
+
+                    # 【调试】打印消息原始数据
+                    logger.debug(f"🔍 处理历史消息: msg_id={msg.get('msg_id')}, sender_id={sender_id}, "
+                                f"sender_username={msg.get('sender_username')}, sender_avatar={avatar_filename}")
+
+                    # 如果已经缓存过这个头像，直接使用
+                    if avatar_filename and avatar_filename in avatar_cache:
+                        msg['sender_avatar_base64'] = avatar_cache[avatar_filename]
+                        logger.debug(f"✅ 使用缓存头像: {avatar_filename}")
+                        continue
+
+                    # 如果是完整URL（默认头像），直接使用
+                    if avatar_filename and (avatar_filename.startswith('http://') or avatar_filename.startswith('https://')):
+                        msg['sender_avatar_base64'] = avatar_filename
+                        avatar_cache[avatar_filename] = avatar_filename
+                        logger.debug(f"✅ 使用URL头像: {avatar_filename}")
+                        continue
+
+                    # 如果是文件名，从文件系统读取并转为 base64
+                    if avatar_filename:
+                        try:
+                            from pathlib import Path
+                            import base64
+                            # 头像文件存储在 backend/assets/avatars 目录
+                            avatar_path = Path(__file__).resolve().parent / "assets" / "avatars" / avatar_filename
+
+                            if avatar_path.exists() and avatar_path.is_file():
+                                with open(avatar_path, "rb") as f:
+                                    avatar_bytes = f.read()
+                                    # 根据文件扩展名判断 MIME 类型
+                                    ext = avatar_path.suffix.lower()
+                                    mime_type = {
+                                        '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+                                        '.png': 'image/png', '.gif': 'image/gif',
+                                        '.webp': 'image/webp'
+                                    }.get(ext, 'image/jpeg')
+
+                                    avatar_base64 = f"data:{mime_type};base64,{base64.b64encode(avatar_bytes).decode('utf-8')}"
+
+                                    # 【检查】base64 数据大小
+                                    base64_size_kb = len(avatar_base64) / 1024
+                                    if base64_size_kb > 500:  # 超过 500KB
+                                        logger.warning(f"⚠️ 头像 base64 数据过大: {avatar_filename}, {base64_size_kb:.2f}KB，将使用文件名")
+                                        msg['sender_avatar_base64'] = ''
+                                    else:
+                                        msg['sender_avatar_base64'] = avatar_base64
+                                        avatar_cache[avatar_filename] = avatar_base64
+                                        logger.info(f"✅ 加载头像文件成功: {avatar_filename} -> base64 {base64_size_kb:.2f}KB")
+                            else:
+                                logger.warning(f"⚠️ 头像文件不存在: {avatar_path}")
+                                msg['sender_avatar_base64'] = ''
+                        except Exception as e:
+                            logger.error(f"❌ 读取头像文件失败: {avatar_filename}, 错误: {e}")
+                            msg['sender_avatar_base64'] = ''
+                    else:
+                        msg['sender_avatar_base64'] = ''
+
+                # 【调试】打印最终返回的消息数据样本
+                if all_messages:
+                    sample_msg = all_messages[0]
+                    logger.info(f"🔍 历史消息样本: msg_id={sample_msg.get('msg_id')}, "
+                               f"sender_username={sample_msg.get('sender_username')}, "
+                               f"has_avatar_base64={bool(sample_msg.get('sender_avatar_base64'))}")
+
             # 返回最后 limit 条（最靠近当前时间的旧消息）
             return all_messages[-limit:]
-            
+
         except Exception as e:
             logger.error(f"❌ 高效获取历史记录失败: {chat_id}, {e}")
             return []
@@ -697,6 +837,68 @@ async def websocket_endpoint(
                         msg_content["file_size"] = file_size
 
                     await chat_manager.send_group_message(msg_content)
+
+            # ==================== WebRTC 信令转发 ====================
+            # 处理通话 offer
+            if msg_obj.get("type") == "call_offer":
+                target_id = msg_obj.get("target_id")
+                caller_name = msg_obj.get("caller_name")
+                sdp = msg_obj.get("sdp")
+
+                if target_id and sdp:
+                    # 转发 offer 给目标用户
+                    payload = {
+                        "type": "call_offer",
+                        "caller_id": user_id,
+                        "caller_name": caller_name,
+                        "sdp": sdp
+                    }
+                    if target_id in chat_manager.active_connections:
+                        await chat_manager.active_connections[target_id].send_text(json.dumps(payload))
+                        logger.info(f"[WebRTC] 转发 call_offer: {user_id} -> {target_id}")
+
+            # 处理通话 answer
+            if msg_obj.get("type") == "call_answer":
+                target_id = msg_obj.get("target_id")
+                sdp = msg_obj.get("sdp")
+
+                if target_id and sdp:
+                    # 转发 answer 给发起方
+                    payload = {
+                        "type": "call_answer",
+                        "sdp": sdp
+                    }
+                    if target_id in chat_manager.active_connections:
+                        await chat_manager.active_connections[target_id].send_text(json.dumps(payload))
+                        logger.info(f"[WebRTC] 转发 call_answer: {user_id} -> {target_id}")
+
+            # 处理 ICE candidate
+            if msg_obj.get("type") == "ice_candidate":
+                target_id = msg_obj.get("target_id")
+                candidate = msg_obj.get("candidate")
+
+                if target_id and candidate:
+                    # 转发 ICE candidate 给对方
+                    payload = {
+                        "type": "ice_candidate",
+                        "candidate": candidate
+                    }
+                    if target_id in chat_manager.active_connections:
+                        await chat_manager.active_connections[target_id].send_text(json.dumps(payload))
+                        logger.info(f"[WebRTC] 转发 ice_candidate: {user_id} -> {target_id}")
+
+            # 处理挂断
+            if msg_obj.get("type") == "call_hangup":
+                target_id = msg_obj.get("target_id")
+
+                if target_id:
+                    # 转发挂断信号给对方
+                    payload = {
+                        "type": "call_hangup"
+                    }
+                    if target_id in chat_manager.active_connections:
+                        await chat_manager.active_connections[target_id].send_text(json.dumps(payload))
+                        logger.info(f"[WebRTC] 转发 call_hangup: {user_id} -> {target_id}")
 
     except WebSocketDisconnect:
         logger.info(f"[WS] 用户主动断开: {user_id}")
