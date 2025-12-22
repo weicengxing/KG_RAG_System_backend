@@ -1,0 +1,21 @@
+# 1. 忽略 Python 编译文件（.pyc）和缓存目录（__pycache__），核心屏蔽项
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# 2. 忽略 Windows 特殊文件（nul 等），解决 git add . 报错的核心
+nul
+con
+prn
+aux
+*.tmp
+
+# 3. （可选）忽略其他无用文件，按需添加
+*.log
+logs/
+venv/
+.venv/
+.idea/
+.vscode/
