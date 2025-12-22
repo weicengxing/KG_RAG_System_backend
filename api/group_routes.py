@@ -17,6 +17,8 @@ from pydantic import BaseModel, Field
 from database_asy_mon_re import db_manager
 # 引入Token工具
 from utils import decode_token_with_exp
+# 引入Neo4j数据库操作
+import database
 
 # 基础日志配置
 logger = logging.getLogger(__name__)
@@ -497,17 +499,15 @@ async def get_group_members(
         if current_user_id not in group.get("members", []):
             raise HTTPException(status_code=403, detail="You are not a member of this group")
 
-        # 3. 查询成员详细信息
+        # 3. 查询成员详细信息（从Neo4j）
         member_ids = group.get("members", [])
+        logger.info(f"📋 群组 {group_id} 有 {len(member_ids)} 个成员: {member_ids}")
         members = []
 
         for member_id in member_ids:
-            # 尝试从MongoDB users集合获取用户信息
-            try:
-                user_id_int = int(member_id)
-                user = await db.users.find_one({"_id": user_id_int})
-            except (ValueError, TypeError):
-                user = await db.users.find_one({"_id": member_id})
+            # 从Neo4j获取用户信息
+            user = database.get_user_by_id(member_id)
+            logger.info(f"👤 查询成员 {member_id}: {user}")
 
             if user:
                 members.append({
@@ -516,7 +516,17 @@ async def get_group_members(
                     "avatar": user.get("avatar", ""),
                     "is_owner": member_id == group["owner_id"]
                 })
+            else:
+                # 如果Neo4j中找不到用户，使用默认信息
+                logger.warning(f"⚠️ Neo4j中找不到用户 {member_id}，使用默认信息")
+                members.append({
+                    "user_id": member_id,
+                    "username": f"User_{member_id[:6]}",
+                    "avatar": "",
+                    "is_owner": member_id == group["owner_id"]
+                })
 
+        logger.info(f"✅ 返回 {len(members)} 个成员信息")
         return {
             "group_id": group_id,
             "members": members,

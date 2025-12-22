@@ -863,9 +863,10 @@ async def websocket_endpoint(
                 sdp = msg_obj.get("sdp")
 
                 if target_id and sdp:
-                    # 转发 answer 给发起方
+                    # 转发 answer 给发起方（附加应答者的 ID）
                     payload = {
                         "type": "call_answer",
+                        "caller_id": user_id,  # 添加应答者的 ID
                         "sdp": sdp
                     }
                     if target_id in chat_manager.active_connections:
@@ -878,9 +879,11 @@ async def websocket_endpoint(
                 candidate = msg_obj.get("candidate")
 
                 if target_id and candidate:
-                    # 转发 ICE candidate 给对方
+                    # 转发 ICE candidate 给对方（附加发送者的 ID）
                     payload = {
                         "type": "ice_candidate",
+                        "caller_id": user_id,  # 添加发送者的 ID（关键修复！）
+                        "target_id": target_id,  # 添加目标 ID（关键修复！）
                         "candidate": candidate
                     }
                     if target_id in chat_manager.active_connections:
@@ -957,15 +960,12 @@ async def get_contacts(user_id: str = Query(..., description="当前用户ID")):
         )
 
         last_msg_text = ""
-        last_time_display = ""
+        last_time_ts = 0  # 返回时间戳而不是格式化字符串
 
         if last_bucket and last_bucket.get("messages"):
             last_msg_obj = last_bucket["messages"][-1]
             last_msg_text = last_msg_obj.get("content", "")
-            ts = last_msg_obj.get("ts", 0)
-            import datetime
-            dt = datetime.datetime.fromtimestamp(ts)
-            last_time_display = dt.strftime("%H:%M")
+            last_time_ts = last_msg_obj.get("ts", 0)  # 直接返回时间戳
 
         # 判断好友是否在线
         friend_status = "online" if friend_id in online_users else "offline"
@@ -978,7 +978,7 @@ async def get_contacts(user_id: str = Query(..., description="当前用户ID")):
             "username": friend_user.get("username", "Unknown"),
             "avatar": friend_user.get("avatar", "https://i.pravatar.cc/150?u=" + friend_id),
             "lastMessage": last_msg_text,
-            "lastTime": last_time_display,
+            "lastTime": last_time_ts,  # 返回时间戳
             "unread": unread_count,
             "active": False,
             "status": friend_status,  # 根据Redis在线集合设置状态
@@ -1000,15 +1000,12 @@ async def get_contacts(user_id: str = Query(..., description="当前用户ID")):
         )
 
         last_msg_text = ""
-        last_time_display = ""
+        last_time_ts = 0  # 返回时间戳而不是格式化字符串
 
         if last_bucket and last_bucket.get("messages"):
             last_msg_obj = last_bucket["messages"][-1]
             last_msg_text = last_msg_obj.get("content", "")
-            ts = last_msg_obj.get("ts", 0)
-            import datetime
-            dt = datetime.datetime.fromtimestamp(ts)
-            last_time_display = dt.strftime("%H:%M")
+            last_time_ts = last_msg_obj.get("ts", 0)  # 直接返回时间戳
 
         # 获取未读消息数
         unread_count = await chat_manager.get_unread_count(user_id, chat_id)
@@ -1018,7 +1015,7 @@ async def get_contacts(user_id: str = Query(..., description="当前用户ID")):
             "username": group.get("group_name", "未命名群组"),
             "avatar": group.get("group_avatar", ""),
             "lastMessage": last_msg_text,
-            "lastTime": last_time_display,
+            "lastTime": last_time_ts,  # 返回时间戳
             "unread": unread_count,
             "active": False,
             "status": "online",  # 群组总是显示为在线
