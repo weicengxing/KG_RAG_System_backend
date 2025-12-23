@@ -72,5 +72,33 @@ RATE_LIMIT_GLOBAL_CAPACITY = int(os.getenv("RATE_LIMIT_GLOBAL_CAPACITY", 10000))
 RATE_LIMIT_GLOBAL_REFILL_RATE = float(os.getenv("RATE_LIMIT_GLOBAL_REFILL_RATE", 10000.0))
 
 # ==================== MongoDB 配置 ====================
-MONGO_URI = "mongodb://localhost:27017" 
+MONGO_URI = "mongodb://localhost:27017"
 MONGO_DB_NAME = "chat_app_db"
+
+# ==================== 知识图谱RAG配置 ====================
+
+# --- 1. LLM 问答模型配置 (例如使用 DeepRouter 或 OpenAI) ---
+LLM_API_KEY = "ms-7ae9b437-2d5d-47c9-b613-86e012766c2c"
+LLM_BASE_URL = "https://api-inference.modelscope.cn/v1"
+LLM_MODEL = "XiaomiMiMo/MiMo-V2-Flash"  # 或者 deepseek-chat
+# 如果使用OpenAI，修改为：
+# OPENAI_API_BASE = "https://api.openai.com/v1"
+# LLM_MODEL = "gpt-3.5-turbo"
+
+# --- 2. Embedding 向量模型配置 (使用 ModelScope) ---
+EMBED_API_KEY = "ms-7ae9b437-2d5d-47c9-b613-86e012766c2c"
+EMBED_BASE_URL = "https://api-inference.modelscope.cn/v1"
+EMBED_MODEL = "Qwen/Qwen3-Embedding-8B" # 魔搭上的模型名称
+
+# 文本分块配置
+CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", 200))  # 每个文本块的大小
+CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", 80))  # 文本块之间的重叠
+
+# 向量检索配置
+VECTOR_SEARCH_TOP_K = int(os.getenv("VECTOR_SEARCH_TOP_K", 5))  # 向量检索返回的top-k结果
+
+# 图检索配置
+GRAPH_SEARCH_HOPS = int(os.getenv("GRAPH_SEARCH_HOPS", 2))  # 图检索的跳数（N跳邻居）
+
+# 文档上传配置
+MAX_DOCUMENT_SIZE = int(os.getenv("MAX_DOCUMENT_SIZE", 20 * 1024 * 1024))  # 最大文档大小 20MB
