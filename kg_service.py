@@ -472,7 +472,7 @@ class KnowledgeGraphService:
             return []
 
     def search_graph_neighbors(self, entities: List[str], hops: int = None) -> Dict[str, Any]:
-            """图检索：查找实体的邻居节点（已修正变长路径语法错误）"""
+            """图检索：查找实体的邻居节点（修正：排除Document节点和FROM_DOCUMENT关系）"""
             if not entities:
                 return {"nodes": [], "edges": []}
 
@@ -480,12 +480,14 @@ class KnowledgeGraphService:
                 hops = GRAPH_SEARCH_HOPS
 
             with self.neo4j_driver.session() as session:
-                # 修正后的查询：使用 relationships(p) 获取路径中的所有关系并过滤
+                # 修正后的查询：直接排除 Document 节点，只匹配实体之间的关系
                 query = f"""
-                MATCH p = (n)-[*1..{hops}]-(m)
+                MATCH p = (n)-[r*1..{hops}]-(m)
                 WHERE n.name IN $entities
-                AND ALL(rel IN relationships(p) WHERE type(rel) <> 'FROM_DOCUMENT')
-                RETURN n, relationships(p) as r_list, m
+                AND NOT 'Document' IN labels(n)
+                AND NOT 'Document' IN labels(m)
+                AND ALL(rel IN r WHERE type(rel) <> 'FROM_DOCUMENT')
+                RETURN n, r as r_list, m
                 LIMIT 50
                 """
 
@@ -497,7 +499,7 @@ class KnowledgeGraphService:
                 for record in result:
                     n = record["n"]
                     m = record["m"]
-                    r_list = record["r_list"] # 这是一个关系列表
+                    r_list = record["r_list"]  # 这是一个关系列表
 
                     # 1. 处理节点 n
                     if n.element_id not in nodes:

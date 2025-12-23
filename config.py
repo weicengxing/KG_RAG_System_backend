@@ -166,7 +166,7 @@ QA_MODELS = [
 ]
 
 # 默认AI问答模型名称
-DEFAULT_QA_MODEL = os.getenv("DEFAULT_QA_MODEL", "Qwen3-0.6B")
+DEFAULT_QA_MODEL = os.getenv("DEFAULT_QA_MODEL", "MiMo-V2-Flash")
 
 # --- 3. Embedding 向量模型配置 (使用 ModelScope) ---
 EMBED_API_KEY = "ms-7ae9b437-2d5d-47c9-b613-86e012766c2c"
