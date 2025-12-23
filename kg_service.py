@@ -55,13 +55,14 @@ from neo4j import GraphDatabase
 from openai import OpenAI
 
 
-# 引入你刚才在 config.py 中定义的新变量名
+# 引入配置变量
 from config import (
     NEO4J_URI, NEO4J_USERNAME, NEO4J_PASSWORD,
-    LLM_API_KEY, LLM_BASE_URL, LLM_MODEL,           # LLM 相关
-    EMBED_API_KEY, EMBED_BASE_URL, EMBED_MODEL,         # Embedding 相关 (注意变量名对齐)
+    EXTRACTION_API_KEY, EXTRACTION_BASE_URL, EXTRACTION_MODEL,  # 三元组提取相关
+    QA_MODELS, DEFAULT_QA_MODEL,  # AI问答模型列表
+    EMBED_API_KEY, EMBED_BASE_URL, EMBED_MODEL,  # Embedding 相关
     CHUNK_SIZE, CHUNK_OVERLAP,
-    VECTOR_SEARCH_TOP_K, GRAPH_SEARCH_HOPS
+    VECTOR_SEARCH_TOP_K, VECTOR_SIMILARITY_THRESHOLD, GRAPH_SEARCH_HOPS
 )
 
 
@@ -91,13 +92,25 @@ class KnowledgeGraphService:
             metadata={"hnsw:space": "cosine"}
         )
 
-          # 3. 初始化 LLM 客户端 (使用 LLM 专用配置)
-        self.llm_client = OpenAI(
-            api_key=LLM_API_KEY,
-            base_url=LLM_BASE_URL
+        # 3. 初始化三元组提取客户端 (专用于实体关系抽取)
+        self.extraction_client = OpenAI(
+            api_key=EXTRACTION_API_KEY,
+            base_url=EXTRACTION_BASE_URL
         )
 
-        # 4. 初始化 Embedding 客户端 (使用 ModelScope 配置)
+        # 4. 初始化 AI 问答客户端字典 (根据模型名称快速查找)
+        self.qa_clients = {}
+        for model_config in QA_MODELS:
+            model_name = model_config["name"]
+            self.qa_clients[model_name] = {
+                "client": OpenAI(
+                    api_key=model_config["api_key"],
+                    base_url=model_config["base_url"]
+                ),
+                "model": model_config["model"]
+            }
+
+        # 5. 初始化 Embedding 客户端 (使用 ModelScope 配置)
         self.embed_client = OpenAI(
             api_key=EMBED_API_KEY,
             base_url=EMBED_BASE_URL
@@ -118,6 +131,16 @@ class KnowledgeGraphService:
         """清理资源"""
         if hasattr(self, 'neo4j_driver'):
             self.neo4j_driver.close()
+
+    def get_qa_client(self, model_name: Optional[str] = None):
+        """获取AI问答客户端和模型名称"""
+        if model_name is None:
+            model_name = DEFAULT_QA_MODEL
+
+        if model_name not in self.qa_clients:
+            raise ValueError(f"模型 '{model_name}' 不存在。可用模型: {list(self.qa_clients.keys())}")
+
+        return self.qa_clients[model_name]["client"], self.qa_clients[model_name]["model"]
 
     # ==================== 文档处理 ====================
 
@@ -173,8 +196,8 @@ class KnowledgeGraphService:
 请直接返回JSON数组，不要有其他文字说明："""
 
         try:
-            response = self.llm_client.chat.completions.create(
-                model=LLM_MODEL,
+            response = self.extraction_client.chat.completions.create(
+                model=EXTRACTION_MODEL,
                 messages=[
                     {"role": "system", "content": "你是一个专业的知识图谱构建助手。"},
                     {"role": "user", "content": prompt}
@@ -407,7 +430,7 @@ class KnowledgeGraphService:
             raise Exception(f"向量存储失败: {str(e)}")
 
     def search_similar_chunks(self, query: str, n_results: int = None) -> List[Dict[str, Any]]:
-        """向量检索相似文本块"""
+        """向量检索相似文本块（带相似度阈值过滤）"""
 
         if n_results is None:
             n_results = VECTOR_SEARCH_TOP_K
@@ -428,15 +451,19 @@ class KnowledgeGraphService:
                 n_results=n_results
             )
 
-            # 格式化结果
+            # 格式化结果并过滤相似度
             chunks = []
             if results and results["documents"]:
                 for i in range(len(results["documents"][0])):
-                    chunks.append({
-                        "content": results["documents"][0][i],
-                        "metadata": results["metadatas"][0][i],
-                        "distance": results["distances"][0][i] if "distances" in results else None
-                    })
+                    distance = results["distances"][0][i] if "distances" in results else None
+
+                    # 相似度阈值过滤：只保留距离小于阈值的文档
+                    if distance is not None and distance < VECTOR_SIMILARITY_THRESHOLD:
+                        chunks.append({
+                            "content": results["documents"][0][i],
+                            "metadata": results["metadatas"][0][i],
+                            "distance": distance
+                        })
 
             return chunks
 
@@ -519,8 +546,8 @@ class KnowledgeGraphService:
 请直接返回JSON数组："""
 
         try:
-            response = self.llm_client.chat.completions.create(
-                model=LLM_MODEL,
+            response = self.extraction_client.chat.completions.create(
+                model=EXTRACTION_MODEL,
                 messages=[
                     {"role": "system", "content": "你是一个实体识别助手。"},
                     {"role": "user", "content": prompt}
@@ -546,11 +573,14 @@ class KnowledgeGraphService:
 
     # ==================== RAG问答 ====================
 
-    async def answer_question(self, question: str, stream: bool = False) -> Dict[str, Any]:
+    async def answer_question(self, question: str, stream: bool = False, model_name: Optional[str] = None) -> Dict[str, Any]:
         """RAG问答（混合检索 + LLM生成）"""
 
-        # 1. 向量检索
-        vector_chunks = self.search_similar_chunks(question, n_results=3)
+        # 获取指定的QA客户端和模型
+        qa_client, qa_model = self.get_qa_client(model_name)
+
+        # 1. 向量检索（会自动应用相似度阈值过滤）
+        vector_chunks = self.search_similar_chunks(question, n_results=5)
 
         # 2. 图检索
         entities = self.extract_entities_from_question(question)
@@ -559,22 +589,28 @@ class KnowledgeGraphService:
         # 3. 构建上下文
         context_parts = []
 
-        # 向量检索的文本
+        # 只有当有相似文档时才添加文档片段上下文
         if vector_chunks:
             context_parts.append("【相关文档片段】")
             for i, chunk in enumerate(vector_chunks, 1):
                 context_parts.append(f"{i}. {chunk['content']}")
 
-        # 图谱检索的三元组
+        # 只有当有图谱节点时才添加图谱上下文
         if graph_data["nodes"]:
             context_parts.append("\n【相关知识图谱】")
             for node in graph_data["nodes"][:10]:
                 context_parts.append(f"- {node['label']} ({node['type']})")
 
-        context = "\n".join(context_parts)
+        # 构建提示词
+        if not context_parts:
+            prompt = f"""请回答以下问题。注意：未找到相关文档或知识图谱信息，请基于你的知识直接回答。
 
-        # 4. 生成答案
-        prompt = f"""请基于以下上下文回答问题。如果上下文中没有相关信息，请如实说明。
+问题：{question}
+
+请提供详细的答案："""
+        else:
+            context = "\n".join(context_parts)
+            prompt = f"""请基于以下上下文回答问题。如果上下文中没有相关信息，请如实说明。
 
 上下文：
 {context}
@@ -586,8 +622,8 @@ class KnowledgeGraphService:
         try:
             if stream:
                 # 流式返回
-                response = self.llm_client.chat.completions.create(
-                    model=LLM_MODEL,
+                response = qa_client.chat.completions.create(
+                    model=qa_model,
                     messages=[
                         {"role": "system", "content": "你是一个专业的知识问答助手。"},
                         {"role": "user", "content": prompt}
@@ -606,8 +642,8 @@ class KnowledgeGraphService:
                 }
             else:
                 # 非流式返回
-                response = self.llm_client.chat.completions.create(
-                    model=LLM_MODEL,
+                response = qa_client.chat.completions.create(
+                    model=qa_model,
                     messages=[
                         {"role": "system", "content": "你是一个专业的知识问答助手。"},
                         {"role": "user", "content": prompt}
@@ -628,6 +664,215 @@ class KnowledgeGraphService:
 
         except Exception as e:
             raise Exception(f"答案生成失败: {str(e)}")
+
+    async def answer_question_parallel_stream(self, question: str, conversation_id: Optional[str] = None, model_name: Optional[str] = None):
+        """
+        并行流式RAG问答
+        三个部分并行处理：向量检索、图检索、答案生成
+        每个部分完成后立即通过生成器yield返回
+
+        Args:
+            question: 当前问题
+            conversation_id: 对话ID，用于从Redis获取对话历史
+            model_name: 使用的AI问答模型名称
+        """
+        import json
+        from redis_utils import get_conversation_history, save_conversation_message
+
+        # 获取指定的QA客户端和模型
+        qa_client, qa_model = self.get_qa_client(model_name)
+
+        # 用于存储检索结果，供答案生成使用
+        vector_chunks = []
+        graph_data = {"nodes": [], "edges": []}
+
+        # 用于累积完整答案，以便保存到Redis
+        full_answer = ""
+
+        # 从Redis获取对话历史
+        history = []
+        if conversation_id:
+            history = get_conversation_history(conversation_id)
+            print(f"📚 从Redis获取到 {len(history)} 条历史消息")
+
+        # 定义三个异步任务
+        async def vector_search_task():
+            """向量检索任务"""
+            try:
+                loop = asyncio.get_event_loop()
+                chunks = await loop.run_in_executor(
+                    self.executor,
+                    self.search_similar_chunks,
+                    question,
+                    5  # 增加检索数量，因为会被相似度阈值过滤
+                )
+                vector_chunks.extend(chunks)
+                return {
+                    "type": "vector_chunks",
+                    "data": chunks
+                }
+            except Exception as e:
+                print(f"向量检索失败: {e}")
+                return {
+                    "type": "vector_chunks",
+                    "data": [],
+                    "error": str(e)
+                }
+
+        async def graph_search_task():
+            """图检索任务"""
+            try:
+                loop = asyncio.get_event_loop()
+                # 提取实体
+                entities = await loop.run_in_executor(
+                    self.executor,
+                    self.extract_entities_from_question,
+                    question
+                )
+                # 图检索
+                graph = await loop.run_in_executor(
+                    self.executor,
+                    self.search_graph_neighbors,
+                    entities,
+                    2
+                )
+                graph_data.update(graph)
+                return {
+                    "type": "graph_data",
+                    "data": graph
+                }
+            except Exception as e:
+                print(f"图检索失败: {e}")
+                return {
+                    "type": "graph_data",
+                    "data": {"nodes": [], "edges": []},
+                    "error": str(e)
+                }
+
+        async def answer_generation_task():
+            """答案生成任务（等待检索完成后再开始）"""
+            nonlocal full_answer
+
+            # 等待一小段时间让检索任务先完成
+            await asyncio.sleep(0.5)
+
+            # 构建上下文
+            context_parts = []
+
+            # 只有当有相似文档时才添加文档片段上下文
+            if vector_chunks:
+                context_parts.append("【相关文档片段】")
+                for i, chunk in enumerate(vector_chunks, 1):
+                    # 可选：显示相似度信息
+                    distance = chunk.get('distance', None)
+                    distance_info = f" (相似度距离: {distance:.3f})" if distance is not None else ""
+                    context_parts.append(f"{i}. {chunk['content']}{distance_info}")
+
+            # 只有当有图谱节点时才添加图谱上下文
+            if graph_data.get("nodes"):
+                context_parts.append("\n【相关知识图谱】")
+                for node in graph_data["nodes"][:10]:
+                    context_parts.append(f"- {node['label']} ({node['type']})")
+
+            # 如果没有任何上下文，提示用户
+            if not context_parts:
+                prompt = f"""请回答以下问题。注意：未找到相关文档或知识图谱信息，请基于你的知识直接回答。
+
+问题：{question}
+
+请提供详细的答案："""
+            else:
+                context = "\n".join(context_parts)
+                prompt = f"""请基于以下上下文回答问题。如果上下文中没有相关信息，请如实说明。
+
+上下文：
+{context}
+
+问题：{question}
+
+请提供详细的答案："""
+
+            try:
+                # 构建消息列表，包含历史对话
+                messages = [
+                    {"role": "system", "content": "你是一个专业的知识问答助手，能够记住之前的对话内容并基于上下文进行回答。"}
+                ]
+
+                # 添加历史对话（限制最近的5轮对话，避免上下文过长）
+                if history:
+                    # 只保留最近的5轮对话（10条消息：5个问题 + 5个回答）
+                    recent_history = history[-10:] if len(history) > 10 else history
+                    for msg in recent_history:
+                        if msg.get("role") and msg.get("content"):
+                            messages.append({
+                                "role": msg["role"],
+                                "content": msg["content"]
+                            })
+
+                # 添加当前问题（带上下文）
+                messages.append({
+                    "role": "user",
+                    "content": prompt
+                })
+
+                # 流式生成答案
+                response = qa_client.chat.completions.create(
+                    model=qa_model,
+                    messages=messages,
+                    temperature=0.3,
+                    max_tokens=1000,
+                    stream=True
+                )
+
+                return {
+                    "type": "answer_stream",
+                    "stream": response
+                }
+            except Exception as e:
+                print(f"答案生成失败: {e}")
+                return {
+                    "type": "answer_stream",
+                    "error": str(e)
+                }
+
+        # 并发执行检索任务
+        search_tasks = [vector_search_task(), graph_search_task()]
+
+        # 使用 as_completed 来获取先完成的任务
+        for coro in asyncio.as_completed(search_tasks):
+            result = await coro
+            # 立即返回检索结果
+            yield json.dumps(result, ensure_ascii=False) + "\n"
+
+        # 等待检索全部完成后，开始答案生成
+        answer_result = await answer_generation_task()
+
+        if "stream" in answer_result:
+            # 流式返回答案
+            for chunk in answer_result["stream"]:
+                if chunk.choices[0].delta.content:
+                    content = chunk.choices[0].delta.content
+                    full_answer += content  # 累积完整答案
+
+                    answer_chunk = {
+                        "type": "answer",
+                        "content": content
+                    }
+                    yield json.dumps(answer_chunk, ensure_ascii=False) + "\n"
+
+            # 答案结束标记
+            yield json.dumps({"type": "answer_done"}, ensure_ascii=False) + "\n"
+
+            # 保存对话到Redis
+            if conversation_id:
+                # 保存用户问题
+                save_conversation_message(conversation_id, "user", question)
+                # 保存AI回答
+                save_conversation_message(conversation_id, "assistant", full_answer)
+                print(f"💾 对话已保存到Redis: {conversation_id}")
+        else:
+            # 如果答案生成失败，返回错误
+            yield json.dumps(answer_result, ensure_ascii=False) + "\n"
 
 
 # 全局服务实例

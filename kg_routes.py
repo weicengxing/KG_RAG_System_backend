@@ -25,6 +25,8 @@ class QuestionRequest(BaseModel):
     """问答请求"""
     question: str
     stream: bool = False
+    conversation_id: Optional[str] = None  # 对话ID，用于从Redis获取对话历史
+    model_name: Optional[str] = None  # AI问答模型名称
 
 
 class GraphQueryRequest(BaseModel):
@@ -207,6 +209,28 @@ async def get_graph(request: GraphQueryRequest):
 
 # ==================== RAG问答 ====================
 
+@router.get("/available-models")
+async def get_available_models():
+    """
+    获取可用的AI问答模型列表
+    """
+    from config import QA_MODELS, DEFAULT_QA_MODEL
+
+    models = []
+    for model_config in QA_MODELS:
+        models.append({
+            "name": model_config["name"],
+            "model": model_config["model"],
+            "description": model_config.get("description", "")  # 添加描述字段
+        })
+
+    return {
+        "models": models,
+        "default": DEFAULT_QA_MODEL,
+        "message": "获取模型列表成功"
+    }
+
+
 @router.post("/ask")
 async def ask_question(request: QuestionRequest):
     """
@@ -218,7 +242,8 @@ async def ask_question(request: QuestionRequest):
     try:
         result = await kg_service.answer_question(
             question=request.question,
-            stream=False
+            stream=False,
+            model_name=request.model_name
         )
 
         return {
@@ -241,7 +266,8 @@ async def ask_question_stream(request: QuestionRequest):
     try:
         result = await kg_service.answer_question(
             question=request.question,
-            stream=True
+            stream=True,
+            model_name=request.model_name
         )
 
         # 流式生成
@@ -264,6 +290,41 @@ async def ask_question_stream(request: QuestionRequest):
                     yield answer_data
 
         return StreamingResponse(generate(), media_type="text/event-stream")
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/ask-parallel-stream")
+async def ask_question_parallel_stream(request: QuestionRequest):
+    """
+    RAG问答（并行流式）
+    三个部分并行处理并流式返回：
+    1. 向量检索结果 (type: vector_chunks)
+    2. 图检索结果 (type: graph_data)
+    3. AI答案 (type: answer, 流式)
+    """
+    if not request.question:
+        raise HTTPException(status_code=400, detail="问题不能为空")
+
+    try:
+        # 使用新的并行流式方法，传递对话ID和模型名称
+        async def generate():
+            async for chunk in kg_service.answer_question_parallel_stream(
+                request.question,
+                conversation_id=request.conversation_id,
+                model_name=request.model_name
+            ):
+                yield chunk
+
+        return StreamingResponse(
+            generate(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no"
+            }
+        )
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

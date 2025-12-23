@@ -684,12 +684,12 @@ class RedisDistributedLock:
 
 def acquire_distributed_lock(lock_name: str, expire_time: int = 30, timeout: int = 10) -> Optional[RedisDistributedLock]:
     """获取分布式锁（快捷函数）
-    
+
     Args:
         lock_name: 锁名称
         expire_time: 锁过期时间（秒）
         timeout: 获取锁的超时时间（秒）
-    
+
     Returns:
         Optional[RedisDistributedLock]: 成功返回锁对象，失败返回None
     """
@@ -697,6 +697,111 @@ def acquire_distributed_lock(lock_name: str, expire_time: int = 30, timeout: int
     if lock.acquire(timeout):
         return lock
     return None
+
+
+# ==================== 对话历史管理相关 ====================
+
+CONVERSATION_HISTORY_PREFIX = "conversation_history:"
+CONVERSATION_HISTORY_EXPIRE_SECONDS = 3600 * 2  # 对话历史保存2小时
+
+
+def save_conversation_message(conversation_id: str, role: str, content: str) -> bool:
+    """保存一条对话消息到Redis
+
+    Args:
+        conversation_id: 对话ID
+        role: 角色 (user/assistant)
+        content: 消息内容
+
+    Returns:
+        bool: 是否保存成功
+    """
+    if not redis_client:
+        logger.error("❌ Redis 未连接，无法保存对话消息")
+        return False
+
+    try:
+        key = f"{CONVERSATION_HISTORY_PREFIX}{conversation_id}"
+
+        # 获取当前历史记录
+        history_json = redis_client.get(key)
+        if history_json:
+            history = json.loads(history_json)
+        else:
+            history = []
+
+        # 添加新消息
+        history.append({
+            "role": role,
+            "content": content
+        })
+
+        # 只保留最近20条消息（10轮对话）
+        if len(history) > 20:
+            history = history[-20:]
+
+        # 保存到Redis
+        redis_client.setex(key, CONVERSATION_HISTORY_EXPIRE_SECONDS, json.dumps(history, ensure_ascii=False))
+        logger.info(f"✅ 对话消息已保存: {conversation_id}, role: {role}")
+        return True
+
+    except Exception as e:
+        logger.error(f"❌ 保存对话消息失败: {conversation_id}, 错误: {e}")
+        return False
+
+
+def get_conversation_history(conversation_id: str) -> list:
+    """获取对话历史
+
+    Args:
+        conversation_id: 对话ID
+
+    Returns:
+        list: 对话历史，格式为 [{"role": "user", "content": "..."}, ...]
+    """
+    if not redis_client:
+        logger.error("❌ Redis 未连接，无法获取对话历史")
+        return []
+
+    try:
+        key = f"{CONVERSATION_HISTORY_PREFIX}{conversation_id}"
+        history_json = redis_client.get(key)
+
+        if history_json:
+            history = json.loads(history_json)
+            logger.info(f"✅ 获取对话历史: {conversation_id}, 共 {len(history)} 条消息")
+            return history
+        else:
+            logger.info(f"📝 对话历史不存在，新建对话: {conversation_id}")
+            return []
+
+    except Exception as e:
+        logger.error(f"❌ 获取对话历史失败: {conversation_id}, 错误: {e}")
+        return []
+
+
+def clear_conversation_history(conversation_id: str) -> bool:
+    """清除对话历史
+
+    Args:
+        conversation_id: 对话ID
+
+    Returns:
+        bool: 是否清除成功
+    """
+    if not redis_client:
+        logger.error("❌ Redis 未连接，无法清除对话历史")
+        return False
+
+    try:
+        key = f"{CONVERSATION_HISTORY_PREFIX}{conversation_id}"
+        redis_client.delete(key)
+        logger.info(f"🗑️ 对话历史已清除: {conversation_id}")
+        return True
+
+    except Exception as e:
+        logger.error(f"❌ 清除对话历史失败: {conversation_id}, 错误: {e}")
+        return False
 
 
 # 这个模块是一个生产级的Redis工具库，具有以下特点：

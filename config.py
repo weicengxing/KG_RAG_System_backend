@@ -77,18 +77,106 @@ MONGO_DB_NAME = "chat_app_db"
 
 # ==================== 知识图谱RAG配置 ====================
 
-# --- 1. LLM 问答模型配置 (例如使用 DeepRouter 或 OpenAI) ---
-LLM_API_KEY = "ms-7ae9b437-2d5d-47c9-b613-86e012766c2c"
-LLM_BASE_URL = "https://api-inference.modelscope.cn/v1"
-LLM_MODEL = "XiaomiMiMo/MiMo-V2-Flash"  # 或者 deepseek-chat
-# 如果使用OpenAI，修改为：
-# OPENAI_API_BASE = "https://api.openai.com/v1"
-# LLM_MODEL = "gpt-3.5-turbo"
+# --- 1. 三元组提取模型配置 (用于实体关系抽取) ---
+EXTRACTION_API_KEY = os.getenv("EXTRACTION_API_KEY", "ms-7ae9b437-2d5d-47c9-b613-86e012766c2c")
+EXTRACTION_BASE_URL = os.getenv("EXTRACTION_BASE_URL", "https://api-inference.modelscope.cn/v1")
+EXTRACTION_MODEL = os.getenv("EXTRACTION_MODEL", "XiaomiMiMo/MiMo-V2-Flash")
 
-# --- 2. Embedding 向量模型配置 (使用 ModelScope) ---
+# --- 2. AI问答模型配置列表 (用户可在前端选择) ---
+QA_MODELS = [
+
+
+
+    # 最强梯队
+    {
+        "name": "MiMo-V2-Flash",
+        "description": "小米MiMo V2 Flash模型，国内顶级模型，超快响应速度，适合日常对话和快速问答",
+        "api_key": os.getenv("QA_MODEL_4_API_KEY", "ms-7ae9b437-2d5d-47c9-b613-86e012766c2c"),
+        "base_url": os.getenv("QA_MODEL_4_BASE_URL", "https://api-inference.modelscope.cn/v1"),
+        "model": os.getenv("QA_MODEL_4_MODEL", "XiaomiMiMo/MiMo-V2-Flash")
+    },
+    {
+        "name": "GLM-4.7",
+        "description": "智谱GLM-4.7模型，强大的中文理解能力，擅长复杂推理和长文本处理",
+        "api_key": os.getenv("QA_MODEL_10_API_KEY", "ms-7ae9b437-2d5d-47c9-b613-86e012766c2c"),
+        "base_url": os.getenv("QA_MODEL_10_BASE_URL", "https://api-inference.modelscope.cn/v1"),
+        "model": os.getenv("QA_MODEL_10_MODEL", "ZhipuAI/GLM-4.7")
+    },
+    {
+        "name": "Qwen3-235B-A22B-Thinking-2507",
+        "description": "通义千问235B思考增强版，顶级推理能力，适合复杂问题深度分析",
+        "api_key": os.getenv("QA_MODEL_5_API_KEY", "ms-7ae9b437-2d5d-47c9-b613-86e012766c2c"),
+        "base_url": os.getenv("QA_MODEL_5_BASE_URL", "https://api-inference.modelscope.cn/v1"),
+        "model": os.getenv("QA_MODEL_5_MODEL", "Qwen/Qwen3-235B-A22B-Thinking-2507")
+    },
+    {
+        "name": "Qwen3-235B-A22B",
+        "description": "通义千问235B标准版，超大参数量，综合能力顶尖",
+        "api_key": os.getenv("QA_MODEL_6_API_KEY", "ms-7ae9b437-2d5d-47c9-b613-86e012766c2c"),
+        "base_url": os.getenv("QA_MODEL_6_BASE_URL", "https://api-inference.modelscope.cn/v1"),
+        "model": os.getenv("QA_MODEL_6_MODEL", "Qwen/Qwen3-235B-A22B")
+    },
+     {
+        "name": "DeepSeek-R1-0528",
+        "description": "DeepSeek R1推理模型，专注于逻辑推理和代码生成",
+        "api_key": os.getenv("QA_MODEL_3_API_KEY", "ms-7ae9b437-2d5d-47c9-b613-86e012766c2c"),
+        "base_url": os.getenv("QA_MODEL_3_BASE_URL", "https://api-inference.modelscope.cn/v1"),
+        "model": os.getenv("QA_MODEL_3_MODEL", "deepseek-ai/DeepSeek-R1-0528")
+    },
+    # 次强梯队
+    {
+        "name": "Qwen3-30B-A3B",
+        "description": "通义千问30B轻量版，平衡性能与速度",
+        "api_key": os.getenv("QA_MODEL_7_API_KEY", "ms-7ae9b437-2d5d-47c9-b613-86e012766c2c"),
+        "base_url": os.getenv("QA_MODEL_7_BASE_URL", "https://api-inference.modelscope.cn/v1"),
+        "model": os.getenv("QA_MODEL_7_MODEL", "Qwen/Qwen3-30B-A3B")
+    },
+    {
+        "name": "Qwen3-32B",
+        "description": "通义千问32B标准版，适合专业领域知识问答",
+        "api_key": os.getenv("QA_MODEL_8_API_KEY", "ms-7ae9b437-2d5d-47c9-b613-86e012766c2c"),
+        "base_url": os.getenv("QA_MODEL_8_BASE_URL", "https://api-inference.modelscope.cn/v1"),
+        "model": os.getenv("QA_MODEL_8_MODEL", "Qwen/Qwen3-32B")
+    },
+    {
+        "name": "Qwen3-14B",
+        "description": "通义千问14B，高性价比选择，适合一般任务",
+        "api_key": os.getenv("QA_MODEL_9_API_KEY", "ms-7ae9b437-2d5d-47c9-b613-86e012766c2c"),
+        "base_url": os.getenv("QA_MODEL_9_BASE_URL", "https://api-inference.modelscope.cn/v1"),
+        "model": os.getenv("QA_MODEL_9_MODEL", "Qwen/Qwen3-14B")
+    },
+
+    # 原有模型（保持你初始的3个，按强弱顺延）
+    {
+        "name": "Qwen3-0.6B",
+        "description": "通义千问0.6B轻量版，极速响应，适合简单问答",
+        "api_key": os.getenv("QA_MODEL_1_API_KEY", "ms-7ae9b437-2d5d-47c9-b613-86e012766c2c"),
+        "base_url": os.getenv("QA_MODEL_1_BASE_URL", "https://api-inference.modelscope.cn/v1"),
+        "model": os.getenv("QA_MODEL_1_MODEL", "Qwen/Qwen3-0.6B")
+    },
+    {
+        "name": "Qwen3-4B",
+        "description": "通义千问4B，小巧高效，适合资源受限环境",
+        "api_key": os.getenv("QA_MODEL_2_API_KEY", "ms-7ae9b437-2d5d-47c9-b613-86e012766c2c"),
+        "base_url": os.getenv("QA_MODEL_2_BASE_URL", "https://api-inference.modelscope.cn/v1"),
+        "model": os.getenv("QA_MODEL_2_MODEL", "Qwen/Qwen3-4B")
+    }
+
+
+]
+
+# 默认AI问答模型名称
+DEFAULT_QA_MODEL = os.getenv("DEFAULT_QA_MODEL", "Qwen3-0.6B")
+
+# --- 3. Embedding 向量模型配置 (使用 ModelScope) ---
 EMBED_API_KEY = "ms-7ae9b437-2d5d-47c9-b613-86e012766c2c"
 EMBED_BASE_URL = "https://api-inference.modelscope.cn/v1"
 EMBED_MODEL = "Qwen/Qwen3-Embedding-8B" # 魔搭上的模型名称
+
+# --- 4. 保留旧的配置变量名以保持向后兼容（可选）---
+LLM_API_KEY = EXTRACTION_API_KEY  # 向后兼容
+LLM_BASE_URL = EXTRACTION_BASE_URL
+LLM_MODEL = EXTRACTION_MODEL
 
 # 文本分块配置
 CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", 200))  # 每个文本块的大小
@@ -96,6 +184,7 @@ CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", 80))  # 文本块之间的重叠
 
 # 向量检索配置
 VECTOR_SEARCH_TOP_K = int(os.getenv("VECTOR_SEARCH_TOP_K", 5))  # 向量检索返回的top-k结果
+VECTOR_SIMILARITY_THRESHOLD = float(os.getenv("VECTOR_SIMILARITY_THRESHOLD", 0.5))  # 相似度阈值（距离小于此值才使用文档）
 
 # 图检索配置
 GRAPH_SEARCH_HOPS = int(os.getenv("GRAPH_SEARCH_HOPS", 2))  # 图检索的跳数（N跳邻居）
