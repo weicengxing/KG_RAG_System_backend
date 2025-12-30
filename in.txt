@@ -4,9 +4,10 @@ cd KG_RAG_System
 set ANTHROPIC_AUTH_TOKEN=sk-OrBcGlhaqz79WvGUsm22Nr4Vw5EjEUW8732MgJ0488KheXSH
 set  ANTHROPIC_BASE_URL=https://anyrouter.top
 claude
-
+D:
 cd KG_RAG_System
 cd backend
+D:
 cd KG_RAG_System
 cd frontend
 npm run dev
@@ -23,8 +24,10 @@ cd backend
 python main.py
 python database.py
 
-
-
+D:
+cd KG_RAG_System
+set OPENAI_API_KEY=sk_O_hNrSN2Rol3Gcj2aMIlJNflzXh83AM2yK3ZSw98eFw
+codex
 
 set ANTHROPIC_AUTH_TOKEN=sk-OrBcGlhaqz79WvGUsm22Nr4Vw5EjEUW8732MgJ0488KheXSH
 set  ANTHROPIC_BASE_URL=https://anyrouter.top
@@ -37,38 +40,66 @@ set ANTHROPIC_AUTH_TOKEN=sk-0Lr7p1OU6rnWCVlOdSXbEtCV6TbL6Od8
 set  ANTHROPIC_BASE_URL=https://api.univibe.cc/anthropic
 
 netstat -ano | findstr 6379
-taskkill /F /PID 4768
+taskkill /F /PID 33280
 
 
 
 git add .
-git commit -m "kg_0.0.1"
+git commit -m "kg_0.0.4"
 git push
 
 cpolar start-all --config D:\Cpolar\cpolar.yml
 
 
-我给你看一段前端代码，你只需要关注其中的SSE流式传输的功能，你看完就只用说看完了，我给你发后端代码
+我给你看一段前端代码，你只需要关注其中的SSE流式传输的功能，你看完就只用说看完了，其他都别说，我给你发后端代码
 
 这是我的JWT验证，请你给我修改后的需要替换的或者新增的所有函数的完整代码，其他不用给
 
-请你给我修改后的前端完整代码，不要有任何省略
+请你给我修改后的前端完整代码，一定不要有任何省略
 
 后端路径是backend，帮我找到所有跟创建用户相关的函数和他所在的文件，只用找创建用户
 
 
 ATATT3xFfGF0ZX36Du2L5sso745S3c65LzB9akonWII8ThaXgQClIppEhmeHvdFWbYzSjPW4a_6pKtZgLvULnwSLLASLlrB6LfzDLX3A6THbnGu0ESW5HoRhRyWjTJMUOSWfnPZeCbf-QOnDwJTMVgUAaqhKOPXBsjTmAhhiFuST3qY0BHnslfE=CAE00B4D
 
-
-这是前段代码，后端在backend
+frontend\src\views\GameView.vue这是前段代码，后端在backend\game_routes.py
 
 
 帮我介绍一下这个文件实现的功能，最后总结一下
 
+现在WS键正常，AD移动视觉正常，但是A左移坐标会增加，D右移坐标减少，还有按enter和ctrl+p也不会发送消息，什么问题
 
 
 
+set ANTHROPIC_BASE_URL = "https://www.88code.ai/api"
+set ANTHROPIC_AUTH_TOKEN = "88_3450fc0f5811c2e7375d9c40c696dfd59d58f2b9a117a10782f1c61d8cda60a3"
+
+set key88=88_3450fc0f5811c2e7375d9c40c696dfd59d58f2b9a117a10782f1c61d8cda60a3
+
+set AGENT_ROUTER_TOKEN=sk-QSoFDri3utHZdcmdExH0cfftQn5J0aqTYjUpWk1jSq39QPVW
+
+model = "glm-4.6" # 也可以将其修改为 glm4.5,glm-4.6,or deepseek-v3.1
+model_provider = "openai-chat-completions"
+preferred_auth_method = "apikey"
 
 
+[model_providers.openai-chat-completions]
+name = "OpenAI using Chat Completions"
+base_url = "https://agentrouter.org/v1"
+env_key = "AGENT_ROUTER_TOKEN"
+wire_api = "chat"
+query_params = {}
+stream_idle_timeout_ms = 300000
+
+{
+ "OPENAI_API_KEY":"sk-QSoFDri3utHZdcmdExH0cfftQn5J0aqTYjUpWk1jSq39QPVW"
+}
+set ANTHROPIC_BASE_URL=https://4e912030080f-vip.aicoding.sh
+set OPENAI_API_KEY=aicoding-dd2c2e8da7071f75f1310463ae143caa
+
+set AIPING_API_KEY="QC-cce2a03e2ca159a3f94ef0e2f0250ab6-75dc5549abbdbb656467986b7228bf95"
+移动时无法拖拽鼠标切换视角
+
+我按住然后滑动鼠标不会转换视角，是操作不对吗，转换视角的操作是什么
 
 

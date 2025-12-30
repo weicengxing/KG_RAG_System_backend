@@ -53,6 +53,7 @@ from neo4j import GraphDatabase
 
 # LLM和Embeddings
 from openai import OpenAI
+import requests
 
 
 # 引入配置变量
@@ -107,7 +108,14 @@ class KnowledgeGraphService:
                     api_key=model_config["api_key"],
                     base_url=model_config["base_url"]
                 ),
-                "model": model_config["model"]
+                "model": model_config["model"],
+                "use_qidian_api": model_config.get("use_qidian_api", False),
+                "satoken": model_config.get("satoken", ""),
+                "model_id": model_config.get("model_id", 32),
+                "session_id": model_config.get("session_id", ""),
+                "use_yansd_api": model_config.get("use_yansd_api", False),
+                "session_cookie": model_config.get("session_cookie", ""),
+                "new_api_user": model_config.get("new_api_user", "")
             }
 
         # 5. 初始化 Embedding 客户端 (使用 ModelScope 配置)
@@ -156,6 +164,42 @@ class KnowledgeGraphService:
             return text
         except Exception as e:
             raise Exception(f"PDF解析失败: {str(e)}")
+
+    def parse_document(self, file_path: str) -> str:
+        """解析文档（支持PDF/TXT/DOCX/PPTX）"""
+        ext = os.path.splitext(file_path)[1].lower()
+
+        if ext == '.pdf':
+            return self.parse_pdf(file_path)
+        elif ext == '.txt':
+            with open(file_path, 'r', encoding='utf-8') as f:
+                return f.read()
+        elif ext == '.docx':
+            from docx import Document
+            doc = Document(file_path)
+            text_parts = []
+            # Extract text from paragraphs
+            for para in doc.paragraphs:
+                if para.text.strip():
+                    text_parts.append(para.text)
+            # Extract text from tables
+            for table in doc.tables:
+                for row in table.rows:
+                    for cell in row.cells:
+                        if cell.text.strip():
+                            text_parts.append(cell.text)
+            return '\n'.join(text_parts)
+        elif ext == '.pptx':
+            from pptx import Presentation
+            prs = Presentation(file_path)
+            text = []
+            for slide in prs.slides:
+                for shape in slide.shapes:
+                    if hasattr(shape, "text"):
+                        text.append(shape.text)
+            return '\n'.join(text)
+        else:
+            raise Exception(f"不支持的文件格式: {ext}")
 
     def split_text(self, text: str) -> List[Dict[str, Any]]:
         """分块文本"""
@@ -290,9 +334,19 @@ class KnowledgeGraphService:
                     if not head or not tail:
                         continue
 
+                    # 清理标签：替换空格为下划线，只保留字母数字和下划线
+                    safe_head_type = "".join([c if c.isalnum() or c == "_" else "_" for c in head_type]) if head_type else "Entity"
+                    safe_tail_type = "".join([c if c.isalnum() or c == "_" else "_" for c in tail_type]) if tail_type else "Entity"
+
+                    # 确保标签不为空且不以数字开头
+                    if not safe_head_type or safe_head_type[0].isdigit():
+                        safe_head_type = "Entity"
+                    if not safe_tail_type or safe_tail_type[0].isdigit():
+                        safe_tail_type = "Entity"
+
                     # 创建头实体
                     session.run(
-                        f"MERGE (h:{head_type} {{name: $head}}) "
+                        f"MERGE (h:{safe_head_type} {{name: $head}}) "
                         "ON CREATE SET h.created_at = timestamp() "
                         "MERGE (d:Document {id: $doc_id}) "
                         "MERGE (h)-[:FROM_DOCUMENT]->(d)",
@@ -302,7 +356,7 @@ class KnowledgeGraphService:
 
                     # 创建尾实体
                     session.run(
-                        f"MERGE (t:{tail_type} {{name: $tail}}) "
+                        f"MERGE (t:{safe_tail_type} {{name: $tail}}) "
                         "ON CREATE SET t.created_at = timestamp() "
                         "MERGE (d:Document {id: $doc_id}) "
                         "MERGE (t)-[:FROM_DOCUMENT]->(d)",
@@ -631,7 +685,7 @@ class KnowledgeGraphService:
                         {"role": "user", "content": prompt}
                     ],
                     temperature=0.3,
-                    max_tokens=1000,
+                    max_tokens=2000,
                     stream=True
                 )
 
@@ -651,7 +705,7 @@ class KnowledgeGraphService:
                         {"role": "user", "content": prompt}
                     ],
                     temperature=0.3,
-                    max_tokens=1000
+                    max_tokens=2000
                 )
 
                 answer = response.choices[0].message.content
@@ -666,6 +720,201 @@ class KnowledgeGraphService:
 
         except Exception as e:
             raise Exception(f"答案生成失败: {str(e)}")
+
+    def call_qidian_api_stream(self, prompt: str, session_id: str, satoken: str, model_id: int = 32):
+        """
+        调用 qidian API 进行流式问答（专用于 Chatgpt-5.2-codex）
+
+        Args:
+            prompt: 问题内容
+            session_id: 会话ID
+            satoken: 认证token
+            model_id: 模型ID（默认32）
+
+        Yields:
+            str: 流式返回的文本内容
+        """
+        url = "https://qidianai.xyz/api/user/chat/send"
+
+        headers = {
+            "Accept": "text/event-stream",
+            "Content-Type": "application/json",
+            "Origin": "https://qidianai.xyz",
+            "Referer": "https://qidianai.xyz/desktop/chat",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                          "(KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
+            "satoken": satoken,
+            "Cookie": f"satoken={satoken}"
+        }
+
+        payload = {
+            "modelId": model_id,
+            "content": prompt,
+            "sessionId": session_id,
+            "attachments": []
+        }
+
+        try:
+            with requests.post(
+                url,
+                headers=headers,
+                json=payload,
+                stream=True,
+                timeout=300
+            ) as resp:
+                # 详细的错误信息
+                if resp.status_code >= 400:
+                    error_body = resp.text[:3000] if resp.text else "No response body"
+                    print(f"❌ Qidian API 错误:")
+                    print(f"   状态码: {resp.status_code}")
+                    print(f"   URL: {url}")
+                    print(f"   Payload: {json.dumps(payload, ensure_ascii=False)}")
+                    print(f"   响应: {error_body}")
+                    raise Exception(f"Qidian API 返回 {resp.status_code} 错误: {error_body[:200]}")
+
+                # 解析 SSE 事件流
+                for block in self._parse_sse_blocks(resp):
+                    event_type, data = self._parse_sse_block(block)
+                    text = self._decode_data_text(data)
+
+                    if text and text.strip() not in ("[DONE]", "DONE"):
+                        if event_type in (None, "message", "start"):
+                            if event_type != "start" and text:
+                                yield text
+
+        except requests.RequestException as e:
+            print(f"❌ Qidian API 请求异常: {str(e)}")
+            raise Exception(f"Qidian API 请求失败: {str(e)}")
+
+    def _parse_sse_blocks(self, resp):
+        """解析 SSE 事件块"""
+        block = []
+        for raw in resp.iter_lines(decode_unicode=True):
+            if raw is None:
+                continue
+            line = raw.rstrip("\r")
+            if line == "":
+                if block:
+                    yield block
+                    block = []
+                continue
+            block.append(line)
+        if block:
+            yield block
+
+    def _parse_sse_block(self, lines):
+        """解析单个 SSE 事件块"""
+        event_type = None
+        data_lines = []
+        for line in lines:
+            if line.startswith("event:"):
+                event_type = line.split(":", 1)[1].strip()
+            elif line.startswith("data:"):
+                data_lines.append(line.split(":", 1)[1].lstrip())
+        return event_type, "\n".join(data_lines)
+
+    def _decode_data_text(self, data):
+        """从 SSE data 中提取文本内容"""
+        s = (data or "").strip()
+        if not s:
+            return ""
+        if s in ("[DONE]", "DONE"):
+            return s
+
+        if (s.startswith("{") and s.endswith("}")) or (s.startswith("[") and s.endswith("]")):
+            try:
+                obj = json.loads(s)
+                extracted = self._extract_text_from_json(obj)
+                return extracted if extracted is not None else s
+            except Exception:
+                return data
+
+        return data
+
+    def _extract_text_from_json(self, obj):
+        """从 JSON 对象中提取文本"""
+        if obj is None:
+            return None
+        if isinstance(obj, str):
+            return obj
+        if isinstance(obj, (int, float, bool)):
+            return str(obj)
+
+        if isinstance(obj, dict):
+            for key in ("content", "message", "text", "delta", "answer", "data"):
+                if key in obj:
+                    val = obj[key]
+                    if isinstance(val, (dict, list)):
+                        extracted = self._extract_text_from_json(val)
+                        if extracted:
+                            return extracted
+                    elif val is not None:
+                        return str(val)
+
+            if "choices" in obj and isinstance(obj["choices"], list) and obj["choices"]:
+                return self._extract_text_from_json(obj["choices"][0])
+
+        if isinstance(obj, list):
+            parts = []
+            for item in obj:
+                t = self._extract_text_from_json(item)
+                if t:
+                    parts.append(t)
+            if parts:
+                return "".join(parts)
+
+        return None
+
+    def call_yansd_api_stream(self, prompt: str, model: str, session_cookie: str, new_api_user: str):
+        """调用 yansd API 进行流式问答（专用于 Claude-opus-4.5）"""
+        url = "https://yansd666.com/pg/chat/completions"
+
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream",
+            "Cookie": session_cookie,
+            "new-api-user": new_api_user,
+            "User-Agent": "python-requests/2.x"
+        }
+
+        payload = {
+            "model": model,
+            "group": "default",
+            "messages": [{"role": "user", "content": prompt}],
+            "stream": True,
+            "temperature": 1,
+            "top_p": 1,
+            "presence_penalty": 0,
+            "frequency_penalty": 0
+        }
+
+        try:
+            with requests.post(url, headers=headers, json=payload, stream=True, timeout=300) as resp:
+                if resp.status_code >= 400:
+                    error_body = resp.text[:3000] if resp.text else "No response body"
+                    raise Exception(f"Yansd API 返回 {resp.status_code} 错误: {error_body[:200]}")
+
+                resp.encoding = 'utf-8'
+                for line in resp.iter_lines(decode_unicode=True):
+                    if not line or not line.startswith("data: "):
+                        continue
+
+                    data_str = line[6:].strip()
+                    if data_str == "[DONE]":
+                        break
+
+                    try:
+                        chunk = json.loads(data_str)
+                        content = chunk["choices"][0]["delta"].get("content")
+                        if content:
+                            yield content
+                    except (json.JSONDecodeError, KeyError, IndexError):
+                        continue
+        except requests.RequestException as e:
+            raise Exception(f"Yansd API 请求失败: {str(e)}")
 
     async def answer_question_parallel_stream(self, question: str, conversation_id: Optional[str] = None, model_name: Optional[str] = None):
         """
@@ -795,41 +1044,90 @@ class KnowledgeGraphService:
 请提供详细的答案："""
 
             try:
-                # 构建消息列表，包含历史对话
-                messages = [
-                    {"role": "system", "content": "你是一个专业的知识问答助手，能够记住之前的对话内容并基于上下文进行回答。"}
-                ]
+                model_config = self.qa_clients.get(model_name or DEFAULT_QA_MODEL, {})
+                use_qidian = model_config.get("use_qidian_api", False)
+                use_yansd = model_config.get("use_yansd_api", False)
 
-                # 添加历史对话（限制最近的5轮对话，避免上下文过长）
-                if history:
-                    # 只保留最近的5轮对话（10条消息：5个问题 + 5个回答）
-                    recent_history = history[-10:] if len(history) > 10 else history
-                    for msg in recent_history:
-                        if msg.get("role") and msg.get("content"):
-                            messages.append({
-                                "role": msg["role"],
-                                "content": msg["content"]
-                            })
+                if use_yansd:
+                    session_cookie = model_config.get("session_cookie", "")
+                    new_api_user = model_config.get("new_api_user", "")
 
-                # 添加当前问题（带上下文）
-                messages.append({
-                    "role": "user",
-                    "content": prompt
-                })
+                    def yansd_generator():
+                        return self.call_yansd_api_stream(prompt, qa_model, session_cookie, new_api_user)
 
-                # 流式生成答案
-                response = qa_client.chat.completions.create(
-                    model=qa_model,
-                    messages=messages,
-                    temperature=0.3,
-                    max_tokens=1000,
-                    stream=True
-                )
+                    return {
+                        "type": "answer_stream",
+                        "stream": yansd_generator(),
+                        "is_yansd": True
+                    }
+                elif use_qidian:
+                    # 使用 qidian API
+                    satoken = model_config.get("satoken", "")
+                    model_id = model_config.get("model_id", 32)
+                    config_session_id = model_config.get("session_id", "")
 
-                return {
-                    "type": "answer_stream",
-                    "stream": response
-                }
+                    # 优先使用配置的 session_id，否则使用 conversation_id 或生成新的
+                    if config_session_id:
+                        session_id = config_session_id
+                    else:
+                        import uuid
+                        session_id = conversation_id or str(uuid.uuid4())
+
+                    print(f"🔧 使用 Qidian API:")
+                    print(f"   Model ID: {model_id}")
+                    print(f"   Session ID: {session_id}")
+                    print(f"   Satoken: {satoken[:20]}..." if satoken else "   Satoken: (empty)")
+
+                    # 在线程池中调用同步的 qidian API
+                    loop = asyncio.get_event_loop()
+
+                    # 创建一个生成器包装器
+                    def qidian_generator():
+                        return self.call_qidian_api_stream(prompt, session_id, satoken, model_id)
+
+                    return {
+                        "type": "answer_stream",
+                        "stream": qidian_generator(),
+                        "is_qidian": True
+                    }
+                else:
+                    # 使用标准 OpenAI API
+                    # 构建消息列表，包含历史对话
+                    messages = [
+                        {"role": "system", "content": "你是一个专业的知识问答助手，能够记住之前的对话内容并基于上下文进行回答。"}
+                    ]
+
+                    # 添加历史对话（限制最近的5轮对话，避免上下文过长）
+                    if history:
+                        # 只保留最近的5轮对话（10条消息：5个问题 + 5个回答）
+                        recent_history = history[-10:] if len(history) > 10 else history
+                        for msg in recent_history:
+                            if msg.get("role") and msg.get("content"):
+                                messages.append({
+                                    "role": msg["role"],
+                                    "content": msg["content"]
+                                })
+
+                    # 添加当前问题（带上下文）
+                    messages.append({
+                        "role": "user",
+                        "content": prompt
+                    })
+
+                    # 流式生成答案
+                    response = qa_client.chat.completions.create(
+                        model=qa_model,
+                        messages=messages,
+                        temperature=0.3,
+                        max_tokens=2000,
+                        stream=True
+                    )
+
+                    return {
+                        "type": "answer_stream",
+                        "stream": response,
+                        "is_qidian": False
+                    }
             except Exception as e:
                 print(f"答案生成失败: {e}")
                 return {
@@ -850,17 +1148,32 @@ class KnowledgeGraphService:
         answer_result = await answer_generation_task()
 
         if "stream" in answer_result:
-            # 流式返回答案
-            for chunk in answer_result["stream"]:
-                if chunk.choices[0].delta.content:
-                    content = chunk.choices[0].delta.content
-                    full_answer += content  # 累积完整答案
+            is_qidian = answer_result.get("is_qidian", False)
+            is_yansd = answer_result.get("is_yansd", False)
 
-                    answer_chunk = {
-                        "type": "answer",
-                        "content": content
-                    }
-                    yield json.dumps(answer_chunk, ensure_ascii=False) + "\n"
+            if is_qidian or is_yansd:
+                # qidian API 直接返回文本
+                for text in answer_result["stream"]:
+                    if text:
+                        full_answer += text  # 累积完整答案
+
+                        answer_chunk = {
+                            "type": "answer",
+                            "content": text
+                        }
+                        yield json.dumps(answer_chunk, ensure_ascii=False) + "\n"
+            else:
+                # 标准 OpenAI API 返回的流
+                for chunk in answer_result["stream"]:
+                    if chunk.choices[0].delta.content:
+                        content = chunk.choices[0].delta.content
+                        full_answer += content  # 累积完整答案
+
+                        answer_chunk = {
+                            "type": "answer",
+                            "content": content
+                        }
+                        yield json.dumps(answer_chunk, ensure_ascii=False) + "\n"
 
             # 答案结束标记
             yield json.dumps({"type": "answer_done"}, ensure_ascii=False) + "\n"

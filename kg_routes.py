@@ -40,18 +40,20 @@ class GraphQueryRequest(BaseModel):
 @router.post("/upload-document")
 async def upload_document(file: UploadFile = File(...)):
     """
-    上传文档（PDF）
+    上传文档（PDF/TXT/DOCX/PPTX）
     返回：文档ID和文本内容
     """
     # 验证文件类型
-    if not file.filename.endswith('.pdf'):
-        raise HTTPException(status_code=400, detail="只支持PDF文件")
+    allowed_extensions = {'.pdf', '.txt', '.docx', '.pptx'}
+    file_ext = os.path.splitext(file.filename)[1].lower()
+    if file_ext not in allowed_extensions:
+        raise HTTPException(status_code=400, detail="只支持 PDF、TXT、DOCX、PPTX 文件")
 
     # 生成文档ID
     doc_id = str(uuid.uuid4())
 
     # 保存文件
-    file_path = os.path.join(UPLOAD_DIR, f"{doc_id}.pdf")
+    file_path = os.path.join(UPLOAD_DIR, f"{doc_id}{file_ext}")
     try:
         content = await file.read()
         with open(file_path, "wb") as f:
@@ -61,7 +63,7 @@ async def upload_document(file: UploadFile = File(...)):
 
     # 解析文档
     try:
-        text = kg_service.parse_pdf(file_path)
+        text = kg_service.parse_document(file_path)
 
         return {
             "doc_id": doc_id,
@@ -85,14 +87,20 @@ async def split_text(doc_id: str):
     文本分块
     返回：分块列表
     """
-    file_path = os.path.join(UPLOAD_DIR, f"{doc_id}.pdf")
+    # 查找文档文件
+    file_path = None
+    for ext in ['.pdf', '.txt', '.docx', '.pptx']:
+        path = os.path.join(UPLOAD_DIR, f"{doc_id}{ext}")
+        if os.path.exists(path):
+            file_path = path
+            break
 
-    if not os.path.exists(file_path):
+    if not file_path:
         raise HTTPException(status_code=404, detail="文档不存在")
 
     try:
         # 解析文档
-        text = kg_service.parse_pdf(file_path)
+        text = kg_service.parse_document(file_path)
 
         # 分块
         chunks = kg_service.split_text(text)
@@ -115,14 +123,20 @@ async def extract_entities(doc_id: str):
     实体关系抽取（使用LLM）
     返回：三元组列表（流式返回每个块的处理结果）
     """
-    file_path = os.path.join(UPLOAD_DIR, f"{doc_id}.pdf")
+    # 查找文档文件
+    file_path = None
+    for ext in ['.pdf', '.txt', '.docx', '.pptx']:
+        path = os.path.join(UPLOAD_DIR, f"{doc_id}{ext}")
+        if os.path.exists(path):
+            file_path = path
+            break
 
-    if not os.path.exists(file_path):
+    if not file_path:
         raise HTTPException(status_code=404, detail="文档不存在")
 
     try:
         # 解析和分块
-        text = kg_service.parse_pdf(file_path)
+        text = kg_service.parse_document(file_path)
         chunks = kg_service.split_text(text)
 
         # 并发抽取实体关系
@@ -150,16 +164,22 @@ async def build_graph(doc_id: str):
     4. 保存到Neo4j
     5. 保存到ChromaDB（向量存储）
     """
-    file_path = os.path.join(UPLOAD_DIR, f"{doc_id}.pdf")
+    # 查找文档文件
+    file_path = None
+    for ext in ['.pdf', '.txt', '.docx', '.pptx']:
+        path = os.path.join(UPLOAD_DIR, f"{doc_id}{ext}")
+        if os.path.exists(path):
+            file_path = path
+            break
 
-    if not os.path.exists(file_path):
+    if not file_path:
         raise HTTPException(status_code=404, detail="文档不存在")
 
     try:
         start_time = time.time()
 
         # 1. 解析文档
-        text = kg_service.parse_pdf(file_path)
+        text = kg_service.parse_document(file_path)
 
         # 2. 文本分块
         chunks = kg_service.split_text(text)
@@ -363,8 +383,9 @@ async def list_documents():
     documents = []
 
     for filename in files:
-        if filename.endswith('.pdf'):
-            doc_id = filename.replace('.pdf', '')
+        ext = os.path.splitext(filename)[1].lower()
+        if ext in ['.pdf', '.txt', '.docx', '.pptx']:
+            doc_id = filename.replace(ext, '')
             file_path = os.path.join(UPLOAD_DIR, filename)
             stat = os.stat(file_path)
 

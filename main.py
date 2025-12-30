@@ -414,6 +414,9 @@ app.include_router(group_router)
 # 注册知识图谱路由
 from kg_routes import router as kg_router
 app.include_router(kg_router)
+# 注册游戏路由
+from game_routes import router as game_router
+app.include_router(game_router)
 # 定义请求体模型
 class UserAuth(BaseModel):
     username: str

@@ -89,6 +89,73 @@ QA_MODELS = [
 
     # 最强梯队
     {
+        "name": "Gemini-3-pro",
+        "description": "谷歌Gemini 3 Pro高性能版，顶级推理能力，适合复杂问题深度分析，当今最强模型",
+        "api_key": os.getenv("QA_MODEL_4_API_KEY", "sk-3kiSiKDoyFxOkVxqzNGj0kosqaxUjmK0ckFBEz9OSl0XWNnO"),
+        "base_url": os.getenv("QA_MODEL_4_BASE_URL", "https://api.qidianai.xyz/v1"),
+        "model": os.getenv("QA_MODEL_4_MODEL", "gemini-3-pro-high")
+    },
+    {
+        "name": "Gemini-3-flash-preview-thinking",
+        "description": "谷歌Gemini 3 Flash思考增强版，顶级推理能力，适合复杂问题深度分析，当今最强模型梯队",
+        "api_key": os.getenv("QA_MODEL_4_API_KEY", "sk-WGOCGHbfZAjX0G2nT0rYckllyOcby1RBcwTnNwJhONUEiJfE"),
+        "base_url": os.getenv("QA_MODEL_4_BASE_URL", "https://api.lhyb.dpdns.org/v1"),
+        "model": os.getenv("QA_MODEL_4_MODEL", "gemini-3-flash-preview-thinking")
+    },
+    {
+        "name": "Claude-opus-4.5",
+        "description": "Anthropic Claude Opus 4.5模型，擅长极度复杂推理和长文本处理，当今最强模型梯队",
+        "api_key": os.getenv("QA_MODEL_4_API_KEY", "sk-cejxCLoo2E4kEOqblEYMxPMzRCtdpV7grUHC90ycCtQCKutJ"),
+        "base_url": os.getenv("QA_MODEL_4_BASE_URL", "https://yansd666.com/pg"),
+        "model": os.getenv("QA_MODEL_4_MODEL", "claude-opus-4-5-20251101"),
+        "use_yansd_api": True,
+        "session_cookie": os.getenv("YANSD_SESSION", "session=MTc2NzA2MzE4OHxEWDhFQVFMX2dBQUJFQUVRQUFEXzFmLUFBQVlHYzNSeWFXNW5EQW9BQ0hWelpYSnVZVzFsQm5OMGNtbHVad3dJQUFaM1pXa3dNRElHYzNSeWFXNW5EQVlBQkhKdmJHVURhVzUwQkFJQUFnWnpkSEpwYm1jTUNBQUdjM1JoZEhWekEybHVkQVFDQUFJR2MzUnlhVzVuREFjQUJXZHliM1Z3Qm5OMGNtbHVad3dKQUFka1pXWmhkV3gwQm5OMGNtbHVad3dQQUExelpYTnphVzl1WDNSdmEyVnVCbk4wY21sdVp3d2lBQ0JtT0dWalptSmhabUl3TVRFME16aGlZVFk0TVRjeVkyUmtNR1ZqTXpKa05nWnpkSEpwYm1jTUJBQUNhV1FEYVc1MEJBVUFfUVZlcGc9PXwwMkE84epvJybY4a0NOtq-Rkiba1LDFF0TlOuGQxHVEw=="),
+        "new_api_user": os.getenv("YANSD_USER", "175955")
+    },
+  
+        {
+            "name": "Chatgpt-5.2",
+            "description": "OpenAI GPT-5.2模型，最新一代大模型，具备卓越的语言理解和生成能力,当今最强模型梯队",
+            "api_key": os.getenv("QA_MODEL_4_API_KEY", "sk-3kiSiKDoyFxOkVxqzNGj0kosqaxUjmK0ckFBEz9OSl0XWNnO"),
+            "base_url": os.getenv("QA_MODEL_4_BASE_URL", "https://qidianai.xyz/v1"),
+            "model": os.getenv("QA_MODEL_4_MODEL", "gpt-5.2")
+        },
+        {
+            "name": "Chatgpt-5.2-codex",
+            "description": "OpenAI GPT-5.2-Codex模型，专为代码生成和理解优化，顶级编程能力，当今最强代码模型",
+            "api_key": os.getenv("QA_MODEL_4_API_KEY", "sk-3kiSiKDoyFxOkVxqzNGj0kosqaxUjmK0ckFBEz9OSl0XWNnO"),
+            "base_url": os.getenv("QA_MODEL_4_BASE_URL", "https://qidianai.xyz/v1"),
+            "model": os.getenv("QA_MODEL_4_MODEL", "gpt-5.2-codex"),
+            # qidian API 特殊配置
+            "use_qidian_api": True,
+            "satoken": os.getenv("QIDIAN_SATOKEN", "8d200f5a-6861-4d1a-9578-d8658bf0132f"),
+            "model_id": 32,  # qidian API 的 modelId
+            "session_id": os.getenv("QIDIAN_SESSION_ID", "f21d3a83-6b7f-4dad-b7f4-1ee749e6d81a")  # 固定的 sessionId
+        },
+    {
+            "name": "Grok-4.1-thinking",
+            "description": "XAi Grok 4.1思考增强版，顶级推理能力，适合复杂问题深度分析，当今最强模型梯队",
+            "api_key": os.getenv("QA_MODEL_4_API_KEY", "sk-3kiSiKDoyFxOkVxqzNGj0kosqaxUjmK0ckFBEz9OSl0XWNnO"),
+            "base_url": os.getenv("QA_MODEL_4_BASE_URL", "https://api.qidianai.xyz/v1"),
+            "model": os.getenv("QA_MODEL_4_MODEL", "grok-4.1-thinking")
+        },
+    {
+        "name": "Gemini-3-flash-preview-nothinking",
+        "description": "谷歌Gemini 3 Flash无思考版，快速响应，性能强大，适合大多数问答场景",
+        "api_key": os.getenv("QA_MODEL_4_API_KEY", "sk-WGOCGHbfZAjX0G2nT0rYckllyOcby1RBcwTnNwJhONUEiJfE"),
+        "base_url": os.getenv("QA_MODEL_4_BASE_URL", "https://api.lhyb.dpdns.org/v1"),
+        "model": os.getenv("QA_MODEL_4_MODEL", "gemini-3-flash-preview-nothinking")
+    },
+    {
+        "name": "Claude-sonnet-4.5",
+        "description": "Anthropic Claude Sonnet 4.5模型，擅长复杂推理和长文本处理，当今最强模型梯队",
+        "api_key": os.getenv("QA_MODEL_4_API_KEY", "sk-WGOCGHbfZAjX0G2nT0rYckllyOcby1RBcwTnNwJhONUEiJfE"),
+        "base_url": os.getenv("QA_MODEL_4_BASE_URL", "https://api.lhyb.dpdns.org/v1"),
+        "model": os.getenv("QA_MODEL_4_MODEL", "claude-sonnet-4.5")
+    },
+
+
+    {
         "name": "MiMo-V2-Flash",
         "description": "小米MiMo V2 Flash模型，国内顶级模型，超快响应速度，适合日常对话和快速问答",
         "api_key": os.getenv("QA_MODEL_4_API_KEY", "ms-7ae9b437-2d5d-47c9-b613-86e012766c2c"),
@@ -116,12 +183,26 @@ QA_MODELS = [
         "base_url": os.getenv("QA_MODEL_6_BASE_URL", "https://api-inference.modelscope.cn/v1"),
         "model": os.getenv("QA_MODEL_6_MODEL", "Qwen/Qwen3-235B-A22B")
     },
+    {
+        "name": "kimi-k2-thinking",
+        "description": "月之暗面K2思考增强模型，擅长复杂推理和多轮对话",
+        "api_key": os.getenv("QA_MODEL_4_API_KEY", "sk-WGOCGHbfZAjX0G2nT0rYckllyOcby1RBcwTnNwJhONUEiJfE"),
+        "base_url": os.getenv("QA_MODEL_4_BASE_URL", "https://api.lhyb.dpdns.org/v1"),
+        "model": os.getenv("QA_MODEL_4_MODEL", "kimi-k2-thinking")
+    },
+    {
+        "name": "kimi-k2-instruct-0905",
+        "description": "月之暗面K2指令调优模型，擅长理解复杂指令和生成高质量文本",
+        "api_key": os.getenv("QA_MODEL_4_API_KEY", "sk-WGOCGHbfZAjX0G2nT0rYckllyOcby1RBcwTnNwJhONUEiJfE"),
+        "base_url": os.getenv("QA_MODEL_4_BASE_URL", "https://api.lhyb.dpdns.org/v1"),
+        "model": os.getenv("QA_MODEL_4_MODEL", "kimi-k2-instruct-0905")
+    },
      {
         "name": "DeepSeek-R1-0528",
         "description": "DeepSeek R1推理模型，专注于逻辑推理和代码生成",
-        "api_key": os.getenv("QA_MODEL_3_API_KEY", "ms-7ae9b437-2d5d-47c9-b613-86e012766c2c"),
-        "base_url": os.getenv("QA_MODEL_3_BASE_URL", "https://api-inference.modelscope.cn/v1"),
-        "model": os.getenv("QA_MODEL_3_MODEL", "deepseek-ai/DeepSeek-R1-0528")
+        "api_key": os.getenv("QA_MODEL_3_API_KEY", "sk-WGOCGHbfZAjX0G2nT0rYckllyOcby1RBcwTnNwJhONUEiJfE"),
+        "base_url": os.getenv("QA_MODEL_3_BASE_URL", "https://api.lhyb.dpdns.org/v1"),
+        "model": os.getenv("QA_MODEL_3_MODEL", "deepseek-r1-0528")
     },
     # 次强梯队
     {
@@ -146,7 +227,7 @@ QA_MODELS = [
         "model": os.getenv("QA_MODEL_9_MODEL", "Qwen/Qwen3-14B")
     },
 
-    # 原有模型（保持你初始的3个，按强弱顺延）
+    # 原有模型（按强弱顺延）
     {
         "name": "Qwen3-0.6B",
         "description": "通义千问0.6B轻量版，极速响应，适合简单问答",
@@ -184,7 +265,7 @@ CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", 80))  # 文本块之间的重叠
 
 # 向量检索配置
 VECTOR_SEARCH_TOP_K = int(os.getenv("VECTOR_SEARCH_TOP_K", 5))  # 向量检索返回的top-k结果
-VECTOR_SIMILARITY_THRESHOLD = float(os.getenv("VECTOR_SIMILARITY_THRESHOLD", 0.5))  # 相似度阈值（距离小于此值才使用文档）
+VECTOR_SIMILARITY_THRESHOLD = float(os.getenv("VECTOR_SIMILARITY_THRESHOLD", 0.6))  # 相似度阈值（距离小于此值才使用文档）
 
 # 图检索配置
 GRAPH_SEARCH_HOPS = int(os.getenv("GRAPH_SEARCH_HOPS", 2))  # 图检索的跳数（N跳邻居）
