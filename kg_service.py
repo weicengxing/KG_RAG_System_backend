@@ -1165,7 +1165,8 @@ class KnowledgeGraphService:
             else:
                 # 标准 OpenAI API 返回的流
                 for chunk in answer_result["stream"]:
-                    if chunk.choices[0].delta.content:
+                    # 安全检查：确保 choices 列表不为空且包含有效内容
+                    if chunk.choices and len(chunk.choices) > 0 and chunk.choices[0].delta.content:
                         content = chunk.choices[0].delta.content
                         full_answer += content  # 累积完整答案
 
