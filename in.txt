@@ -45,7 +45,7 @@ taskkill /F /PID 33280
 
 
 git add .
-git commit -m "kg_0.0.4"
+git commit -m "kg_0.0.4-1"
 git push
 
 cpolar start-all --config D:\Cpolar\cpolar.yml
@@ -62,7 +62,8 @@ cpolar start-all --config D:\Cpolar\cpolar.yml
 
 ATATT3xFfGF0ZX36Du2L5sso745S3c65LzB9akonWII8ThaXgQClIppEhmeHvdFWbYzSjPW4a_6pKtZgLvULnwSLLASLlrB6LfzDLX3A6THbnGu0ESW5HoRhRyWjTJMUOSWfnPZeCbf-QOnDwJTMVgUAaqhKOPXBsjTmAhhiFuST3qY0BHnslfE=CAE00B4D
 
-frontend\src\views\GameView.vue这是前段代码，后端在backend\game_routes.py
+frontend\src\views\KnowledgeGraphView.vue这是前段代码，后端在backend\game_routes.py，请你帮我看一下这段代码有什么可以改进的
+地方，只用建议，不用修改
 
 
 帮我介绍一下这个文件实现的功能，最后总结一下
@@ -102,4 +103,61 @@ set AIPING_API_KEY="QC-cce2a03e2ca159a3f94ef0e2f0250ab6-75dc5549abbdbb656467986b
 
 我按住然后滑动鼠标不会转换视角，是操作不对吗，转换视角的操作是什么
 
+set CODEX_BASE_URL= "https://goo.chatopens.vip/codex"
+set CODEX_TOKEN =8caca674-4643-4c3b-82d2-acf435715a43
+
+
+# 第一步：设置环境变量（PowerShell专用语法）
+$env:OPENAI_API_KEY = "sk-EeLmPsZO5KqwAhWGrzvCLWMDJ2STDJGuGJIbW55tibquxFRv"
+$env:OPENAI_BASE_URL = "https://api.zhangsan.cool/v1"
+
+# 第二步：运行Codex命令（指定你的模型gpt-5.2-codex）
+codex --model gpt-5.2
+
+D:
+cd KG_RAG_System
+claude
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+$env:ANTHROPIC_BASE_URL="https://api.qidianai.xyz/"
+
+# 设置您的 API 密钥, 可以从 https://api.qidianai.xyz/console/token 获取
+$env:ANTHROPIC_AUTH_TOKEN="sk-L41eqjjRvTfVTzwQSJ5UuqtIjmNxT2jzFkQ3PD8SuWPFyFnc"
+$env:ANTHROPIC_MODEL="claude-sonnet-4-5-20250929-thinking"
+
+
+
+
+
+D:
+cd KG_RAG_System
+set ANTHROPIC_AUTH_TOKEN=vqIXTEbH5sKWHOy2hvntAwjKM5C_4gbgX_5UZgZbgrM
+set ANTHROPIC_BASE_URL=https://inference.canopywave.io
+set ANTHROPIC_MODEL=zai/glm-4.7
+claude
+
+
+
+
+动画效果还是不够，有点简陋，能不能改得更精美更好看，让人惊艳的那种，你先构思，再改
 

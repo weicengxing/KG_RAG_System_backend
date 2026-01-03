@@ -71,6 +71,9 @@ zstandard==0.25.0
 colorama==0.4.6
 blinker==1.9.0
 
+# Bloom Filter
+pybloom-live==4.0.0
+
 # Base Tools
 pip==25.3
 

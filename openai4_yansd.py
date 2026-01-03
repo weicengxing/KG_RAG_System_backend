@@ -1,22 +1,15 @@
-import requests
-import json
+from sambanova import SambaNova
 
-url = "https://inference.canopywave.io/v1/chat/completions"
-headers = {
-   "Content-Type": "application/json",
-   "Authorization": "Bearer vqIXTEbH5sKWHOy2hvntAwjKM5C_4gbgX_5UZgZbgrM"  # ⚠️ 真实调用请换成新的 key
-}
-data = {
-   "model": "deepseek-chat-v3.2-speciale",
-   "messages": [
-       {"role": "user", "content": "你好，请介绍一下自己"}
-   ],
-   "max_tokens": 500,
-   "temperature": 0.7
-}
+client = SambaNova(
+    api_key="<YOUR API KEY>",
+    base_url="https://api.sambanova.ai/v1",
+)
 
-response = requests.post(url, headers=headers, json=data)
-print(response.status_code)
-print(response.text)          # 先看原始返回
-result = response.json()
-print(result.keys())          # 看顶层有哪些键
+response = client.chat.completions.create(
+    model="ALLaM-7B-Instruct-preview",
+    messages=[{"role":"system","content":"You are a helpful assistant"},{"role":"user","content":"Hello!"}],
+    temperature=0.1,
+    top_p=0.1
+)
+
+print(response.choices[0].message.content)

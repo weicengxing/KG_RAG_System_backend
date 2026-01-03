@@ -1166,6 +1166,31 @@ async def save_profile(data: ProfileUpdateSchema, request: Request):
 async def startup():
     # 初始化 Mongo 和 Async Redis
     await db_manager.connect()
+    
+    # 启动布隆过滤器Warmup（后台异步执行）
+    try:
+        from bloom_utils import warmup_all_bloom_filters_async
+        warmup_all_bloom_filters_async()
+        
+        # 结构化日志输出 - Warmup启动成功
+        logger.info("📊 [MONITOR] Bloom Filter Warmup 启动状态: SUCCESS")
+        logger.info("   - 执行模式: 后台异步执行")
+        logger.info("   - 布隆过滤器: document_bloom, cache_keys_bloom")
+        logger.info("   - Warmup完成前: 业务请求将使用降级策略（直接查数据库）")
+        
+    except ImportError as e:
+        # 导入失败（缺少依赖）
+        logger.error("❌ [MONITOR] Bloom Filter Warmup 启动失败: IMPORT_ERROR")
+        logger.error(f"   - 错误详情: {e}")
+        logger.error("   - 影响: 文档去重和缓存穿透防护功能不可用")
+        logger.warning("⚠️  应用仍可正常运行，但性能可能受影响")
+        
+    except Exception as e:
+        # 其他异常
+        logger.error("❌ [MONITOR] Bloom Filter Warmup 启动失败: UNKNOWN_ERROR")
+        logger.error(f"   - 错误详情: {type(e).__name__}: {e}")
+        logger.error("   - 导入堆栈:", exc_info=True)
+        logger.warning("⚠️  Warmup未启动，但应用仍可正常运行（将使用降级策略）")
 
 @app.on_event("shutdown")
 async def shutdown():

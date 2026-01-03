@@ -12,7 +12,7 @@ from config import (
     NEO4J_PASSWORD
 )
 
-# 导入Redis工具函数
+# 导入Redis工具函数和布隆过滤器
 try:
     from redis_utils import (
         get_qr_login_status_cache,
@@ -20,12 +20,16 @@ try:
         delete_qr_login_status_cache,
         delayed_delete_cache
     )
+    from bloom_utils import is_cache_key_exists, is_cache_key_exists_with_warmup, mark_cache_key_exists
 except ImportError:
     # 如果导入失败，使用空函数
     def get_qr_login_status_cache(username): return None
     def set_qr_login_status_cache(username, enabled): return False
     def delete_qr_login_status_cache(username): return False
     def delayed_delete_cache(username, delay_seconds=1.0): pass
+    def is_cache_key_exists(key): return False
+    def is_cache_key_exists_with_warmup(key, fallback_to_db=False): return (False, False)
+    def mark_cache_key_exists(key): pass
 
 # --- 初始化驱动 ---
 try:
@@ -270,7 +274,7 @@ def get_user_2fa_status(username):
 
 
 def get_user_qr_login_status(username):
-    """获取用户二维码登录启用状态（先查Redis缓存，查不到再查数据库）
+    """获取用户二维码登录启用状态（使用布隆过滤器优化缓存穿透防护，支持Warmup降级）
 
     Args:
         username: 用户名
@@ -278,12 +282,43 @@ def get_user_qr_login_status(username):
     Returns:
         bool: 二维码登录是否已启用
     """
-    # 先尝试从Redis缓存获取
+    cache_key = f"qr_login_status:{username}"
+    
+    # 第一步：使用布隆过滤器快速判断（支持Warmup降级）
+    key_exists, used_db_fallback = is_cache_key_exists_with_warmup(
+        cache_key, 
+        fallback_to_db=True  # Warmup未完成时降级到数据库查询
+    )
+    
+    # 如果使用了降级查询，直接返回结果
+    if used_db_fallback:
+        # 已经在降级查询中从数据库获取了结果并返回
+        return key_exists
+    
+    # 布隆过滤器说不存在，说明缓存中肯定没有
+    # 直接查数据库，避免缓存穿透
+    if not key_exists:
+        with driver.session() as session:
+            query = """
+            MATCH (u:User {username: $username})
+            RETURN u.qr_login_enabled as qr_login_enabled
+            """
+            result = session.run(query, username=username).single()
+            if result:
+                enabled = result.get("qr_login_enabled", False) or False
+                # 标记到布隆过滤器
+                mark_cache_key_exists(cache_key)
+                # 写入缓存
+                set_qr_login_status_cache(username, enabled)
+                return enabled
+        return False
+    
+    # 第二步：布隆过滤器说可能存在，继续查缓存
     cached_status = get_qr_login_status_cache(username)
     if cached_status is not None:
         return cached_status
-
-    # 缓存未命中，从数据库查询
+    
+    # 第三步：缓存未命中，查数据库
     with driver.session() as session:
         query = """
         MATCH (u:User {username: $username})
@@ -292,6 +327,8 @@ def get_user_qr_login_status(username):
         result = session.run(query, username=username).single()
         if result:
             enabled = result.get("qr_login_enabled", False) or False
+            # 标记到布隆过滤器
+            mark_cache_key_exists(cache_key)
             # 异步写入缓存（不阻塞返回）
             try:
                 from database_async import db_manager
@@ -301,6 +338,7 @@ def get_user_qr_login_status(username):
                 # 如果异步写入失败，尝试同步写入（降级处理）
                 set_qr_login_status_cache(username, enabled)
             return enabled
+    
     return False
 
 

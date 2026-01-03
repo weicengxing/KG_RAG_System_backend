@@ -78,9 +78,9 @@ MONGO_DB_NAME = "chat_app_db"
 # ==================== 知识图谱RAG配置 ====================
 
 # --- 1. 三元组提取模型配置 (用于实体关系抽取) ---
-EXTRACTION_API_KEY = os.getenv("EXTRACTION_API_KEY", "ms-7ae9b437-2d5d-47c9-b613-86e012766c2c")
-EXTRACTION_BASE_URL = os.getenv("EXTRACTION_BASE_URL", "https://api-inference.modelscope.cn/v1")
-EXTRACTION_MODEL = os.getenv("EXTRACTION_MODEL", "XiaomiMiMo/MiMo-V2-Flash")
+EXTRACTION_API_KEY = os.getenv("EXTRACTION_API_KEY", "sk-VGr1R5YhrRdApUezU81xzmGnXJW1C6k2wbOrLvXuKgBaBON9")
+EXTRACTION_BASE_URL = os.getenv("EXTRACTION_BASE_URL", "https://zhouliuai.online/v1")
+EXTRACTION_MODEL = os.getenv("EXTRACTION_MODEL", "gpt-5.2-chat-latest")
 
 # --- 2. AI问答模型配置列表 (用户可在前端选择) ---
 QA_MODELS = [
@@ -105,12 +105,12 @@ QA_MODELS = [
     {
         "name": "Claude-opus-4.5",
         "description": "Anthropic Claude Opus 4.5模型，擅长极度复杂推理和长文本处理，当今最强模型梯队",
-        "api_key": os.getenv("QA_MODEL_4_API_KEY", "sk-cejxCLoo2E4kEOqblEYMxPMzRCtdpV7grUHC90ycCtQCKutJ"),
+        "api_key": os.getenv("QA_MODEL_4_API_KEY", "sk-sV8Gkji5NKNb0h9mIsmFrlmoSvD2YAkAjee84j6ichQBmhct"),
         "base_url": os.getenv("QA_MODEL_4_BASE_URL", "https://yansd666.com/pg"),
         "model": os.getenv("QA_MODEL_4_MODEL", "claude-opus-4-5-20251101"),
         "use_yansd_api": True,
-        "session_cookie": os.getenv("YANSD_SESSION", "session=MTc2NzA2MzE4OHxEWDhFQVFMX2dBQUJFQUVRQUFEXzFmLUFBQVlHYzNSeWFXNW5EQW9BQ0hWelpYSnVZVzFsQm5OMGNtbHVad3dJQUFaM1pXa3dNRElHYzNSeWFXNW5EQVlBQkhKdmJHVURhVzUwQkFJQUFnWnpkSEpwYm1jTUNBQUdjM1JoZEhWekEybHVkQVFDQUFJR2MzUnlhVzVuREFjQUJXZHliM1Z3Qm5OMGNtbHVad3dKQUFka1pXWmhkV3gwQm5OMGNtbHVad3dQQUExelpYTnphVzl1WDNSdmEyVnVCbk4wY21sdVp3d2lBQ0JtT0dWalptSmhabUl3TVRFME16aGlZVFk0TVRjeVkyUmtNR1ZqTXpKa05nWnpkSEpwYm1jTUJBQUNhV1FEYVc1MEJBVUFfUVZlcGc9PXwwMkE84epvJybY4a0NOtq-Rkiba1LDFF0TlOuGQxHVEw=="),
-        "new_api_user": os.getenv("YANSD_USER", "175955")
+        "session_cookie": os.getenv("YANSD_SESSION", "session=MTc2NzI2ODI5NXxEWDhFQVFMX2dBQUJFQUVRQUFEXzFmLUFBQVlHYzNSeWFXNW5EQVFBQW1sa0EybHVkQVFGQVAwRmQxd0djM1J5YVc1bkRBb0FDSFZ6WlhKdVlXMWxCbk4wY21sdVp3d0lBQVozWldrd01ETUdjM1J5YVc1bkRBWUFCSEp2YkdVRGFXNTBCQUlBQWdaemRISnBibWNNQ0FBR2MzUmhkSFZ6QTJsdWRBUUNBQUlHYzNSeWFXNW5EQWNBQldkeWIzVndCbk4wY21sdVp3d0pBQWRrWldaaGRXeDBCbk4wY21sdVp3d1BBQTF6WlhOemFXOXVYM1J2YTJWdUJuTjBjbWx1Wnd3aUFDQTVaRFpqTTJSbVpHRmhNREkwT1dReU9HTTVPRFZoTWpaaE5EQTBNRFJtT1E9PXwRsA1H_WiJkEJI41A2-g4oXa9kUcXDqnQEcdlmg5cjQA=="),
+        "new_api_user": os.getenv("YANSD_USER", "179118")
     },
   
         {

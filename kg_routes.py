@@ -10,13 +10,71 @@ import os
 import uuid
 import time
 import asyncio
+import hashlib
+from datetime import datetime
 from kg_service import kg_service
+from database_asy_mon_re import db_manager
 
 router = APIRouter(prefix="/api/kg", tags=["Knowledge Graph"])
+
+# 导入布隆过滤器工具函数
+try:
+    from bloom_utils import is_document_uploaded, is_document_uploaded_with_warmup, mark_document_uploaded
+except ImportError:
+    # 如果导入失败，使用空函数
+    def is_document_uploaded(doc_id): return False
+    def is_document_uploaded_with_warmup(doc_id, fallback_to_db=False): return (False, False)
+    def mark_document_uploaded(doc_id): pass
 
 # 文档上传目录
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+
+# ==================== 辅助函数 ====================
+
+async def save_document_metadata_async(
+    doc_id: str,
+    file_hash: str,
+    filename: str,
+    file_extension: str,
+    file_size: int,
+    file_path: str,
+    text_length: int
+):
+    """
+    异步保存文档元数据到 MongoDB
+    
+    Args:
+        doc_id: 文档ID (UUID)
+        file_hash: 文件MD5 hash
+        filename: 原始文件名
+        file_extension: 文件扩展名
+        file_size: 文件大小（字节）
+        file_path: 文件保存路径
+        text_length: 文本长度
+    """
+    try:
+        document_data = {
+            "doc_id": doc_id,
+            "file_hash": file_hash,
+            "filename": filename,
+            "file_extension": file_extension,
+            "file_size": file_size,
+            "file_path": file_path,
+            "text_length": text_length,
+            "upload_time": datetime.utcnow(),
+            "status": "uploaded"
+        }
+        
+        # 异步插入到 MongoDB
+        await db_manager.db.documents.insert_one(document_data)
+        print(f"✅ 文档元数据已保存到MongoDB: {doc_id} ({filename})")
+    except Exception as e:
+        # 如果保存失败，记录错误但不影响主流程
+        print(f"❌ 保存文档元数据失败: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 # ==================== 请求/响应模型 ====================
@@ -42,6 +100,7 @@ async def upload_document(file: UploadFile = File(...)):
     """
     上传文档（PDF/TXT/DOCX/PPTX）
     返回：文档ID和文本内容
+    使用布隆过滤器防止重复上传
     """
     # 验证文件类型
     allowed_extensions = {'.pdf', '.txt', '.docx', '.pptx'}
@@ -49,27 +108,67 @@ async def upload_document(file: UploadFile = File(...)):
     if file_ext not in allowed_extensions:
         raise HTTPException(status_code=400, detail="只支持 PDF、TXT、DOCX、PPTX 文件")
 
+    # 读取文件内容并计算 MD5 hash
+    try:
+        content = await file.read()
+        file_hash = hashlib.md5(content).hexdigest()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"文件读取失败: {str(e)}")
+
+    # 使用布隆过滤器快速检查（支持Warmup降级）
+    doc_exists, used_db_fallback = is_document_uploaded_with_warmup(
+        file_hash, 
+        fallback_to_db=True  # Warmup未完成时降级到MongoDB查询
+    )
+    
+    if doc_exists:
+        # 如果使用了降级查询，说明已经从MongoDB确认了存在
+        # 如果没有使用降级，说明布隆过滤器确认存在（可能有误判，但这是可接受的）
+        return {
+            "error": "文档已存在",
+            "duplicate": True,
+            "file_hash": file_hash,
+            "message": "该文档已上传过，请勿重复上传"
+        }
+
     # 生成文档ID
     doc_id = str(uuid.uuid4())
 
     # 保存文件
     file_path = os.path.join(UPLOAD_DIR, f"{doc_id}{file_ext}")
     try:
-        content = await file.read()
         with open(file_path, "wb") as f:
             f.write(content)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"文件保存失败: {str(e)}")
 
+    # 标记文档已上传（添加到布隆过滤器，使用 force_save=True 立即保存）
+    mark_document_uploaded(file_hash, force_save=True)
+
     # 解析文档
     try:
         text = kg_service.parse_document(file_path)
+        text_length = len(text)
+
+        # 异步保存文档元数据到MongoDB（不阻塞主流程）
+        asyncio.create_task(
+            save_document_metadata_async(
+                doc_id=doc_id,
+                file_hash=file_hash,
+                filename=file.filename,
+                file_extension=file_ext,
+                file_size=len(content),
+                file_path=file_path,
+                text_length=text_length
+            )
+        )
 
         return {
             "doc_id": doc_id,
             "filename": file.filename,
             "text_preview": text[:500],  # 预览前500字符
-            "text_length": len(text),
+            "text_length": text_length,
+            "file_hash": file_hash,
             "message": "文档上传成功"
         }
     except Exception as e:

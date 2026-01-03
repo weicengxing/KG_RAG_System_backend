@@ -60,6 +60,16 @@ class DatabaseManager:
         # 索引F: 群组邀请码索引
         await self.db.groups.create_index([("invite_code", 1)], unique=True, sparse=True)
 
+        # 索引G: 知识图谱文档集合
+        # G1: 基于 MD5 hash 的唯一索引，防止重复上传
+        await self.db.documents.create_index([("file_hash", 1)], unique=True)
+        # G2: 基于 doc_id 的唯一索引
+        await self.db.documents.create_index([("doc_id", 1)], unique=True)
+        # G3: 上传时间索引（用于按时间查询）
+        await self.db.documents.create_index([("upload_time", -1)])
+        # G4: 文件类型索引
+        await self.db.documents.create_index([("file_extension", 1)])
+
         logger.info("✅ Database (Mongo) connected & Indexes checked.")
 
         # 2. Redis 异步初始化
