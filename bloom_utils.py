@@ -6,12 +6,13 @@
 
 import pickle
 import logging
-import asyncio
+import time
 import threading
 from typing import Optional, List
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pybloom_live import ScalableBloomFilter, BloomFilter
 
-from redis_utils import redis_client
+from redis_utils import redis_client, redis_binary_client
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +45,7 @@ class RedisBloomFilter:
             use_scalable: 是否使用可扩展的布隆过滤器
             batch_size: 批量保存的阈值（达到此次数才保存到 Redis）
         """
-        self.redis = redis_client
+        self.redis = redis_binary_client
         self.key_name = key_name
         self.initial_capacity = initial_capacity
         self.error_rate = error_rate
@@ -60,8 +61,32 @@ class RedisBloomFilter:
         try:
             data = self.redis.get(self.key_name)
             if data:
-                self.bloom = pickle.loads(data)
-                logger.info(f"✅ 从 Redis 加载布隆过滤器: {self.key_name}")
+                # 确保数据是bytes类型（pickle需要bytes，不能是str）
+                if isinstance(data, str):
+                    logger.warning(f"⚠️ Redis返回了字符串类型，尝试编码为bytes: {self.key_name}")
+                    try:
+                        data = data.encode('utf-8')
+                    except Exception as encode_error:
+                        logger.error(f"❌ 字符串编码失败: {encode_error}")
+                        # 编码失败，清除损坏的数据并重新初始化
+                        self.redis.delete(self.key_name)
+                        data = None
+                
+                if data:
+                    self.bloom = pickle.loads(data)
+                    logger.info(f"✅ 从 Redis 加载布隆过滤器: {self.key_name}")
+                else:
+                    logger.warning(f"⚠️ Redis中的布隆过滤器数据损坏，重新初始化: {self.key_name}")
+                    if self.use_scalable:
+                        self.bloom = ScalableBloomFilter(
+                            initial_capacity=self.initial_capacity,
+                            error_rate=self.error_rate
+                        )
+                    else:
+                        self.bloom = BloomFilter(
+                            capacity=self.initial_capacity,
+                            error_rate=self.error_rate
+                        )
             else:
                 if self.use_scalable:
                     self.bloom = ScalableBloomFilter(
@@ -74,8 +99,25 @@ class RedisBloomFilter:
                         error_rate=self.error_rate
                     )
                 logger.info(f"✅ 创建新布隆过滤器: {self.key_name}")
+        except pickle.UnpicklingError as e:
+            logger.error(f"❌ Pickle反序列化失败: {e}")
+            logger.error(f"🗑️ 清除损坏的布隆过滤器数据: {self.key_name}")
+            self.redis.delete(self.key_name)
+            # 重新初始化
+            if self.use_scalable:
+                self.bloom = ScalableBloomFilter(
+                    initial_capacity=self.initial_capacity,
+                    error_rate=self.error_rate
+                )
+            else:
+                self.bloom = BloomFilter(
+                    capacity=self.initial_capacity,
+                    error_rate=self.error_rate
+                )
         except Exception as e:
             logger.error(f"❌ 加载布隆过滤器失败: {e}")
+            logger.error(f"🗑️ 清除损坏的布隆过滤器数据: {self.key_name}")
+            self.redis.delete(self.key_name)
             self.bloom = ScalableBloomFilter(
                 initial_capacity=self.initial_capacity,
                 error_rate=self.error_rate
@@ -240,7 +282,7 @@ def warmup_document_bloom_from_mongodb():
     global BLOOM_WARMUP_COMPLETED
     
     logger.info("🚀 开始预热 document_bloom (从MongoDB)...")
-    start_time = asyncio.get_event_loop().time()
+    start_time = time.time()
     
     try:
         # 使用同步的pymongo客户端（因为是在后台线程中执行）
@@ -272,7 +314,7 @@ def warmup_document_bloom_from_mongodb():
         # Warmup完成后保存到Redis
         document_bloom._save_bloom()
         
-        elapsed_time = asyncio.get_event_loop().time() - start_time
+        elapsed_time = time.time() - start_time
         logger.info(f"✅ document_bloom预热完成！")
         logger.info(f"   - 总文档数: {total_count}")
         logger.info(f"   - 成功添加: {added_count}")
@@ -306,7 +348,7 @@ def warmup_cache_keys_bloom_from_neo4j():
     global BLOOM_WARMUP_COMPLETED
     
     logger.info("🚀 开始预热 cache_keys_bloom (从Neo4j)...")
-    start_time = asyncio.get_event_loop().time()
+    start_time = time.time()
     
     try:
         from database import driver
@@ -345,7 +387,7 @@ def warmup_cache_keys_bloom_from_neo4j():
         # Warmup完成后保存到Redis
         cache_keys_bloom._save_bloom()
         
-        elapsed_time = asyncio.get_event_loop().time() - start_time
+        elapsed_time = time.time() - start_time
         logger.info(f"✅ cache_keys_bloom预热完成！")
         logger.info(f"   - 总用户数: {total_count}")
         logger.info(f"   - 成功添加: {added_count}")
@@ -368,41 +410,79 @@ def warmup_cache_keys_bloom_from_neo4j():
 
 def warmup_all_bloom_filters_async():
     """
-    异步预热所有布隆过滤器（在后台线程池中执行）
+    异步预热所有布隆过滤器（在后台线程池中并发执行）
     这个函数会在应用启动时调用，使用线程池避免阻塞启动
+    使用 concurrent.futures 实现并发预热，提高热身效率
     """
     global BLOOM_WARMUP_COMPLETED, BLOOM_WARMUP_LOCK
     
     def _warmup_task():
-        """Warmup任务的内部函数"""
+        """Warmup任务的内部函数（并发执行）"""
         logger.info("=" * 60)
-        logger.info("🔥 Bloom Filter Warmup 开始")
+        logger.info("🔥 Bloom Filter Warmup 开始（并发模式）")
         logger.info("=" * 60)
         
-        # 1. 预热 document_bloom
-        doc_result = warmup_document_bloom_from_mongodb()
+        # 使用 ThreadPoolExecutor 并发执行两个预热任务
+        start_time = time.time()
         
-        # 2. 预热 cache_keys_bloom
-        cache_result = warmup_cache_keys_bloom_from_neo4j()
+        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="bloom-warmup") as executor:
+            # 提交两个预热任务
+            future_doc = executor.submit(warmup_document_bloom_from_mongodb)
+            future_cache = executor.submit(warmup_cache_keys_bloom_from_neo4j)
+            
+            # 按完成顺序获取结果
+            results = {}
+            for future in as_completed([future_doc, future_cache]):
+                try:
+                    result = future.result()
+                    # 根据任务类型标记结果
+                    if 'file_hash' in str(result.get('error', '')) or 'document' in str(result):
+                        results['document'] = result
+                    else:
+                        results['cache'] = result
+                except Exception as e:
+                    logger.error(f"❌ Warmup任务异常: {e}")
+                    # 标记失败的结果
+                    if future == future_doc:
+                        results['document'] = {'success': False, 'error': str(e)}
+                    else:
+                        results['cache'] = {'success': False, 'error': str(e)}
+            
+            # 确保两个结果都存在（按提交顺序）
+            if 'document' not in results:
+                results['document'] = future_doc.result()
+            if 'cache' not in results:
+                results['cache'] = future_cache.result()
         
-        # 3. 标记Warmup完成
+        elapsed_time = time.time() - start_time
+        
+        # 标记Warmup完成
         with BLOOM_WARMUP_LOCK:
             BLOOM_WARMUP_COMPLETED = True
+        
+        # 输出结果
+        doc_result = results.get('document', {'success': False})
+        cache_result = results.get('cache', {'success': False})
         
         logger.info("=" * 60)
         logger.info("🎉 Bloom Filter Warmup 全部完成！")
         logger.info("=" * 60)
         logger.info(f"📊 文档布隆过滤器: {'✅' if doc_result.get('success') else '❌'}")
+        if doc_result.get('success'):
+            logger.info(f"   - 处理文档数: {doc_result.get('total_count', 0)}")
         logger.info(f"📊 缓存布隆过滤器: {'✅' if cache_result.get('success') else '❌'}")
-        logger.info(f"🔄 Warmup期间的业务请求将使用降级策略（直接查数据库）")
+        if cache_result.get('success'):
+            logger.info(f"   - 处理用户数: {cache_result.get('total_count', 0)}")
+        logger.info(f"⚡ 总耗时: {elapsed_time:.2f}秒（并发模式）")
+        logger.info("🔄 Warmup期间的业务请求已自动切换到布隆过滤器检查")
         logger.info("=" * 60)
     
     # 在后台线程中执行Warmup
     warmup_thread = threading.Thread(target=_warmup_task, daemon=True)
     warmup_thread.start()
     
-    logger.info("📢 Bloom Filter Warmup 已在后台启动...")
-    logger.info("⚠️  Warmup期间，布隆过滤器检查将被跳过，业务请求将直接查数据库")
+    logger.info("📢 Bloom Filter Warmup 已在后台启动（并发模式）...")
+    logger.info("⚠️  Warmup期间的两个任务将并发执行，互不阻塞")
 
 
 def is_warmup_completed() -> bool:

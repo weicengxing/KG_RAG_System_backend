@@ -17,5 +17,8 @@ aux
 logs/
 venv/
 .venv/
+venv311/
+.venv311/
+
 .idea/
 .vscode/

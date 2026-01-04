@@ -36,7 +36,7 @@ try:
         port=REDIS_PORT,
         db=REDIS_DB,
         password=REDIS_PASSWORD,
-        decode_responses=True  # 自动解码为字符串
+        decode_responses=True  # 自动解码为字符串（用于文本数据）
     )
     # 测试连接
     redis_client.ping()
@@ -44,6 +44,23 @@ try:
 except Exception as e:
     logger.error(f"❌ Redis 连接失败: {e}")
     redis_client = None
+
+# ==================== 二进制数据专用Redis连接 ====================
+
+try:
+    redis_binary_client = redis.Redis(
+        host=REDIS_HOST,
+        port=REDIS_PORT,
+        db=REDIS_DB,
+        password=REDIS_PASSWORD,
+        decode_responses=False  # 不解码，保持bytes格式（用于二进制数据如布隆过滤器）
+    )
+    # 测试连接
+    redis_binary_client.ping()
+    logger.info(f"✅ Redis 二进制客户端连接成功: {REDIS_HOST}:{REDIS_PORT}")
+except Exception as e:
+    logger.error(f"❌ Redis 二进制客户端连接失败: {e}")
+    redis_binary_client = None
 
 
 # ==================== 验证码前缀 ====================

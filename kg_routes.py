@@ -1,8 +1,9 @@
 """
 知识图谱RAG系统API路由
+支持 Kafka 异步处理 + SSE 实时进度推送
 """
 
-from fastapi import APIRouter, UploadFile, File, HTTPException, Request
+from fastapi import APIRouter, UploadFile, File, HTTPException, Request, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
@@ -11,9 +12,13 @@ import uuid
 import time
 import asyncio
 import hashlib
+import json
 from datetime import datetime
 from kg_service import kg_service
 from database_asy_mon_re import db_manager
+from task_manager import task_manager
+from confluent_kafka import Producer as KafkaProducer
+from auth_deps import get_current_user, get_current_user_from_query
 
 router = APIRouter(prefix="/api/kg", tags=["Knowledge Graph"])
 
@@ -74,7 +79,10 @@ async def save_document_metadata_async(
         # 如果保存失败，记录错误但不影响主流程
         print(f"❌ 保存文档元数据失败: {e}")
         import traceback
-        traceback.print_exc()
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"保存文档元数据到MongoDB失败: doc_id={doc_id}, error={str(e)}")
+        logger.exception(traceback.format_exc())
 
 
 # ==================== 请求/响应模型 ====================
@@ -496,3 +504,266 @@ async def list_documents():
             })
 
     return {"documents": documents}
+
+
+# ==================== ====================
+
+# Kafka 配置
+KAFKA_CONFIG = {
+    'bootstrap.servers': 'localhost:9092',
+    'client.id': 'kg-api-producer'
+}
+
+# 全局 Kafka Producer (延迟初始化)
+_kafka_producer = None
+
+def get_kafka_producer():
+    """获取 Kafka Producer 实例"""
+    global _kafka_producer
+    if _kafka_producer is None:
+        _kafka_producer = KafkaProducer(KAFKA_CONFIG)
+    return _kafka_producer
+
+
+# ==================== 异步文档处理（Kafka + SSE）====================
+
+@router.post("/upload-async")
+async def upload_document_async(
+    file: UploadFile = File(...),
+    current_user: str = Depends(get_current_user)
+):
+    """
+    异步上传文档（使用 Kafka 处理 + SSE 推送进度）
+    
+    流程：
+    1. 保存文件到本地
+    2. 发送任务到 Kafka
+    3. 立即返回 task_id
+    4. 前端通过 SSE 监听处理进度
+    
+    返回：
+    - task_id: 任务ID，用于 SSE 监听
+    - sse_url: SSE 连接地址
+    """
+    # 验证文件类型
+    allowed_extensions = {'.pdf', '.txt', '.docx', '.pptx'}
+    file_ext = os.path.splitext(file.filename)[1].lower()
+    if file_ext not in allowed_extensions:
+        raise HTTPException(status_code=400, detail="只支持 PDF、TXT、DOCX、PPTX 文件")
+
+    # 读取文件内容
+    try:
+        content = await file.read()
+        file_hash = hashlib.md5(content).hexdigest()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"文件读取失败: {str(e)}")
+
+    # 使用布隆过滤器检查重复
+    doc_exists, _ = is_document_uploaded_with_warmup(file_hash, fallback_to_db=True)
+    
+    if doc_exists:
+        return {
+            "error": "文档已存在",
+            "duplicate": True,
+            "file_hash": file_hash,
+            "message": "该文档已上传过，请勿重复上传"
+        }
+
+    # 生成任务 ID
+    task_id = str(uuid.uuid4())
+    doc_id = str(uuid.uuid4())
+
+    # 保存文件
+    file_path = os.path.join(UPLOAD_DIR, f"{doc_id}{file_ext}")
+    try:
+        with open(file_path, "wb") as f:
+            f.write(content)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"文件保存失败: {str(e)}")
+
+    # 标记文档已上传
+    mark_document_uploaded(file_hash, force_save=True)
+
+    # 创建任务记录
+    task_info = task_manager.create_task(task_id, current_user, "kb_build")
+
+    # 发送到 Kafka
+    producer = get_kafka_producer()
+    kafka_message = {
+        "task_id": task_id,
+        "doc_id": doc_id,
+        "user_id": current_user,
+        "filename": file.filename,
+        "file_path": file_path,
+        "file_size": len(content),
+        "file_hash": file_hash,
+        "created_at": time.time()
+    }
+
+    try:
+        producer.produce(
+            'doc-upload',
+            key=task_id.encode('utf-8'),
+            value=json.dumps(kafka_message).encode('utf-8'),
+            callback=lambda msg, err: None  # 可以添加回调处理发送结果
+        )
+        producer.flush()  # 等待消息发送完成
+    except Exception as e:
+        # Kafka 发送失败，删除文件并报错
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        task_manager.fail_task(task_id, f"Kafka 发送失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Kafka 发送失败: {str(e)}")
+
+    # 异步保存文档元数据（添加错误处理）
+    async def safe_save_metadata():
+        try:
+            await save_document_metadata_async(
+                doc_id=doc_id,
+                file_hash=file_hash,
+                filename=file.filename,
+                file_extension=file_ext,
+                file_size=len(content),
+                file_path=file_path,
+                text_length=0  # 初始为 0，处理后会更新
+            )
+        except Exception as e:
+            # 这里可以记录到日志系统，但不应抛出异常影响主流程
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"异步保存文档元数据失败: {str(e)}")
+    
+    asyncio.create_task(safe_save_metadata())
+
+    return {
+        "task_id": task_id,
+        "doc_id": doc_id,
+        "filename": file.filename,
+        "status": "processing",
+        "message": "文档已上传，正在后台处理中...",
+        "sse_url": f"/api/kg/task/stream/{task_id}",
+        "poll_url": f"/api/kg/task/{task_id}"
+    }
+
+
+@router.get("/task/stream/{task_id}")
+async def stream_task_progress(
+    task_id: str,
+    current_user: str = Depends(get_current_user_from_query)  # 从 URL query 参数获取 token
+):
+    """
+    SSE 流式接口：实时推送任务处理进度
+    
+    Args:
+        task_id: 任务ID
+    
+    Returns:
+        StreamingResponse: SSE 流
+    """
+    async def event_generator():
+        """SSE 事件生成器"""
+        last_progress = -1
+        
+        while True:
+            try:
+                # 从 Redis 获取任务状态
+                task_info = task_manager.get_task_status(task_id)
+                
+                if task_info is None:
+                    # 任务不存在，可能已过期
+                    yield f"data: {json.dumps({'type': 'error', 'message': '任务不存在或已过期'})}\n\n"
+                    break
+                
+                status = task_info.get("status")
+                progress = task_info.get("progress", 0)
+                stage = task_info.get("stage", "")
+                message = task_info.get("message", "")
+                
+                # 只有进度变化或状态变化时才推送
+                if progress != last_progress or status in ["completed", "failed"]:
+                    
+                    if status == "processing":
+                        payload = {
+                            "type": "progress",
+                            "progress": progress,
+                            "stage": stage,
+                            "message": message or "处理中..."
+                        }
+                        yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                    
+                    elif status == "completed":
+                        # 任务完成，推送完整结果
+                        result = task_info.get("result", {})
+                        payload = {
+                            "type": "completed",
+                            "progress": 100,
+                            "stage": "completed",
+                            "data": result
+                        }
+                        yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                        break
+                    
+                    elif status == "failed":
+                        # 任务失败，推送错误信息
+                        error_msg = task_info.get("error_message", "未知错误")
+                        payload = {
+                            "type": "error",
+                            "message": error_msg
+                        }
+                        yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                        break
+                    
+                    last_progress = progress
+                
+                # 检查任务是否超时（2 小时）
+                elapsed = time.time() - task_info.get("created_at", time.time())
+                if elapsed > 7200:
+                    yield f"data: {json.dumps({'type': 'error', 'message': '任务超时'})}\n\n"
+                    break
+                
+                # 等待 1 秒后再次检查
+                await asyncio.sleep(1)
+                
+            except Exception as e:
+                yield f"data: {json.dumps({'type': 'error', 'message': f'SSE 错误: {str(e)}'})}\n\n"
+                break
+    
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
+
+
+@router.get("/task/{task_id}")
+async def get_task_status_endpoint(task_id: str):
+    """
+    轮询接口：获取任务状态（用于 SSE 不可用时的降级方案）
+    
+    Args:
+        task_id: 任务ID
+    
+    Returns:
+        任务状态信息
+    """
+    task_info = task_manager.get_task_status(task_id)
+    
+    if task_info is None:
+        raise HTTPException(status_code=404, detail="任务不存在或已过期")
+    
+    # 返回去敏感信息的任务数据
+    return {
+        "task_id": task_info.get("task_id"),
+        "status": task_info.get("status"),
+        "progress": task_info.get("progress", 0),
+        "stage": task_info.get("stage", ""),
+        "message": task_info.get("message", ""),
+        "created_at": task_info.get("created_at"),
+        "updated_at": task_info.get("updated_at"),
+        "result": task_info.get("result") if task_info.get("status") == "completed" else None,
+        "error_message": task_info.get("error_message") if task_info.get("status") == "failed" else None
+    }
