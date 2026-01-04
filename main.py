@@ -252,6 +252,10 @@ async def jwt_auth_middleware(request: Request, call_next):
         "/auth/qr/status",
         "/auth/qr/confirm",
     ]
+    # 音乐相关的公开路径（图片可以直接访问）
+    music_public_prefixes = [
+        "/api/music/image",
+    ]
 
     # 检查是否是公开路径
     path = request.url.path
@@ -1164,10 +1168,26 @@ async def save_profile(data: ProfileUpdateSchema, request: Request):
 
 @app.on_event("startup")
 async def startup():
-    # 初始化 Mongo 和 Async Redis
+    """统一的启动事件：初始化所有服务和定时任务"""
+    
+    # 1. 初始化 Mongo 和 Async Redis
     await db_manager.connect()
     
-    # 启动布隆过滤器Warmup（后台异步执行）
+    # 2. 启动音乐热门趋势定时任务
+    try:
+        from task_manager import setup_music_trending_scheduler, start_scheduler
+        
+        # 设置音乐热门趋势定时任务
+        setup_music_trending_scheduler()
+        
+        # 启动调度器
+        start_scheduler()
+        
+        logging.info("✅ 音乐热门趋势定时任务已启动（每分钟执行一次）")
+    except Exception as e:
+        logging.warning(f"⚠️ 启动热门趋势定时任务失败（Kafka未连接或APScheduler未安装？）: {e}")
+    
+    # 3. 启动布隆过滤器Warmup（后台异步执行）
     try:
         from bloom_utils import warmup_all_bloom_filters_async
         warmup_all_bloom_filters_async()

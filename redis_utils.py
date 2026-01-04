@@ -821,16 +821,453 @@ def clear_conversation_history(conversation_id: str) -> bool:
         return False
 
 
-# 这个模块是一个生产级的Redis工具库，具有以下特点：
+# ==================== 音乐播放统计相关 ====================
 
-# 功能丰富：涵盖验证码、扫码登录、缓存管理、分布式锁等多个场景
-# 设计合理：
+MUSIC_PLAY_COUNT_PREFIX = "music:play_count:"
+MUSIC_USER_HISTORY_PREFIX = "music:user:history:"
+MUSIC_TRENDING_PREFIX = "music:trending:hot"
+MUSIC_LAST_PLAY_PREFIX = "music:last_play:"  # 歌曲最后播放时间
+MUSIC_UNIQUE_USERS_PREFIX = "music:unique_users:"  # 歌曲独立用户集合
+MUSIC_RANK_HISTORY_QUEUE = "music:rank_history_queue"  # 排名历史快照队列（使用 Redis List）
 
-# 使用前缀隔离不同类型的数据
-# 合理设置过期时间，避免内存泄漏
-# 延迟双删策略解决缓存一致性问题
+# 过期时间设置
+DAILY_EXPIRE_SECONDS = 30 * 24 * 60 * 60  # 30天
+WEEKLY_EXPIRE_SECONDS = 90 * 24 * 60 * 60  # 90天
+MONTHLY_EXPIRE_SECONDS = 365 * 24 * 60 * 60  # 365天
+USER_HISTORY_EXPIRE_SECONDS = 30 * 24 * 60 * 60  # 30天
+TRENDING_EXPIRE_SECONDS = 6 * 60 * 60  # 优化：增加到6小时，避免定时任务停止后数据过早消失
 
 
-# 健壮性强：完善的异常处理和日志记录
-# 性能优化：Pipeline批量操作、分布式锁自动续期
-# 易用性高：提供上下文管理器，代码简洁优雅
+def get_current_time_keys():
+    """获取当前时间的 key 后缀
+
+    Returns:
+        dict: 包含 daily, weekly, monthly 的 key 后缀
+    """
+    from datetime import datetime
+    now = datetime.now()
+    return {
+        "daily": now.strftime("%Y%m%d"),  # 例如: 20260104
+        "weekly": now.strftime("%Y%W"),   # 例如: 202601 (年份+周数)
+        "monthly": now.strftime("%Y%m")   # 例如: 202601
+    }
+
+
+def increment_music_play_count(song_id: int, username: str = None) -> bool:
+    """增加音乐播放计数（优化版：同时记录最后播放时间和独立用户）
+
+    Args:
+        song_id: 歌曲ID
+        username: 用户名（必须，用于统计独立播放用户）
+
+    Returns:
+        bool: 是否成功
+    
+    Raises:
+        ValueError: 当 username 为 None 时抛出异常（方案2修复）
+    """
+    # 验证 username 是否提供（方案2修复）
+    if username is None:
+        logger.error(f"❌ username 必须提供，用于统计独立播放用户: song_id={song_id}")
+        raise ValueError("username 必须提供，用于统计独立播放用户。请确保在播放时传入用户名。")
+    
+    if not redis_client:
+        logger.error("❌ Redis 未连接，无法增加播放计数")
+        return False
+
+    try:
+        time_keys = get_current_time_keys()
+        import time
+        current_timestamp = int(time.time() * 1000)
+        
+        pipe = redis_client.pipeline()
+
+        # 1. 全局播放计数（永久）
+        pipe.zincrby(f"{MUSIC_PLAY_COUNT_PREFIX}global", 1, str(song_id))
+
+        # 2. 每日播放计数（30天过期）
+        daily_key = f"{MUSIC_PLAY_COUNT_PREFIX}daily:{time_keys['daily']}"
+        pipe.zincrby(daily_key, 1, str(song_id))
+        pipe.expire(daily_key, DAILY_EXPIRE_SECONDS)
+
+        # 3. 每周播放计数（90天过期）
+        weekly_key = f"{MUSIC_PLAY_COUNT_PREFIX}weekly:{time_keys['weekly']}"
+        pipe.zincrby(weekly_key, 1, str(song_id))
+        pipe.expire(weekly_key, WEEKLY_EXPIRE_SECONDS)
+
+        # 4. 每月播放计数（365天过期）
+        monthly_key = f"{MUSIC_PLAY_COUNT_PREFIX}monthly:{time_keys['monthly']}"
+        pipe.zincrby(monthly_key, 1, str(song_id))
+        pipe.expire(monthly_key, MONTHLY_EXPIRE_SECONDS)
+
+        # 5. 记录歌曲最后播放时间（新优化）
+        last_play_key = f"{MUSIC_LAST_PLAY_PREFIX}{song_id}"
+        pipe.set(last_play_key, current_timestamp)
+        pipe.expire(last_play_key, DAILY_EXPIRE_SECONDS)
+
+        # 6. 用户播放历史和独立用户统计（如果提供了用户名）
+        if username:
+            user_history_key = f"{MUSIC_USER_HISTORY_PREFIX}{username}"
+            # 使用当前时间戳作为分数，以便按时间排序
+            pipe.zadd(user_history_key, {str(song_id): current_timestamp})
+            pipe.expire(user_history_key, USER_HISTORY_EXPIRE_SECONDS)
+
+            # 记录独立用户（使用Set，自动去重）
+            unique_users_key = f"{MUSIC_UNIQUE_USERS_PREFIX}{song_id}"
+            pipe.sadd(unique_users_key, username)
+            pipe.expire(unique_users_key, DAILY_EXPIRE_SECONDS)
+
+        # 执行所有命令
+        pipe.execute()
+
+        logger.info(f"✅ 播放计数已更新: song_id={song_id}, user={username}")
+        return True
+
+    except Exception as e:
+        logger.error(f"❌ 增加播放计数失败: song_id={song_id}, 错误: {e}")
+        return False
+
+
+def get_music_rankings(limit: int = 100, time_range: str = "all") -> list:
+    """获取音乐排行榜
+
+    Args:
+        limit: 返回的歌曲数量
+        time_range: 时间范围 (all/daily/weekly/monthly)
+
+    Returns:
+        list: 排行榜列表，格式为 [{"song_id": int, "play_count": int, "rank": int}, ...]
+    """
+    if not redis_client:
+        logger.error("❌ Redis 未连接，无法获取排行榜")
+        return []
+
+    try:
+        # 根据时间范围选择 key
+        if time_range == "daily":
+            time_keys = get_current_time_keys()
+            key = f"{MUSIC_PLAY_COUNT_PREFIX}daily:{time_keys['daily']}"
+        elif time_range == "weekly":
+            time_keys = get_current_time_keys()
+            key = f"{MUSIC_PLAY_COUNT_PREFIX}weekly:{time_keys['weekly']}"
+        elif time_range == "monthly":
+            time_keys = get_current_time_keys()
+            key = f"{MUSIC_PLAY_COUNT_PREFIX}monthly:{time_keys['monthly']}"
+        else:  # all
+            key = f"{MUSIC_PLAY_COUNT_PREFIX}global"
+
+        # 使用 ZREVRANGE 获取排行榜（从高到低）
+        # withscores=True 返回分数（播放次数）
+        result = redis_client.zrevrange(key, 0, limit - 1, withscores=True)
+
+        # 格式化结果
+        rankings = []
+        for rank, (song_id, play_count) in enumerate(result, start=1):
+            rankings.append({
+                "song_id": int(song_id),
+                "play_count": int(play_count),
+                "rank": rank
+            })
+
+        logger.info(f"✅ 获取排行榜成功: time_range={time_range}, count={len(rankings)}")
+        return rankings
+
+    except Exception as e:
+        logger.error(f"❌ 获取排行榜失败: time_range={time_range}, 错误: {e}")
+        return []
+
+
+def get_song_play_count(song_id: int, time_range: str = "all") -> int:
+    """获取单曲播放次数
+
+    Args:
+        song_id: 歌曲ID
+        time_range: 时间范围 (all/daily/weekly/monthly)
+
+    Returns:
+        int: 播放次数
+    """
+    if not redis_client:
+        logger.error("❌ Redis 未连接，无法获取播放次数")
+        return 0
+
+    try:
+        # 根据时间范围选择 key
+        if time_range == "daily":
+            time_keys = get_current_time_keys()
+            key = f"{MUSIC_PLAY_COUNT_PREFIX}daily:{time_keys['daily']}"
+        elif time_range == "weekly":
+            time_keys = get_current_time_keys()
+            key = f"{MUSIC_PLAY_COUNT_PREFIX}weekly:{time_keys['weekly']}"
+        elif time_range == "monthly":
+            time_keys = get_current_time_keys()
+            key = f"{MUSIC_PLAY_COUNT_PREFIX}monthly:{time_keys['monthly']}"
+        else:  # all
+            key = f"{MUSIC_PLAY_COUNT_PREFIX}global"
+
+        # 使用 ZSCORE 获取分数（播放次数）
+        score = redis_client.zscore(key, str(song_id))
+        play_count = int(score) if score else 0
+
+        return play_count
+
+    except Exception as e:
+        logger.error(f"❌ 获取播放次数失败: song_id={song_id}, 错误: {e}")
+        return 0
+
+
+def get_user_play_history(username: str, limit: int = 50) -> list:
+    """获取用户播放历史
+
+    Args:
+        username: 用户名
+        limit: 返回的歌曲数量
+
+    Returns:
+        list: 播放历史列表，格式为 [{"song_id": int, "played_at": int}, ...]
+    """
+    if not redis_client:
+        logger.error("❌ Redis 未连接，无法获取播放历史")
+        return []
+
+    try:
+        key = f"{MUSIC_USER_HISTORY_PREFIX}{username}"
+
+        # 使用 ZREVRANGE 获取最近播放（从新到旧）
+        result = redis_client.zrevrange(key, 0, limit - 1, withscores=True)
+
+        # 格式化结果
+        history = []
+        for song_id, timestamp in result:
+            history.append({
+                "song_id": int(song_id),
+                "played_at": int(timestamp)
+            })
+
+        logger.info(f"✅ 获取播放历史成功: username={username}, count={len(history)}")
+        return history
+
+    except Exception as e:
+        logger.error(f"❌ 获取播放历史失败: username={username}, 错误: {e}")
+        return []
+
+
+def get_trending_songs(limit: int = 20) -> list:
+    """获取实时热门趋势
+
+    Args:
+        limit: 返回的歌曲数量
+
+    Returns:
+        list: 热门歌曲列表，格式为 [{"song_id": int, "hotness": float, "rank": int}, ...]
+    """
+    if not redis_client:
+        logger.error("❌ Redis 未连接，无法获取热门趋势")
+        return []
+
+    try:
+        key = MUSIC_TRENDING_PREFIX
+
+        # 使用 ZREVRANGE 获取热门趋势（从高到低）
+        result = redis_client.zrevrange(key, 0, limit - 1, withscores=True)
+
+        # 格式化结果
+        trending = []
+        for rank, (song_id, hotness) in enumerate(result, start=1):
+            trending.append({
+                "song_id": int(song_id),
+                "hotness": float(hotness),
+                "rank": rank
+            })
+
+        logger.info(f"✅ 获取热门趋势成功: count={len(trending)}")
+        return trending
+
+    except Exception as e:
+        logger.error(f"❌ 获取热门趋势失败: 错误: {e}")
+        return []
+
+
+def update_trending_hotness(song_id: int, hotness: float) -> bool:
+    """更新歌曲的热门趋势分数（供 Flink/Kafka 调用）
+
+    Args:
+        song_id: 歌曲ID
+        hotness: 热度分数
+
+    Returns:
+        bool: 是否成功
+    """
+    if not redis_client:
+        logger.error("❌ Redis 未连接，无法更新热门趋势")
+        return False
+
+    try:
+        key = MUSIC_TRENDING_PREFIX
+
+        # 使用 ZADD 更新热度分数
+        redis_client.zadd(key, {str(song_id): hotness})
+        redis_client.expire(key, TRENDING_EXPIRE_SECONDS)
+
+        logger.info(f"✅ 热门趋势已更新: song_id={song_id}, hotness={hotness}")
+        return True
+
+    except Exception as e:
+        logger.error(f"❌ 更新热门趋势失败: song_id={song_id}, 错误: {e}")
+        return False
+
+
+def get_song_last_play_time(song_id: int) -> int:
+    """获取歌曲最后播放时间（新优化）
+
+    Args:
+        song_id: 歌曲ID
+
+    Returns:
+        int: 最后播放时间（毫秒时间戳），不存在返回0
+    """
+    if not redis_client:
+        logger.error("❌ Redis 未连接，无法获取最后播放时间")
+        return 0
+
+    try:
+        key = f"{MUSIC_LAST_PLAY_PREFIX}{song_id}"
+        timestamp = redis_client.get(key)
+        return int(timestamp) if timestamp else 0
+
+    except Exception as e:
+        logger.error(f"❌ 获取最后播放时间失败: song_id={song_id}, 错误: {e}")
+        return 0
+
+
+def get_song_unique_user_count(song_id: int) -> int:
+    """获取歌曲的独立用户数（新优化）
+
+    Args:
+        song_id: 歌曲ID
+
+    Returns:
+        int: 独立用户数
+    """
+    if not redis_client:
+        logger.error("❌ Redis 未连接，无法获取独立用户数")
+        return 0
+
+    try:
+        key = f"{MUSIC_UNIQUE_USERS_PREFIX}{song_id}"
+        count = redis_client.scard(key)
+        return count
+
+    except Exception as e:
+        logger.error(f"❌ 获取独立用户数失败: song_id={song_id}, 错误: {e}")
+        return 0
+
+
+def push_rank_snapshot_to_queue(snapshot: dict) -> bool:
+    """将排名快照推送到队列头部
+    
+    每5分钟执行一次，将当前排名快照推送到队列头部。
+    保持队列长度为300个元素（5分钟 * 300 = 25小时，足够对比1天前）。
+    超过长度时，使用 ltrim 自动截断尾部最旧的数据。
+    
+    Args:
+        snapshot: 快照数据，格式为 {"timestamp": int, "rankings": {song_id: rank}}
+                  - timestamp: 毫秒时间戳
+                  - rankings: 字典，key为song_id(str)，value为rank(int)
+    
+    Returns:
+        bool: 是否成功推送
+    """
+    if not redis_client:
+        logger.error("❌ Redis 未连接，无法推送排名快照")
+        return False
+
+    try:
+        import json
+        snapshot_json = json.dumps(snapshot, ensure_ascii=False)
+        
+        # 推送到队列头部
+        redis_client.lpush(MUSIC_RANK_HISTORY_QUEUE, snapshot_json)
+        
+        # 保持队列长度为 300（5分钟 * 300 = 25小时）
+        redis_client.ltrim(MUSIC_RANK_HISTORY_QUEUE, 0, 299)
+        
+        # 设置过期时间（30天）
+        redis_client.expire(MUSIC_RANK_HISTORY_QUEUE, 30 * 24 * 60 * 60)
+        
+        logger.info(f"✅ 排名快照已推送到队列: timestamp={snapshot['timestamp']}")
+        return True
+
+    except Exception as e:
+        logger.error(f"❌ 推送排名快照失败: {e}")
+        return False
+
+
+def get_rank_change(song_id: int, current_rank: int, compare_type: str = "update") -> dict:
+    """获取歌曲的排名变化
+    
+    从排名历史队列中获取指定时间段的排名，计算排名变化。
+    
+    Args:
+        song_id: 歌曲ID
+        current_rank: 当前排名
+        compare_type: 对比类型
+            - "update": 对比5分钟前（默认）
+            - "hourly": 对比1小时前
+            - "daily": 对比1天前
+    
+    Returns:
+        dict: 排名变化信息
+            {
+                "change": "up" | "down" | "same" | "new",
+                "value": int,        // 变化值（正数=上升，负数=下降）
+                "previous_rank": int // 上次排名
+            }
+    """
+    if not redis_client:
+        logger.warning("⚠️ Redis 未连接，返回默认排名变化")
+        return {"change": "same", "value": 0, "previous_rank": current_rank}
+
+    try:
+        import json
+        
+        # 根据对比类型确定队列索引
+        # 索引0是最新的快照，索引1是5分钟前的快照
+        if compare_type == "hourly":
+            index = 12  # 12个5分钟周期 = 1小时
+        elif compare_type == "daily":
+            index = 288  # 288个5分钟周期 = 24小时
+        else:  # update
+            index = 1  # 5分钟前
+        
+        # 从队列获取历史快照
+        snapshot_list = redis_client.lrange(MUSIC_RANK_HISTORY_QUEUE, index, index)
+        
+        if not snapshot_list:
+            # 没有历史数据，这是新歌曲
+            return {"change": "new", "value": 0, "previous_rank": None}
+        
+        # 解析快照
+        snapshot = json.loads(snapshot_list[0])
+        previous_rank = snapshot["rankings"].get(str(song_id))
+        
+        if previous_rank is None:
+            # 歌曲不在上次排名中，这是新上榜的歌曲
+            return {"change": "new", "value": 0, "previous_rank": None}
+        
+        if previous_rank == current_rank:
+            # 排名没有变化
+            return {"change": "same", "value": 0, "previous_rank": previous_rank}
+        else:
+            # 计算排名变化
+            rank_change = previous_rank - current_rank
+            change_type = "up" if rank_change > 0 else "down"
+            return {
+                "change": change_type,
+                "value": rank_change,
+                "previous_rank": previous_rank
+            }
+
+    except Exception as e:
+        logger.error(f"❌ 获取排名变化失败: song_id={song_id}, {e}")
+        return {"change": "same", "value": 0, "previous_rank": current_rank}

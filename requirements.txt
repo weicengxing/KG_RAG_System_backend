@@ -94,5 +94,7 @@ sentence-transformers>=2.0.0
 # Kafka
 confluent-kafka==2.3.0
 
+# Task Scheduling
+apscheduler>=3.10.0
 # Server Runtime
 #uvicorn[standard]==0.22.0

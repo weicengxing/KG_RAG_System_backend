@@ -8,6 +8,7 @@ import base64
 import json
 import logging
 import asyncio
+import time
 from pathlib import Path
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import FileResponse, StreamingResponse
@@ -23,7 +24,7 @@ class BatchImageRequest(BaseModel):
 logger = logging.getLogger(__name__)
 
 # 创建路由
-router = APIRouter(prefix="/music", tags=["音乐"])
+router = APIRouter(prefix="/api/music", tags=["音乐"])
 
 # 音乐文件目录
 MUSIC_DIR = Path("D:/高铁2/gao/public/music")
@@ -329,15 +330,27 @@ async def play_song(
     current_user: str = Depends(get_current_user)
 ):
     """播放指定歌曲
-    
+
     Args:
         song_id: 歌曲ID
         current_user: 当前认证用户
-        
+
     Returns:
         StreamingResponse: 音频文件流
     """
     try:
+        # 同步更新 Redis 播放计数（新增）
+        from redis_utils import increment_music_play_count
+        increment_music_play_count(song_id, current_user)
+
+        # 异步发送播放事件到 Kafka（新增）
+        try:
+            from kafka_music_producer import send_play_event
+            send_play_event(song_id, current_user)
+        except Exception as kafka_err:
+            # Kafka 发送失败不影响播放功能
+            logger.warning(f"发送 Kafka 事件失败: {kafka_err}")
+
         # 从Neo4j获取歌曲信息
         songs = get_songs_from_neo4j()
         song = next((s for s in songs if s["id"] == song_id), None)
@@ -657,3 +670,278 @@ async def get_batch_images(
 # 使用流式，LRU，连接池（前端），边查边发，异步，队列，生产者消费者。
 # 以后的改进点，可以引入CDN，懒加载，热点音乐Zset排序，一段时间清空一次重排，一是可以避免数值无限增长，而是实时反映热点。
 # 另外可以考虑引入Elasticsearch等搜索引擎，提升搜索性能
+
+
+# ==================== 音乐排行榜相关 API ====================
+
+@router.get("/rankings")
+async def get_music_rankings(
+    current_user: str = Depends(get_current_user),
+    limit: int = 100,
+    time_range: str = "all",
+    genre: str = None
+):
+    """获取音乐排行榜
+
+    Args:
+        current_user: 当前认证用户
+        limit: 返回的歌曲数量，默认100
+        time_range: 时间范围 (all/daily/weekly/monthly)，默认all
+        genre: 音乐分类筛选（可选）
+
+    Returns:
+        dict: 包含排行榜数据的响应
+    """
+    try:
+        from redis_utils import get_music_rankings, get_song_play_count, get_rank_change
+
+        # 从 Redis 获取排行榜
+        rankings = get_music_rankings(limit, time_range)
+
+        if not rankings:
+            return {
+                "success": True,
+                "rankings": [],
+                "total": 0,
+                "time_range": time_range
+            }
+
+        # 从 Neo4j 获取歌曲详细信息
+        all_songs = get_songs_from_neo4j()
+        song_dict = {song["id"]: song for song in all_songs}
+
+        if not rankings:
+            return {
+                "success": True,
+                "rankings": [],
+                "total": 0,
+                "time_range": time_range
+            }
+
+        # 合并排行榜数据和歌曲信息
+        enriched_rankings = []
+        for rank_item in rankings:
+            song_id = rank_item["song_id"]
+            song = song_dict.get(song_id)
+
+            if song:
+                # 如果指定了 genre，进行筛选
+                if genre and song.get("genre") != genre:
+                    continue
+
+                # 计算所有时间段的排名变化
+                rank_changes = {
+                    "update": get_rank_change(song_id, rank_item["rank"], "update"),
+                    "hourly": get_rank_change(song_id, rank_item["rank"], "hourly"),
+                    "daily": get_rank_change(song_id, rank_item["rank"], "daily")
+                }
+
+                enriched_rankings.append({
+                    "rank": rank_item["rank"],
+                    "song_id": song_id,
+                    "title": song.get("title", ""),
+                    "artist": song.get("artist", ""),
+                    "album": song.get("album", ""),
+                    "duration": song.get("duration", 0),
+                    "cover_image": song.get("cover_image", ""),
+                    "play_count": rank_item["play_count"],
+                    "rank_changes": rank_changes
+                })
+
+        return {
+            "success": True,
+            "rankings": enriched_rankings,
+            "total": len(enriched_rankings),
+            "time_range": time_range,
+            "genre": genre
+        }
+
+    except Exception as e:
+        logger.error(f"获取排行榜失败: {e}")
+        raise HTTPException(status_code=500, detail="获取排行榜失败")
+
+
+@router.get("/trending")
+async def get_trending_songs(
+    current_user: str = Depends(get_current_user),
+    page: int = 1,
+    page_size: int = 20
+):
+    """获取实时热门趋势（支持分页）
+
+    Args:
+        current_user: 当前认证用户
+        page: 页码，从1开始，默认1
+        page_size: 每页数量，默认20
+
+    Returns:
+        dict: 包含热门趋势数据的响应
+    """
+    try:
+        from redis_utils import get_trending_songs as get_trending
+
+        # 计算需要获取的总数（为了支持分页，获取更多数据）
+        # 例如：第2页，每页20条，需要获取前40条
+        total_needed = page * page_size
+        
+        # 从 Redis 获取热门趋势
+        trending = get_trending(total_needed)
+
+        if not trending:
+            # 如果没有热门趋势数据，返回播放量最高的歌曲
+            from redis_utils import get_music_rankings
+            trending = get_music_rankings(total_needed, "daily")
+            # 转换格式
+            trending = [
+                {"song_id": item["song_id"], "hotness": float(item["play_count"]), "rank": item["rank"]}
+                for item in trending
+            ]
+
+        # 从 Neo4j 获取歌曲详细信息
+        all_songs = get_songs_from_neo4j()
+        song_dict = {song["id"]: song for song in all_songs}
+
+        # 合并热门趋势数据和歌曲信息
+        enriched_trending = []
+        for trend_item in trending:
+            song_id = trend_item["song_id"]
+            song = song_dict.get(song_id)
+
+            if song:
+                enriched_trending.append({
+                    "rank": trend_item["rank"],
+                    "song_id": song_id,
+                    "title": song.get("title", ""),
+                    "artist": song.get("artist", ""),
+                    "album": song.get("album", ""),
+                    "cover_image": song.get("cover_image", ""),
+                    "hotness": trend_item["hotness"]
+                })
+
+        # 分页处理
+        total = len(enriched_trending)
+        start_index = (page - 1) * page_size
+        end_index = start_index + page_size
+        paginated_trending = enriched_trending[start_index:end_index]
+        
+        # 计算是否有下一页
+        has_next = end_index < total
+
+        return {
+            "success": True,
+            "songs": paginated_trending,  # 修复：改为 "songs" 以匹配前端期望
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "has_next": has_next
+        }
+
+    except Exception as e:
+        logger.error(f"获取热门趋势失败: {e}")
+        raise HTTPException(status_code=500, detail="获取热门趋势失败")
+
+
+@router.get("/play-history")
+async def get_play_history(
+    current_user: str = Depends(get_current_user),
+    limit: int = 50
+):
+    """获取用户播放历史
+
+    Args:
+        current_user: 当前认证用户
+        limit: 返回的歌曲数量，默认50
+
+    Returns:
+        dict: 包含播放历史数据的响应
+    """
+    try:
+        from redis_utils import get_user_play_history
+
+        # 从 Redis 获取播放历史
+        history = get_user_play_history(current_user, limit)
+
+        if not history:
+            return {
+                "success": True,
+                "history": [],
+                "total": 0
+            }
+
+        # 从 Neo4j 获取歌曲详细信息
+        all_songs = get_songs_from_neo4j()
+        song_dict = {song["id"]: song for song in all_songs}
+
+        # 合并播放历史数据和歌曲信息
+        enriched_history = []
+        for history_item in history:
+            song_id = history_item["song_id"]
+            song = song_dict.get(song_id)
+
+            if song:
+                enriched_history.append({
+                    "song_id": song_id,
+                    "title": song.get("title", ""),
+                    "artist": song.get("artist", ""),
+                    "album": song.get("album", ""),
+                    "duration": song.get("duration", 0),
+                    "cover_image": song.get("cover_image", ""),
+                    "played_at": history_item["played_at"]
+                })
+
+        return {
+            "success": True,
+            "history": enriched_history,
+            "total": len(enriched_history)
+        }
+
+    except Exception as e:
+        logger.error(f"获取播放历史失败: {e}")
+        raise HTTPException(status_code=500, detail="获取播放历史失败")
+
+
+@router.post("/play-event")
+async def post_play_event(
+    event_data: Dict,
+    current_user: str = Depends(get_current_user)
+):
+    """接收前端发送的播放事件并发送到Kafka
+
+    Args:
+        event_data: 播放事件数据，包含 song_id 和 timestamp
+        current_user: 当前认证用户
+
+    Returns:
+        dict: 操作结果
+    """
+    try:
+        # 验证事件数据
+        if 'song_id' not in event_data:
+            raise HTTPException(status_code=400, detail="缺少 song_id 参数")
+        
+        song_id = event_data['song_id']
+        timestamp = event_data.get('timestamp', int(time.time() * 1000))
+        
+        # 增加播放计数到 Redis
+        from redis_utils import increment_music_play_count
+        increment_music_play_count(song_id, current_user)
+        
+        # 发送到 Kafka
+        try:
+            from kafka_music_producer import send_play_event
+            send_play_event(song_id, current_user, timestamp)
+            logger.info(f"✅ 播放事件已发送到 Kafka: song_id={song_id}, user={current_user}")
+        except Exception as kafka_err:
+            # Kafka 发送失败不影响播放功能
+            logger.warning(f"⚠️ 发送 Kafka 事件失败: {kafka_err}")
+        
+        return {
+            "success": True,
+            "message": "播放事件已记录"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"处理播放事件失败: {e}")
+        raise HTTPException(status_code=500, detail="处理播放事件失败")

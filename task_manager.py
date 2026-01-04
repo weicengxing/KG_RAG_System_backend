@@ -8,12 +8,95 @@ import time
 import logging
 from typing import Optional, Dict, Any
 from redis import Redis
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.interval import IntervalTrigger
 
 # 从 config.py 导入 Redis 配置
 from config import REDIS_HOST, REDIS_PORT, REDIS_PASSWORD, REDIS_DB
 
 # 配置日志
 logger = logging.getLogger(__name__)
+
+# ==================== 音乐热门趋势定时任务 ====================
+
+def update_music_trending_task():
+    """定时任务：消费 Kafka 播放事件并更新热门趋势
+    每分钟执行一次
+    """
+    try:
+        from kafka_music_consumer import consume_play_events, update_trending_to_redis, clean_old_cache
+        
+        # 消费播放事件（批量消费）
+        consumed = consume_play_events(max_messages=100, timeout_seconds=5.0)
+        
+        if consumed > 0:
+            logger.info(f"✅ 定时任务：消费了 {consumed} 条播放事件")
+            # 更新热门趋势到 Redis
+            update_trending_to_redis()
+            # 定期清理旧缓存
+            clean_old_cache()
+        else:
+            logger.debug("ℹ️ 定时任务：没有新的播放事件")
+            
+    except Exception as e:
+        logger.error(f"❌ 定时任务失败: {e}", exc_info=True)
+
+
+# ==================== 定时任务调度器 ====================
+
+# 创建后台调度器
+scheduler = BackgroundScheduler(timezone='Asia/Shanghai', job_defaults={'coalesce': True, 'max_instances': 1})
+
+
+def setup_music_trending_scheduler():
+    """设置音乐热门趋势定时任务
+    
+    定时任务规则：
+    - 每分钟消费一次 Kafka 播放事件
+    - 每5分钟更新一次热门趋势到 Redis
+    """
+    try:
+        # 添加定时任务：每分钟执行一次
+        scheduler.add_job(
+            func=update_music_trending_task,
+            trigger=IntervalTrigger(minutes=1),
+            id='music_trending_update',
+            name='更新音乐热门趋势',
+            replace_existing=True
+        )
+        
+        logger.info("✅ 音乐热门趋势定时任务已设置（每分钟执行一次）")
+        
+    except Exception as e:
+        logger.error(f"❌ 设置定时任务失败: {e}")
+
+
+def start_scheduler():
+    """启动定时任务调度器"""
+    if not scheduler.running:
+        scheduler.start()
+        logger.info("✅ 定时任务调度器已启动")
+    else:
+        logger.warning("⚠️ 定时任务调度器已在运行")
+
+
+def stop_scheduler():
+    """停止定时任务调度器"""
+    if scheduler.running:
+        scheduler.shutdown(wait=True)
+        logger.info("✅ 定时任务调度器已停止")
+    else:
+        logger.info("ℹ️ 定时任务调度器未运行")
+
+
+# 全局定时任务更新时间
+last_trending_update = None
+
+
+def get_last_trending_update():
+    """获取最后一次热门趋势更新时间"""
+    return last_trending_update
+
 
 class TaskManager:
     """任务状态管理器"""
@@ -211,3 +294,8 @@ class TaskManager:
 
 # 全局实例
 task_manager = TaskManager()
+
+
+# 优雅关闭处理
+import atexit
+atexit.register(stop_scheduler)
