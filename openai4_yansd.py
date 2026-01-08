@@ -1,15 +1,21 @@
-from sambanova import SambaNova
+from openai import OpenAI
 
-client = SambaNova(
-    api_key="<YOUR API KEY>",
-    base_url="https://api.sambanova.ai/v1",
+client = OpenAI(
+  base_url = "https://integrate.api.nvidia.com/v1",
+  api_key = "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"
 )
 
-response = client.chat.completions.create(
-    model="ALLaM-7B-Instruct-preview",
-    messages=[{"role":"system","content":"You are a helpful assistant"},{"role":"user","content":"Hello!"}],
-    temperature=0.1,
-    top_p=0.1
+completion = client.chat.completions.create(
+  model="z-ai/glm4.7",
+  messages=[{"role":"user","content":"你是谁什么版本。"}],
+  temperature=1,
+  top_p=0.95,
+  max_tokens=8192,
+  stream=True
 )
 
-print(response.choices[0].message.content)
+for chunk in completion:
+  if chunk.choices[0].delta.content is not None:
+    print(chunk.choices[0].delta.content, end="")
+  
+

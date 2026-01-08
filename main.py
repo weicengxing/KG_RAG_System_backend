@@ -1170,10 +1170,10 @@ async def save_profile(data: ProfileUpdateSchema, request: Request):
 async def startup():
     """统一的启动事件：初始化所有服务和定时任务"""
     
-    # 1. 初始化 Mongo 和 Async Redis
+    #  初始化 Mongo 和 Async Redis
     await db_manager.connect()
     
-    # 2. 启动音乐热门趋势定时任务
+    # 2. 启动音乐热门趋势定时任务（Kafka消费）
     try:
         from task_manager import setup_music_trending_scheduler, start_scheduler
         
@@ -1183,11 +1183,22 @@ async def startup():
         # 启动调度器
         start_scheduler()
         
-        logging.info("✅ 音乐热门趋势定时任务已启动（每分钟执行一次）")
+        logging.info("✅ 音乐热门趋势定时任务已启动（每分钟消费Kafka事件）")
     except Exception as e:
         logging.warning(f"⚠️ 启动热门趋势定时任务失败（Kafka未连接或APScheduler未安装？）: {e}")
     
-    # 3. 启动布隆过滤器Warmup（后台异步执行）
+    # 3. 启动音乐热门趋势调度器（带排名快照推送）
+    try:
+        from music_trending import start_trending_scheduler
+        
+        # 启动调度器（每1分钟衰减热度 + 每5分钟全量更新并推送排名快照）
+        start_trending_scheduler()
+        
+        logging.info("✅ 音乐热门趋势调度器已启动（带排名快照，每5分钟更新）")
+    except Exception as e:
+        logging.warning(f"⚠️ 启动音乐热门趋势调度器失败: {e}")
+    
+    # 4. 启动布隆过滤器Warmup（后台异步执行）
     try:
         from bloom_utils import warmup_all_bloom_filters_async
         warmup_all_bloom_filters_async()
@@ -1211,11 +1222,49 @@ async def startup():
         logger.error(f"   - 错误详情: {type(e).__name__}: {e}")
         logger.error("   - 导入堆栈:", exc_info=True)
         logger.warning("⚠️  Warmup未启动，但应用仍可正常运行（将使用降级策略）")
+    
+    # 5. 启动 Spark 批处理定时任务调度器
+    try:
+        from spark_scheduler import init_spark_scheduler
+        
+        # 初始化并启动 Spark Scheduler
+        spark_scheduler = init_spark_scheduler()
+        
+        logging.info("✅ Spark 批处理定时任务调度器已启动")
+        logging.info("📅 已配置的 Spark 定时任务：")
+        logging.info("   - 每日统计作业: 每天 02:00")
+        logging.info("   - 每周统计作业: 每周一 02:00")
+        logging.info("   - 每月统计作业: 每月1日 02:00")
+        logging.info("   - 用户偏好分析: 每天 03:00")
+        
+    except ImportError as e:
+        # 导入失败（缺少依赖）
+        logger.error("❌ [MONITOR] Spark Scheduler 启动失败: IMPORT_ERROR")
+        logger.error(f"   - 错误详情: {e}")
+        logger.error("   - 影响: Spark 批处理功能不可用（日榜/周榜/月榜/用户偏好分析）")
+        logger.warning("⚠️  应用仍可正常运行，但批处理功能将不可用")
+        
+    except Exception as e:
+        # 其他异常
+        logger.error("❌ [MONITOR] Spark Scheduler 启动失败: UNKNOWN_ERROR")
+        logger.error(f"   - 错误详情: {type(e).__name__}: {e}")
+        logger.error("   - 导入堆栈:", exc_info=True)
+        logger.warning("⚠️  Spark Scheduler未启动，但应用仍可正常运行")
 
 @app.on_event("shutdown")
 async def shutdown():
-    # 释放资源
+    # 释放 Mongo 和 Async Redis 连接
     await db_manager.close()
+    
+    # 关闭 Spark 批处理定时任务调度器
+    try:
+        from spark_scheduler import shutdown_spark_scheduler
+        shutdown_spark_scheduler()
+        logging.info("✅ Spark Scheduler 已关闭")
+    except ImportError:
+        pass  # 未安装 PySpark,忽略
+    except Exception as e:
+        logging.error(f"❌ 关闭 Spark Scheduler 失败: {e}")
 
 if __name__ == "__main__":
     import uvicorn

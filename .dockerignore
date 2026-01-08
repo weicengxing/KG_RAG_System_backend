@@ -1,0 +1,42 @@
+# --- virtual env ---
+venv/
+.venv/
+env/
+ENV/
+
+# --- python cache ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# --- git ---
+.git/
+.gitignore
+
+# --- ide ---
+.vscode/
+.idea/
+
+# --- logs / cache ---
+*.log
+logs/
+.cache/
+tmp/
+
+# --- large data / models / vector db ---
+data/
+datasets/
+models/
+weights/
+storage/
+chroma/
+faiss_index/
+*.bin
+*.pt
+*.pth
+*.onnx
+*.gguf
+*.sqlite
+*.db
+*.index

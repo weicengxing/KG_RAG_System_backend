@@ -89,12 +89,19 @@ pypdf2>=3.0.0
 tiktoken>=0.5.0
 langchain-openai>=0.1.0
 langchain-community>=0.0.1
-sentence-transformers>=2.0.0
+# sentence-transformers>=2.0.0
 
 # Kafka
 confluent-kafka==2.3.0
 
 # Task Scheduling
 apscheduler>=3.10.0
+
+# Flink Stream Processing
+apache-flink==1.18.1
+
+# Spark Batch Processing
+pyspark==3.4.1
+
 # Server Runtime
 #uvicorn[standard]==0.22.0
