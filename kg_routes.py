@@ -3,7 +3,7 @@
 支持 Kafka 异步处理 + SSE 实时进度推送
 """
 
-from fastapi import APIRouter, UploadFile, File, HTTPException, Request, Depends
+from fastapi import APIRouter, UploadFile, File, HTTPException, Request, Depends, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
@@ -130,13 +130,30 @@ async def upload_document(file: UploadFile = File(...)):
     )
     
     if doc_exists:
-        # 如果使用了降级查询，说明已经从MongoDB确认了存在
-        # 如果没有使用降级，说明布隆过滤器确认存在（可能有误判，但这是可接受的）
+        # 从 MongoDB 查询已存在文档的详细信息
+        existing_doc = await db_manager.db.documents.find_one({"file_hash": file_hash})
+        
+        # 格式化返回数据
+        existing_doc_data = None
+        if existing_doc:
+            # 转换 ObjectId 为字符串，并格式化时间
+            existing_doc_data = {
+                "doc_id": existing_doc.get("doc_id"),
+                "filename": existing_doc.get("filename"),
+                "file_hash": existing_doc.get("file_hash"),
+                "file_extension": existing_doc.get("file_extension"),
+                "file_size": existing_doc.get("file_size"),
+                "text_length": existing_doc.get("text_length"),
+                "upload_time": existing_doc.get("upload_time").isoformat() if existing_doc.get("upload_time") else None,
+                "status": existing_doc.get("status", "unknown")
+            }
+        
         return {
             "error": "文档已存在",
             "duplicate": True,
             "file_hash": file_hash,
-            "message": "该文档已上传过，请勿重复上传"
+            "existing_doc": existing_doc_data,
+            "message": "该文档已上传过，是否查看已有知识图谱？"
         }
 
     # 生成文档ID
@@ -189,11 +206,57 @@ async def upload_document(file: UploadFile = File(...)):
 # ==================== 文本分块 ====================
 
 @router.post("/split-text")
-async def split_text(doc_id: str):
+async def split_text(
+    request: Request,
+    current_user: str = Depends(get_current_user)
+):
     """
     文本分块
     返回：分块列表
+    
+    Args:
+        request: FastAPI 请求对象
+        current_user: 当前用户（从 JWT token 获取）
     """
+    print(f"[split-text] 🔵 收到请求 | 当前用户: {current_user}")
+    
+    try:
+        # 打印请求头的 Content-Type
+        content_type = request.headers.get("content-type", "")
+        print(f"[split-text] 📋 Content-Type: {content_type}")
+        
+        # 打印原始请求体（仅打印前500字符以避免日志过长）
+        body_bytes = await request.body()
+        print(f"[split-text] 📦 请求体原始字节 (前500字符): {body_bytes[:500]}")
+        
+        # 尝试解析 JSON
+        try:
+            body = await request.json()
+            print(f"[split-text] ✅ JSON 解析成功: {body}")
+        except Exception as json_error:
+            print(f"[split-text] ❌ JSON 解析失败: {json_error}")
+            print(f"[split-text] ❌ 原始请求体内容: {body_bytes.decode('utf-8', errors='replace')}")
+            raise HTTPException(
+                status_code=400, 
+                detail=f"JSON 解析失败: {str(json_error)}"
+            )
+        
+        doc_id = body.get("doc_id")
+        print(f"[split-text] 📄 获取到的 doc_id: {doc_id}")
+        
+        if not doc_id:
+            print(f"[split-text] ⚠️ doc_id 为空")
+            raise HTTPException(status_code=400, detail="doc_id 不能为空")
+            
+    except HTTPException:
+        # 重新抛出 HTTPException
+        raise
+    except Exception as e:
+        print(f"[split-text] ❌ 未知错误: {e}")
+        import traceback
+        print(f"[split-text] ❌ 错误堆栈: {traceback.format_exc()}")
+        raise HTTPException(status_code=400, detail=f"请求处理失败: {str(e)}")
+    
     # 查找文档文件
     file_path = None
     for ext in ['.pdf', '.txt', '.docx', '.pptx']:
@@ -225,11 +288,27 @@ async def split_text(doc_id: str):
 # ==================== 实体关系抽取 ====================
 
 @router.post("/extract-entities")
-async def extract_entities(doc_id: str):
+async def extract_entities(
+    request: Request,
+    current_user: str = Depends(get_current_user)
+):
     """
     实体关系抽取（使用LLM）
     返回：三元组列表（流式返回每个块的处理结果）
+    
+    Args:
+        request: FastAPI 请求对象
+        current_user: 当前用户（从 JWT token 获取）
     """
+    try:
+        body = await request.json()
+        doc_id = body.get("doc_id")
+        
+        if not doc_id:
+            raise HTTPException(status_code=400, detail="doc_id 不能为空")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail="请求体格式错误")
+    
     # 查找文档文件
     file_path = None
     for ext in ['.pdf', '.txt', '.docx', '.pptx']:
@@ -262,7 +341,10 @@ async def extract_entities(doc_id: str):
 # ==================== 图谱构建 ====================
 
 @router.post("/build-graph")
-async def build_graph(doc_id: str):
+async def build_graph(
+    request: Request,
+    current_user: str = Depends(get_current_user)
+):
     """
     构建知识图谱（完整流程）
     1. 解析文档
@@ -270,7 +352,20 @@ async def build_graph(doc_id: str):
     3. 实体关系抽取
     4. 保存到Neo4j
     5. 保存到ChromaDB（向量存储）
+    
+    Args:
+        request: FastAPI 请求对象
+        current_user: 当前用户（从 JWT token 获取）
     """
+    try:
+        body = await request.json()
+        doc_id = body.get("doc_id")
+        
+        if not doc_id:
+            raise HTTPException(status_code=400, detail="doc_id 不能为空")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail="请求体格式错误")
+    
     # 查找文档文件
     file_path = None
     for ext in ['.pdf', '.txt', '.docx', '.pptx']:
@@ -316,9 +411,16 @@ async def build_graph(doc_id: str):
 # ==================== 图谱查询 ====================
 
 @router.post("/get-graph")
-async def get_graph(request: GraphQueryRequest):
+async def get_graph(
+    request: GraphQueryRequest,
+    current_user: str = Depends(get_current_user)
+):
     """
     获取图谱数据（用于前端可视化）
+    
+    Args:
+        request: 图谱查询请求
+        current_user: 当前用户（从 JWT token 获取）
     """
     try:
         graph_data = kg_service.get_graph_data(

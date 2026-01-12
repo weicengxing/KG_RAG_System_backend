@@ -10,6 +10,7 @@ import uuid
 from typing import Optional
 from confluent_kafka import Producer, KafkaException, KafkaError
 from confluent_kafka.admin import AdminClient, NewTopic
+from trace_utils import get_trace_id, get_log_prefix
 
 # 配置日志
 logging.basicConfig(
@@ -129,11 +130,15 @@ def send_play_event(song_id: int, user_id: str, event_type: str = "play") -> boo
     producer = get_kafka_producer()
 
     if producer is None:
-        logger.warning("⚠️ Kafka 未连接，跳过事件发送")
+        prefix = get_log_prefix()
+        logger.warning(f"{prefix} ⚠️ Kafka 未连接，跳过事件发送")
         return False
 
+    # 获取当前上下文的TraceID
+    trace_id = get_trace_id()
+
     try:
-        # 构建事件数据
+        # 构建事件数据（包含TraceID）
         event = {
             "event_id": str(uuid.uuid4()),
             "song_id": song_id,
@@ -141,6 +146,10 @@ def send_play_event(song_id: int, user_id: str, event_type: str = "play") -> boo
             "timestamp": int(time.time() * 1000),  # 毫秒时间戳
             "event_type": event_type
         }
+        
+        # 如果有TraceID，添加到事件中
+        if trace_id:
+            event["trace_id"] = trace_id
 
         # 序列化为 JSON
         event_json = json.dumps(event, ensure_ascii=False)
@@ -156,11 +165,13 @@ def send_play_event(song_id: int, user_id: str, event_type: str = "play") -> boo
         # 触发消息发送（非阻塞）
         producer.poll(0)
 
-        logger.info(f"📤 播放事件已发送: song_id={song_id}, user={user_id}")
+        prefix = get_log_prefix()
+        logger.info(f"{prefix} 📤 播放事件已发送: song_id={song_id}, user={user_id}")
         return True
 
     except Exception as e:
-        logger.error(f"❌ 发送播放事件失败: song_id={song_id}, 错误: {e}")
+        prefix = get_log_prefix()
+        logger.error(f"{prefix} ❌ 发送播放事件失败: song_id={song_id}, 错误: {e}")
         return False
 
 

@@ -6,6 +6,7 @@
 import os
 import json
 import asyncio
+import logging
 from typing import List, Dict, Any, Tuple, Optional
 from concurrent.futures import ThreadPoolExecutor
 import time
@@ -57,13 +58,15 @@ import requests
 
 
 # 引入配置变量
+DISABLE_VECTOR_SEARCH = os.getenv("DISABLE_VECTOR_SEARCH", "").lower() in ("1", "true", "yes", "on")
 from config import (
     NEO4J_URI, NEO4J_USERNAME, NEO4J_PASSWORD,
     EXTRACTION_API_KEY, EXTRACTION_BASE_URL, EXTRACTION_MODEL,  # 三元组提取相关
     QA_MODELS, DEFAULT_QA_MODEL,  # AI问答模型列表
     EMBED_API_KEY, EMBED_BASE_URL, EMBED_MODEL,  # Embedding 相关
     CHUNK_SIZE, CHUNK_OVERLAP,
-    VECTOR_SEARCH_TOP_K, VECTOR_SIMILARITY_THRESHOLD, GRAPH_SEARCH_HOPS
+    VECTOR_SEARCH_TOP_K, VECTOR_SIMILARITY_THRESHOLD, GRAPH_SEARCH_HOPS,
+    VECTOR_SEARCH_ENABLED, VECTOR_SEARCH_IN_THREAD
 )
 
 
@@ -226,7 +229,7 @@ class KnowledgeGraphService:
 要求：
 1. 识别文本中的关键实体（人物、组织、地点、概念等）
 2. 识别实体之间的关系
-3. 输出格式为JSON数组，每个元素包含：head（头实体）、relation（关系）、tail（尾实体）、entity_type（实体类型）
+3. 输出格式为JSON数组，每个元素包含：head（头实体）、relation（关系）、tail（尾实体）、head_type（头实体类型）、tail_type（尾实体类型）
 
 示例输出格式：
 [
@@ -247,10 +250,28 @@ class KnowledgeGraphService:
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.1,
-                max_tokens=2000
+                max_tokens=8000
             )
 
-            result_text = response.choices[0].message.content.strip()
+            # 检查 content 是否为 None
+            if response.choices and len(response.choices) > 0:
+                content = response.choices[0].message.content
+                
+                # 如果 content 为 None，尝试从 reasoning_content 获取
+                if content is None:
+                    reasoning_content = getattr(response.choices[0].message, 'reasoning_content', None)
+                    if reasoning_content:
+                        # 尝试从推理内容中提取最后的JSON部分
+                        content = reasoning_content
+                        logging.warning(f"[EXTRACTION] content 为 None，从 reasoning_content 获取内容，长度: {len(content)}")
+                    else:
+                        logging.error(f"[EXTRACTION] content 和 reasoning_content 都为 None，响应: {str(response)}")
+                        return []
+                
+                result_text = content.strip()
+            else:
+                logging.error(f"[EXTRACTION] 没有有效的 choices，响应: {str(response)}")
+                return []
 
             # 解析JSON
             # 尝试提取JSON（有时LLM会返回带代码块的内容）
@@ -268,7 +289,8 @@ class KnowledgeGraphService:
                 return []
 
         except Exception as e:
-            print(f"实体关系抽取失败: {str(e)}")
+            logging.error(f"[EXTRACTION] 实体关系抽取失败: {str(e)}")
+            logging.exception("[EXTRACTION] 详细异常堆栈：")
             return []
 
     # 请确保这个函数在 class KnowledgeGraphService: 的缩进范围内（通常前面有4个空格）
@@ -447,40 +469,112 @@ class KnowledgeGraphService:
     # ==================== ChromaDB向量存储 ====================
 
     def save_chunks_to_chromadb(self, chunks: List[Dict[str, Any]], doc_id: str):
-        """将文本块保存到ChromaDB"""
+        """将文本块保存到ChromaDB（分批处理，避免单次操作卡死）"""
 
-        # 使用OpenAI Embedding API（DeepSeek也支持）
+        # 使用OpenAI Embedding API
         texts = [chunk["content"] for chunk in chunks]
+        logging.info(f"[VECTOR] 开始处理 {len(texts)} 个文本块")
 
         # 生成embeddings（批量）
         try:
+            logging.info(f"[VECTOR] 正在生成 embeddings...")
             embeddings_response = self.embed_client.embeddings.create(
-            model=EMBED_MODEL,
-            input=texts,
-            encoding_format="float" # 对应魔搭的要求
-        )
-
-            embeddings = [item.embedding for item in embeddings_response.data]
-
-            # 保存到ChromaDB
-            ids = [f"{doc_id}_{chunk['index']}" for chunk in chunks]
-            metadatas = [
-                {
-                    "doc_id": doc_id,
-                    "chunk_index": chunk["index"],
-                    "length": chunk["length"]
-                }
-                for chunk in chunks
-            ]
-
-            self.collection.add(
-                ids=ids,
-                embeddings=embeddings,
-                documents=texts,
-                metadatas=metadatas
+                model=EMBED_MODEL,
+                input=texts,
+                encoding_format="float"  # 对应魔搭的要求
             )
+            embeddings = [item.embedding for item in embeddings_response.data]
+            logging.info(f"[VECTOR] ✅ 成功生成 {len(embeddings)} 个 embeddings")
+
+            # 分批保存到ChromaDB（每批最多50条）
+            BATCH_SIZE = 50
+            total_chunks = len(chunks)
+            total_batches = (total_chunks + BATCH_SIZE - 1) // BATCH_SIZE
+
+            logging.info(f"[VECTOR] 准备分批保存到ChromaDB，共 {total_batches} 批，每批 {BATCH_SIZE} 条")
+
+            saved_count = 0
+            failed_batches = []
+            
+            for batch_idx in range(total_batches):
+                start_idx = batch_idx * BATCH_SIZE
+                end_idx = min(start_idx + BATCH_SIZE, total_chunks)
+                
+                batch_chunks = chunks[start_idx:end_idx]
+                batch_texts = texts[start_idx:end_idx]
+                batch_embeddings = embeddings[start_idx:end_idx]
+                
+                batch_ids = [f"{doc_id}_{chunk['index']}" for chunk in batch_chunks]
+                batch_metadatas = [
+                    {
+                        "doc_id": doc_id,
+                        "chunk_index": chunk["index"],
+                        "length": chunk["length"]
+                    }
+                    for chunk in batch_chunks
+                ]
+
+                try:
+                    logging.info(f"[VECTOR] 保存第 {batch_idx + 1}/{total_batches} 批 ({len(batch_chunks)} 条)...")
+                    
+                    # 添加更详细的日志
+                    logging.debug(f"[VECTOR] 批次数据预览:")
+                    logging.debug(f"  - IDs: {batch_ids[:2]}..." if len(batch_ids) > 2 else f"  - IDs: {batch_ids}")
+                    logging.debug(f"  - Embeddings维度: {len(batch_embeddings[0]) if batch_embeddings else 0}")
+                    logging.debug(f"  - 文本长度: {[len(t) for t in batch_texts[:2]]}")
+                    
+                    # 执行保存操作
+                    self.collection.add(
+                        ids=batch_ids,
+                        embeddings=batch_embeddings,
+                        documents=batch_texts,
+                        metadatas=batch_metadatas
+                    )
+                    
+                    saved_count += len(batch_chunks)
+                    logging.info(f"[VECTOR] ✅ 第 {batch_idx + 1}/{total_batches} 批保存成功 (累计: {saved_count}/{total_chunks})")
+                    
+                    # 强制刷新日志
+                    logging.getLogger().handlers[0].flush() if logging.getLogger().handlers else None
+                    
+                except Exception as batch_error:
+                    error_msg = f"第 {batch_idx + 1}/{total_batches} 批保存失败: {str(batch_error)}"
+                    logging.error(f"[VECTOR] ❌ {error_msg}")
+                    logging.exception("[VECTOR] 详细异常堆栈：")
+                    
+                    # 记录失败的批次
+                    failed_batches.append({
+                        "batch_idx": batch_idx + 1,
+                        "error": str(batch_error),
+                        "range": f"{start_idx}-{end_idx}"
+                    })
+                    
+                    # 继续保存下一批，不中断整体流程
+                    continue
+
+            # 最终汇总日志
+            logging.info(f"[VECTOR] =====================================")
+            logging.info(f"[VECTOR] 保存完成汇总:")
+            logging.info(f"[VECTOR]  - 总批次: {total_batches}")
+            logging.info(f"[VECTOR]  - 成功保存: {saved_count}/{total_chunks} 条")
+            logging.info(f"[VECTOR]  - 失败批次: {len(failed_batches)}")
+            
+            if failed_batches:
+                logging.warning(f"[VECTOR] 失败批次详情:")
+                for failed in failed_batches:
+                    logging.warning(f"  - 批次 {failed['batch_idx']} (范围 {failed['range']}): {failed['error']}")
+            
+            logging.info(f"[VECTOR] =====================================")
+
+            # 如果有失败的批次，但至少有部分成功，不抛出异常
+            if saved_count == 0:
+                raise Exception("所有批次保存失败，请检查ChromaDB连接和数据格式")
+            elif saved_count < total_chunks:
+                logging.warning(f"[VECTOR] 部分数据保存失败，但已成功保存 {saved_count} 条数据")
 
         except Exception as e:
+            logging.error(f"[VECTOR] ❌ 向量存储失败: {str(e)}")
+            logging.exception("[VECTOR] 详细异常堆栈：")
             raise Exception(f"向量存储失败: {str(e)}")
 
     def search_similar_chunks(self, query: str, n_results: int = None) -> List[Dict[str, Any]]:
@@ -489,101 +583,119 @@ class KnowledgeGraphService:
         if n_results is None:
             n_results = VECTOR_SEARCH_TOP_K
 
-        try:
-            # 生成查询向量
-            query_embedding_response = self.embed_client.embeddings.create(
-            model=EMBED_MODEL,
-            input=[query],
-            encoding_format="float"
-        )
+        logger = logging.getLogger(__name__)
+        chunks = []
 
+        try:
+            start_ts = time.time()
+            logger.info('[VECTOR] search_similar_chunks start')
+            
+            # 生成查询向量
+            logger.info('[VECTOR] embeddings.create start')
+            query_embedding_response = self.embed_client.embeddings.create(
+                model=EMBED_MODEL,
+                input=[query],
+                encoding_format="float"
+            )
             query_embedding = query_embedding_response.data[0].embedding
+            logger.info('[VECTOR] embeddings.create done')
 
             # 检索
+            logger.info('[VECTOR] chroma.query start')
             results = self.collection.query(
                 query_embeddings=[query_embedding],
                 n_results=n_results
             )
+            logger.info('[VECTOR] chroma.query done')
 
             # 格式化结果并过滤相似度
-            chunks = []
-            if results and results["documents"]:
+            if results and "documents" in results and results["documents"]:
                 for i in range(len(results["documents"][0])):
-                    distance = results["distances"][0][i] if "distances" in results else None
+                    try:
+                        distance = results["distances"][0][i] if "distances" in results else None
 
-                    # 相似度阈值过滤：只保留距离小于阈值的文档
-                    if distance is not None and distance < VECTOR_SIMILARITY_THRESHOLD:
-                        chunks.append({
-                            "content": results["documents"][0][i],
-                            "metadata": results["metadatas"][0][i],
-                            "distance": distance
-                        })
+                        # 相似度阈值过滤：只保留距离小于阈值的文档
+                        if distance is not None and distance < VECTOR_SIMILARITY_THRESHOLD:
+                            chunks.append({
+                                "content": results["documents"][0][i],
+                                "metadata": results["metadatas"][0][i] if "metadatas" in results else {},
+                                "distance": distance
+                            })
+                    except (IndexError, KeyError) as e:
+                        logger.warning(f'[VECTOR] 处理结果索引 {i} 时出错: {e}')
+                        continue
 
+            elapsed_ms = int((time.time() - start_ts) * 1000)
+            logger.info(f'[VECTOR] search_similar_chunks done elapsed_ms={elapsed_ms} count={len(chunks)}')
             return chunks
 
         except Exception as e:
+            logger = logging.getLogger(__name__)
+            logger.error(f'[VECTOR] search_similar_chunks exception: {str(e)}')
+            logger.exception('[VECTOR] 详细异常堆栈：')
             print(f"向量检索失败: {str(e)}")
+            # 不抛出异常，返回空列表，避免导致进程退出
             return []
 
     def search_graph_neighbors(self, entities: List[str], hops: int = None) -> Dict[str, Any]:
-            """图检索：查找实体的邻居节点（修正：排除Document节点和FROM_DOCUMENT关系）"""
-            if not entities:
-                return {"nodes": [], "edges": []}
+        """图检索：查找实体的邻居节点（修正：排除Document节点和FROM_DOCUMENT关系）"""
+        if not entities:
+            return {"nodes": [], "edges": []}
 
-            if hops is None:
-                hops = GRAPH_SEARCH_HOPS
+        if hops is None:
+            hops = GRAPH_SEARCH_HOPS
 
-            with self.neo4j_driver.session() as session:
-                # 修正后的查询：直接排除 Document 节点，只匹配实体之间的关系
-                query = f"""
-                MATCH p = (n)-[r*1..{hops}]-(m)
-                WHERE n.name IN $entities
-                AND NOT 'Document' IN labels(n)
-                AND NOT 'Document' IN labels(m)
-                AND ALL(rel IN r WHERE type(rel) <> 'FROM_DOCUMENT')
-                RETURN n, r as r_list, m
-                LIMIT 50
-                """
+        with self.neo4j_driver.session() as session:
+            # 修正后的查询：直接排除 Document 节点，只匹配实体之间的关系
+            query = f"""
+            MATCH p = (n)-[r*1..{hops}]-(m)
+            WHERE n.name IN $entities
+            AND NOT 'Document' IN labels(n)
+            AND NOT 'Document' IN labels(m)
+            AND ALL(rel IN r WHERE type(rel) <> 'FROM_DOCUMENT')
+            RETURN n, r as r_list, m
+            LIMIT 50
+            """
 
-                result = session.run(query, entities=entities)
+            result = session.run(query, entities=entities)
 
-                nodes = {}
-                edges = []
+            nodes = {}
+            edges = []
 
-                for record in result:
-                    n = record["n"]
-                    m = record["m"]
-                    r_list = record["r_list"]  # 这是一个关系列表
+            for record in result:
+                n = record["n"]
+                m = record["m"]
+                r_list = record["r_list"]  # 这是一个关系列表
 
-                    # 1. 处理节点 n
-                    if n.element_id not in nodes:
-                        nodes[n.element_id] = {
-                            "id": str(n.element_id),
-                            "label": str(n.get("name", "Unknown")),
-                            "type": str(list(n.labels)[0]) if n.labels else "Entity",
-                            "highlighted": True
-                        }
+                # 1. 处理节点 n
+                if n.element_id not in nodes:
+                    nodes[n.element_id] = {
+                        "id": str(n.element_id),
+                        "label": str(n.get("name", "Unknown")),
+                        "type": str(list(n.labels)[0]) if n.labels else "Entity",
+                        "highlighted": True
+                    }
 
-                    # 2. 处理节点 m
-                    if m.element_id not in nodes:
-                        nodes[m.element_id] = {
-                            "id": str(m.element_id),
-                            "label": str(m.get("name", "Unknown")),
-                            "type": str(list(m.labels)[0]) if m.labels else "Entity",
-                            "highlighted": True
-                        }
+                # 2. 处理节点 m
+                if m.element_id not in nodes:
+                    nodes[m.element_id] = {
+                        "id": str(m.element_id),
+                        "label": str(m.get("name", "Unknown")),
+                        "type": str(list(m.labels)[0]) if m.labels else "Entity",
+                        "highlighted": True
+                    }
 
-                    # 3. 处理路径中的所有边 (修正点：变长路径需要循环处理边)
-                    for rel in r_list:
-                        edge_id = f"{rel.start_node.element_id}-{rel.type}-{rel.end_node.element_id}"
-                        # 避免重复添加边
-                        if not any(e['id'] == edge_id for e in edges):
-                            edges.append({
-                                "id": edge_id,
-                                "source": str(rel.start_node.element_id),
-                                "target": str(rel.end_node.element_id),
-                                "label": str(rel.type)
-                            })
+                # 3. 处理路径中的所有边 (修正点：变长路径需要循环处理边)
+                for rel in r_list:
+                    edge_id = f"{rel.start_node.element_id}-{rel.type}-{rel.end_node.element_id}"
+                    # 避免重复添加边
+                    if not any(e['id'] == edge_id for e in edges):
+                        edges.append({
+                            "id": edge_id,
+                            "source": str(rel.start_node.element_id),
+                            "target": str(rel.end_node.element_id),
+                            "label": str(rel.type)
+                        })
 
                 return {
                     "nodes": list(nodes.values()),
@@ -592,6 +704,7 @@ class KnowledgeGraphService:
 
     def extract_entities_from_question(self, question: str) -> List[str]:
         """从问题中提取实体（用于图检索）"""
+        logging.info(f'[EXTRACTION] Extract entities from question: {question}')
 
         prompt = f"""从以下问题中提取关键实体名称，以JSON数组格式返回。
 
@@ -602,6 +715,7 @@ class KnowledgeGraphService:
 请直接返回JSON数组："""
 
         try:
+            logging.info('[EXTRACTION] Calling extraction_client for entity extraction')
             response = self.extraction_client.chat.completions.create(
                 model=EXTRACTION_MODEL,
                 messages=[
@@ -609,10 +723,29 @@ class KnowledgeGraphService:
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.1,
-                max_tokens=200
+                max_tokens=500,
+                timeout=10.0  # 添加超时设置：10秒
             )
+            logging.info('[EXTRACTION] Received response from extraction_client')
 
-            result_text = response.choices[0].message.content.strip()
+            # 检查 content 是否为 None
+            if response.choices and len(response.choices) > 0:
+                content = response.choices[0].message.content
+                
+                # 如果 content 为 None，尝试从 reasoning_content 获取
+                if content is None:
+                    reasoning_content = getattr(response.choices[0].message, 'reasoning_content', None)
+                    if reasoning_content:
+                        content = reasoning_content
+                        logging.warning(f"[EXTRACTION] content 为 None，从 reasoning_content 获取内容，长度: {len(content)}")
+                    else:
+                        logging.error(f"[EXTRACTION] content 和 reasoning_content 都为 None，响应: {str(response)}")
+                        return []
+                
+                result_text = content.strip()
+            else:
+                logging.error(f"[EXTRACTION] 没有有效的 choices，响应: {str(response)}")
+                return []
 
             # 解析JSON
             if "```json" in result_text:
@@ -624,7 +757,8 @@ class KnowledgeGraphService:
             return entities if isinstance(entities, list) else []
 
         except Exception as e:
-            print(f"实体提取失败: {str(e)}")
+            logging.error(f"[EXTRACTION] 实体提取失败: {str(e)}")
+            logging.exception("[EXTRACTION] 详细异常堆栈：")
             return []
 
     # ==================== RAG问答 ====================
@@ -636,7 +770,10 @@ class KnowledgeGraphService:
         qa_client, qa_model = self.get_qa_client(model_name)
 
         # 1. 向量检索（会自动应用相似度阈值过滤）
-        vector_chunks = self.search_similar_chunks(question, n_results=5)
+        if DISABLE_VECTOR_SEARCH:
+            vector_chunks = []
+        else:
+            vector_chunks = self.search_similar_chunks(question, n_results=5)
 
         # 2. 图检索
         entities = self.extract_entities_from_question(question)
@@ -928,10 +1065,24 @@ class KnowledgeGraphService:
             model_name: 使用的AI问答模型名称
         """
         import json
+        import logging
         from redis_utils import get_conversation_history, save_conversation_message
+        
+        # 配置日志
+        logger = logging.getLogger(__name__)
+        
+        logger.info(f"🟢 answer_question_parallel_stream 开始")
+        logger.info(f"   问题: {question[:100]}...")
+        logger.info(f"   对话ID: {conversation_id}")
+        logger.info(f"   模型: {model_name}")
 
         # 获取指定的QA客户端和模型
-        qa_client, qa_model = self.get_qa_client(model_name)
+        try:
+            qa_client, qa_model = self.get_qa_client(model_name)
+            logger.info(f"✅ 获取QA客户端成功: {qa_model}")
+        except Exception as e:
+            logger.error(f"❌ 获取QA客户端失败: {e}")
+            raise
 
         # 用于存储检索结果，供答案生成使用
         vector_chunks = []
@@ -943,27 +1094,40 @@ class KnowledgeGraphService:
         # 从Redis获取对话历史
         history = []
         if conversation_id:
-            history = get_conversation_history(conversation_id)
-            print(f"📚 从Redis获取到 {len(history)} 条历史消息")
+            logger.info(f"📥 开始从Redis获取对话历史...")
+            try:
+                history = get_conversation_history(conversation_id)
+                logger.info(f"✅ 从Redis获取到 {len(history)} 条历史消息")
+            except Exception as e:
+                logger.error(f"❌ 从Redis获取对话历史失败: {e}")
+                history = []
 
         # 定义三个异步任务
         async def vector_search_task():
             """向量检索任务"""
+            logger.info(f"🔍 [向量检索] 开始")
+            if DISABLE_VECTOR_SEARCH:
+                logger.info(f"🔍 [向量检索] 已禁用，返回空结果")
+                return {
+                    "type": "vector_chunks",
+                    "data": []
+                }
             try:
-                loop = asyncio.get_event_loop()
-                chunks = await loop.run_in_executor(
-                    self.executor,
-                    self.search_similar_chunks,
-                    question,
-                    5  # 增加检索数量，因为会被相似度阈值过滤
-                )
+                logger.info(f"🔍 [向量检索] 调用 search_similar_chunks...")
+                start_ts = time.time()
+                # 直接调用同步函数，不使用线程池（ChromaDB PersistentClient 线程不安全）
+                chunks = self.search_similar_chunks(question, 5)
                 vector_chunks.extend(chunks)
+                elapsed_ms = int((time.time() - start_ts) * 1000)
+                logger.info(f"[VECTOR] search_similar_chunks elapsed_ms={elapsed_ms}")
+                logger.info(f"✅ [向量检索] 完成，找到 {len(chunks)} 个相似文档")
                 return {
                     "type": "vector_chunks",
                     "data": chunks
                 }
             except Exception as e:
-                print(f"向量检索失败: {e}")
+                logger.error(f"❌ [向量检索] 失败: {e}")
+                logger.exception("[向量检索] 详细错误信息：")
                 return {
                     "type": "vector_chunks",
                     "data": [],
@@ -972,15 +1136,23 @@ class KnowledgeGraphService:
 
         async def graph_search_task():
             """图检索任务"""
+            logger.info(f"🔍 [图检索] 开始")
             try:
                 loop = asyncio.get_event_loop()
+                logger.info(f"🔍 [图检索] 提取实体...")
                 # 提取实体
+                start_ts = time.time()
                 entities = await loop.run_in_executor(
                     self.executor,
                     self.extract_entities_from_question,
                     question
                 )
+                elapsed_ms = int((time.time() - start_ts) * 1000)
+                logger.info(f"[GRAPH] extract_entities_from_question elapsed_ms={elapsed_ms}")
+                logger.info(f"🔍 [图检索] 提取到 {len(entities)} 个实体: {entities}")
+                logger.info(f"🔍 [图检索] 执行图检索...")
                 # 图检索
+                start_ts = time.time()
                 graph = await loop.run_in_executor(
                     self.executor,
                     self.search_graph_neighbors,
@@ -988,12 +1160,15 @@ class KnowledgeGraphService:
                     2
                 )
                 graph_data.update(graph)
+                elapsed_ms = int((time.time() - start_ts) * 1000)
+                logger.info(f"[GRAPH] search_graph_neighbors elapsed_ms={elapsed_ms}")
+                logger.info(f"✅ [图检索] 完成，找到 {len(graph.get('nodes', []))} 个节点")
                 return {
                     "type": "graph_data",
                     "data": graph
                 }
             except Exception as e:
-                print(f"图检索失败: {e}")
+                logger.error(f"❌ [图检索] 失败: {e}")
                 return {
                     "type": "graph_data",
                     "data": {"nodes": [], "edges": []},
@@ -1136,60 +1311,87 @@ class KnowledgeGraphService:
                 }
 
         # 并发执行检索任务
+        logger.info(f"⚡ [并发] 开始执行检索任务...")
         search_tasks = [vector_search_task(), graph_search_task()]
 
         # 使用 as_completed 来获取先完成的任务
+        task_count = 0
         for coro in asyncio.as_completed(search_tasks):
+            logger.info(f"⚡ [并发] 等待检索任务完成 {task_count + 1}/2...")
             result = await coro
+            task_count += 1
+            logger.info(f"⚡ [并发] 检索任务 {task_count}/2 完成")
             # 立即返回检索结果
             yield json.dumps(result, ensure_ascii=False) + "\n"
+        
+        logger.info(f"✅ [并发] 所有检索任务完成")
 
         # 等待检索全部完成后，开始答案生成
+        logger.info(f"🤖 [答案生成] 开始...")
         answer_result = await answer_generation_task()
+        logger.info(f"🤖 [答案生成] 任务返回")
 
         if "stream" in answer_result:
             is_qidian = answer_result.get("is_qidian", False)
             is_yansd = answer_result.get("is_yansd", False)
+            
+            logger.info(f"🤖 [答案生成] 类型: {'Qidian' if is_qidian else 'Yansd' if is_yansd else 'OpenAI'}")
 
+            chunk_count = 0
             if is_qidian or is_yansd:
                 # qidian API 直接返回文本
+                logger.info(f"🤖 [答案生成] 开始流式输出...")
                 for text in answer_result["stream"]:
                     if text:
                         full_answer += text  # 累积完整答案
+                        chunk_count += 1
 
                         answer_chunk = {
                             "type": "answer",
                             "content": text
                         }
                         yield json.dumps(answer_chunk, ensure_ascii=False) + "\n"
+                logger.info(f"✅ [答案生成] 流式输出完成，共 {chunk_count} 个chunks")
             else:
                 # 标准 OpenAI API 返回的流
+                logger.info(f"🤖 [答案生成] 开始流式输出...")
                 for chunk in answer_result["stream"]:
                     # 安全检查：确保 choices 列表不为空且包含有效内容
                     if chunk.choices and len(chunk.choices) > 0 and chunk.choices[0].delta.content:
                         content = chunk.choices[0].delta.content
                         full_answer += content  # 累积完整答案
+                        chunk_count += 1
 
                         answer_chunk = {
                             "type": "answer",
                             "content": content
                         }
                         yield json.dumps(answer_chunk, ensure_ascii=False) + "\n"
+                logger.info(f"✅ [答案生成] 流式输出完成，共 {chunk_count} 个chunks")
 
             # 答案结束标记
+            logger.info(f"🤖 [答案生成] 发送结束标记...")
             yield json.dumps({"type": "answer_done"}, ensure_ascii=False) + "\n"
 
             # 保存对话到Redis
             if conversation_id:
-                # 保存用户问题
-                save_conversation_message(conversation_id, "user", question)
-                # 保存AI回答
-                save_conversation_message(conversation_id, "assistant", full_answer)
-                print(f"💾 对话已保存到Redis: {conversation_id}")
+                logger.info(f"💾 [Redis] 开始保存对话...")
+                try:
+                    # 保存用户问题
+                    save_conversation_message(conversation_id, "user", question)
+                    # 保存AI回答
+                    save_conversation_message(conversation_id, "assistant", full_answer)
+                    logger.info(f"✅ [Redis] 对话已保存: {conversation_id}")
+                except Exception as e:
+                    logger.error(f"❌ [Redis] 保存对话失败: {e}")
         else:
             # 如果答案生成失败，返回错误
+            logger.error(f"❌ [答案生成] 失败: {answer_result}")
             yield json.dumps(answer_result, ensure_ascii=False) + "\n"
+        
+        logger.info(f"✅ answer_question_parallel_stream 完成")
 
 
 # 全局服务实例
 kg_service = KnowledgeGraphService()
+

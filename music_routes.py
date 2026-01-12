@@ -10,13 +10,13 @@ import logging
 import asyncio
 import time
 from pathlib import Path
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Query
 from fastapi.responses import FileResponse, StreamingResponse
 from database import driver
 from auth_deps import get_current_user
 from auth_deps import get_current_user, get_current_user_from_query
 from pydantic import BaseModel
-from typing import List, Dict
+from typing import List, Dict, Optional
 class BatchImageRequest(BaseModel):
     filenames: List[str]
 
@@ -945,3 +945,75 @@ async def post_play_event(
     except Exception as e:
         logger.error(f"处理播放事件失败: {e}")
         raise HTTPException(status_code=500, detail="处理播放事件失败")
+
+
+# ==================== Elasticsearch 音乐搜索 API ====================
+
+@router.get("/search-es")
+async def search_music_es(
+    query: str = Query(..., description="搜索关键词"),
+    size: int = Query(20, ge=1, le=100, description="返回数量"),
+    from_: int = Query(0, ge=0, description="偏移量"),
+    genre: Optional[str] = Query(None, description="音乐类型筛选"),
+    current_user: str = Depends(get_current_user)
+):
+    """使用Elasticsearch搜索音乐
+
+    Args:
+        query: 搜索关键词
+        size: 返回数量，默认20，最大100
+        from_: 偏移量，用于分页，默认0
+        genre: 音乐类型筛选（可选）
+        current_user: 当前认证用户
+
+    Returns:
+        dict: 包含搜索结果的响应
+    """
+    try:
+        from elasticsearch_utils import es_manager
+
+        # 使用ES搜索音乐
+        result = es_manager.search_music(
+            query=query,
+            size=size,
+            from_=from_,
+            genre=genre
+        )
+
+        return {
+            "success": True,
+            **result
+        }
+
+    except Exception as e:
+        logger.error(f"搜索音乐失败: {e}")
+        raise HTTPException(status_code=500, detail="搜索音乐失败")
+
+
+@router.post("/sync-to-es")
+async def sync_music_to_es(
+    current_user: str = Depends(get_current_user)
+):
+    """手动同步音乐数据到Elasticsearch
+
+    Args:
+        current_user: 当前认证用户
+
+    Returns:
+        dict: 操作结果
+    """
+    try:
+        from sync_music_to_es import sync_music_to_elasticsearch
+
+        # 异步执行同步
+        import asyncio
+        await asyncio.get_event_loop().run_in_executor(None, sync_music_to_elasticsearch)
+
+        return {
+            "success": True,
+            "message": "音乐数据已同步到Elasticsearch"
+        }
+
+    except Exception as e:
+        logger.error(f"同步音乐数据到ES失败: {e}")
+        raise HTTPException(status_code=500, detail="同步音乐数据到ES失败")

@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 from typing import Dict, List
 from confluent_kafka import Consumer, KafkaException, KafkaError
+from trace_utils import set_trace_id, clear_trace_id, get_log_prefix
 
 # 配置日志
 logging.basicConfig(
@@ -225,7 +226,8 @@ def consume_play_events(max_messages: int = 100, timeout_seconds: float = 1.0) -
     consumer = get_kafka_consumer()
     
     if consumer is None:
-        logger.warning("⚠️ Kafka 消费者未连接，跳过消费")
+        prefix = get_log_prefix()
+        logger.warning(f"{prefix} ⚠️ Kafka 消费者未连接，跳过消费")
         return 0
 
     consumed_count = 0
@@ -252,9 +254,18 @@ def consume_play_events(max_messages: int = 100, timeout_seconds: float = 1.0) -
             try:
                 event = json.loads(msg.value().decode('utf-8'))
                 
+                # 提取TraceID（如果存在）
+                trace_id = event.get('trace_id', '')
+                
+                # 设置TraceID到上下文
+                token = set_trace_id(trace_id) if trace_id else None
+                
                 # 验证事件格式
                 if 'song_id' not in event or 'timestamp' not in event:
-                    logger.warning(f"⚠️ 无效的事件格式: {event}")
+                    prefix = get_log_prefix()
+                    logger.warning(f"{prefix} ⚠️ 无效的事件格式: {event}")
+                    if token:
+                        clear_trace_id(token)
                     continue
                 
                 # 添加到计算器
@@ -267,23 +278,32 @@ def consume_play_events(max_messages: int = 100, timeout_seconds: float = 1.0) -
                 
                 # 每10条记录一条日志
                 if consumed_count % 10 == 0:
-                    logger.info(f"📥 已消费 {consumed_count} 条消息")
+                    prefix = get_log_prefix()
+                    logger.info(f"{prefix} 📥 已消费 {consumed_count} 条消息")
+                
+                # 清理TraceID上下文
+                if token:
+                    clear_trace_id(token)
                 
             except json.JSONDecodeError as e:
-                logger.error(f"❌ JSON 解析失败: {e}")
+                prefix = get_log_prefix()
+                logger.error(f"{prefix} ❌ JSON 解析失败: {e}")
                 continue
             except Exception as e:
-                logger.error(f"❌ 处理消息失败: {e}")
+                prefix = get_log_prefix()
+                logger.error(f"{prefix} ❌ 处理消息失败: {e}")
                 continue
         
         if consumed_count > 0:
-            logger.info(f"✅ 成功消费 {consumed_count} 条播放事件")
+            prefix = get_log_prefix()
+            logger.info(f"{prefix} ✅ 成功消费 {consumed_count} 条播放事件")
             # 自动提交偏移量（由 enable.auto.commit=True 自动完成）
         
         return consumed_count
         
     except Exception as e:
-        logger.error(f"❌ 消费播放事件失败: {e}")
+        prefix = get_log_prefix()
+        logger.error(f"{prefix} ❌ 消费播放事件失败: {e}")
         return 0
 
 

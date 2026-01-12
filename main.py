@@ -101,11 +101,17 @@ def build_security_rating(password_strength: int, twofa_enabled: bool) -> dict:
         return {"level": "medium", "label": "中", "color": "yellow"}
     return {"level": "low", "label": "低", "color": "red"}
 
+# 导入TraceID中间件
+from middleware.trace_middleware import TraceIDMiddleware
+
 # 配置日志
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("jwt_auth")
 
 app = FastAPI()
+
+# 注册TraceID中间件（必须在其他中间件之前）
+app.add_middleware(TraceIDMiddleware)
 verification_codes = {}  # 格式: {email: {"code": "123456", "created_at": timestamp, "expires_at": timestamp}}
 db_async_manager = AsyncDatabaseManager(max_workers=5)
 
@@ -421,6 +427,9 @@ app.include_router(kg_router)
 # 注册游戏路由
 from game_routes import router as game_router
 app.include_router(game_router)
+# 注册日志路由
+from log_routes import router as log_router
+app.include_router(log_router)
 # 定义请求体模型
 class UserAuth(BaseModel):
     username: str

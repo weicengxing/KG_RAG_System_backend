@@ -77,10 +77,15 @@ MONGO_DB_NAME = "chat_app_db"
 
 # ==================== 知识图谱RAG配置 ====================
 
+# 向量检索开关与执行模式
+VECTOR_SEARCH_ENABLED = os.getenv("VECTOR_SEARCH_ENABLED", "true").lower() == "true"
+# 以线程池执行向量检索（Windows 下某些 Chroma 实现在多线程中不稳定）
+VECTOR_SEARCH_IN_THREAD = os.getenv("VECTOR_SEARCH_IN_THREAD", "false").lower() == "true"
+
 # --- 1. 三元组提取模型配置 (用于实体关系抽取) ---
-EXTRACTION_API_KEY = os.getenv("EXTRACTION_API_KEY", "sk-VGr1R5YhrRdApUezU81xzmGnXJW1C6k2wbOrLvXuKgBaBON9")
-EXTRACTION_BASE_URL = os.getenv("EXTRACTION_BASE_URL", "https://zhouliuai.online/v1")
-EXTRACTION_MODEL = os.getenv("EXTRACTION_MODEL", "gpt-5.2-chat-latest")
+EXTRACTION_API_KEY = os.getenv("EXTRACTION_API_KEY", "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")
+EXTRACTION_BASE_URL = os.getenv("EXTRACTION_BASE_URL", "https://openrouter.ai/api/v1")
+EXTRACTION_MODEL = os.getenv("EXTRACTION_MODEL", "xiaomi/mimo-v2-flash:free")
 
 # --- 2. AI问答模型配置列表 (用户可在前端选择) ---
 QA_MODELS = [
@@ -89,21 +94,21 @@ QA_MODELS = [
 
     # 最强梯队
     {
-        "name": "Gemini-3-pro",
+        "name": "Gemini-3-Pro",
         "description": "谷歌Gemini 3 Pro高性能版，顶级推理能力，适合复杂问题深度分析，当今最强模型",
         "api_key": os.getenv("QA_MODEL_4_API_KEY", "sk-3kiSiKDoyFxOkVxqzNGj0kosqaxUjmK0ckFBEz9OSl0XWNnO"),
         "base_url": os.getenv("QA_MODEL_4_BASE_URL", "https://api.qidianai.xyz/v1"),
         "model": os.getenv("QA_MODEL_4_MODEL", "gemini-3-pro-high")
     },
     {
-        "name": "Gemini-3-flash-preview-thinking",
+        "name": "Gemini-3-Flash-Preview-Thinking",
         "description": "谷歌Gemini 3 Flash思考增强版，顶级推理能力，适合复杂问题深度分析，当今最强模型梯队",
         "api_key": os.getenv("QA_MODEL_4_API_KEY", "sk-WGOCGHbfZAjX0G2nT0rYckllyOcby1RBcwTnNwJhONUEiJfE"),
         "base_url": os.getenv("QA_MODEL_4_BASE_URL", "https://api.lhyb.dpdns.org/v1"),
         "model": os.getenv("QA_MODEL_4_MODEL", "gemini-3-flash-preview-thinking")
     },
     {
-        "name": "Claude-opus-4.5",
+        "name": "Claude-Opus-4.5",
         "description": "Anthropic Claude Opus 4.5模型，擅长极度复杂推理和长文本处理，当今最强模型梯队",
         "api_key": os.getenv("QA_MODEL_4_API_KEY", "sk-sV8Gkji5NKNb0h9mIsmFrlmoSvD2YAkAjee84j6ichQBmhct"),
         "base_url": os.getenv("QA_MODEL_4_BASE_URL", "https://yansd666.com/pg"),
@@ -114,14 +119,14 @@ QA_MODELS = [
     },
   
         {
-            "name": "Chatgpt-5.2",
+            "name": "ChatGPT-5.2",
             "description": "OpenAI GPT-5.2模型，最新一代大模型，具备卓越的语言理解和生成能力,当今最强模型梯队",
             "api_key": os.getenv("QA_MODEL_4_API_KEY", "sk-3kiSiKDoyFxOkVxqzNGj0kosqaxUjmK0ckFBEz9OSl0XWNnO"),
             "base_url": os.getenv("QA_MODEL_4_BASE_URL", "https://qidianai.xyz/v1"),
             "model": os.getenv("QA_MODEL_4_MODEL", "gpt-5.2")
         },
         {
-            "name": "Chatgpt-5.2-codex",
+            "name": "ChatGPT-5.2-Codex",
             "description": "OpenAI GPT-5.2-Codex模型，专为代码生成和理解优化，顶级编程能力，当今最强代码模型",
             "api_key": os.getenv("QA_MODEL_4_API_KEY", "sk-3kiSiKDoyFxOkVxqzNGj0kosqaxUjmK0ckFBEz9OSl0XWNnO"),
             "base_url": os.getenv("QA_MODEL_4_BASE_URL", "https://qidianai.xyz/v1"),
@@ -133,21 +138,21 @@ QA_MODELS = [
             "session_id": os.getenv("QIDIAN_SESSION_ID", "f21d3a83-6b7f-4dad-b7f4-1ee749e6d81a")  # 固定的 sessionId
         },
     {
-            "name": "Grok-4.1-thinking",
+            "name": "Grok-4.1-Thinking",
             "description": "XAi Grok 4.1思考增强版，顶级推理能力，适合复杂问题深度分析，当今最强模型梯队",
             "api_key": os.getenv("QA_MODEL_4_API_KEY", "sk-3kiSiKDoyFxOkVxqzNGj0kosqaxUjmK0ckFBEz9OSl0XWNnO"),
             "base_url": os.getenv("QA_MODEL_4_BASE_URL", "https://api.qidianai.xyz/v1"),
             "model": os.getenv("QA_MODEL_4_MODEL", "grok-4.1-thinking")
         },
     {
-        "name": "Gemini-3-flash-preview-nothinking",
+        "name": "Gemini-3-Flash-Preview-NoThinking",
         "description": "谷歌Gemini 3 Flash无思考版，快速响应，性能强大，适合大多数问答场景",
         "api_key": os.getenv("QA_MODEL_4_API_KEY", "sk-WGOCGHbfZAjX0G2nT0rYckllyOcby1RBcwTnNwJhONUEiJfE"),
         "base_url": os.getenv("QA_MODEL_4_BASE_URL", "https://api.lhyb.dpdns.org/v1"),
         "model": os.getenv("QA_MODEL_4_MODEL", "gemini-3-flash-preview-nothinking")
     },
     {
-        "name": "Claude-sonnet-4.5",
+        "name": "Claude-Sonnet-4.5",
         "description": "Anthropic Claude Sonnet 4.5模型，擅长复杂推理和长文本处理，当今最强模型梯队",
         "api_key": os.getenv("QA_MODEL_4_API_KEY", "sk-WGOCGHbfZAjX0G2nT0rYckllyOcby1RBcwTnNwJhONUEiJfE"),
         "base_url": os.getenv("QA_MODEL_4_BASE_URL", "https://api.lhyb.dpdns.org/v1"),
@@ -170,6 +175,14 @@ QA_MODELS = [
         "model": os.getenv("QA_MODEL_10_MODEL", "ZhipuAI/GLM-4.7")
     },
     {
+        "name": "MiniMax-M2.1",
+        "description": "MiniMax M2.1模型，强大的多模态理解和生成能力，适合复杂对话和内容创作",
+        "api_key": os.getenv("QA_MODEL_10_API_KEY", "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"),
+        "base_url": os.getenv("QA_MODEL_10_BASE_URL", "https://integrate.api.nvidia.com/v1"),
+        "model": os.getenv("QA_MODEL_10_MODEL", "minimaxai/minimax-m2.1")
+    },
+
+    {
         "name": "Qwen3-235B-A22B-Thinking-2507",
         "description": "通义千问235B思考增强版，顶级推理能力，适合复杂问题深度分析",
         "api_key": os.getenv("QA_MODEL_5_API_KEY", "ms-7ae9b437-2d5d-47c9-b613-86e012766c2c"),
@@ -184,14 +197,14 @@ QA_MODELS = [
         "model": os.getenv("QA_MODEL_6_MODEL", "Qwen/Qwen3-235B-A22B")
     },
     {
-        "name": "kimi-k2-thinking",
+        "name": "Kimi-k2-Thinking",
         "description": "月之暗面K2思考增强模型，擅长复杂推理和多轮对话",
         "api_key": os.getenv("QA_MODEL_4_API_KEY", "sk-WGOCGHbfZAjX0G2nT0rYckllyOcby1RBcwTnNwJhONUEiJfE"),
         "base_url": os.getenv("QA_MODEL_4_BASE_URL", "https://api.lhyb.dpdns.org/v1"),
         "model": os.getenv("QA_MODEL_4_MODEL", "kimi-k2-thinking")
     },
     {
-        "name": "kimi-k2-instruct-0905",
+        "name": "Kimi-k2-Instruct-0905",
         "description": "月之暗面K2指令调优模型，擅长理解复杂指令和生成高质量文本",
         "api_key": os.getenv("QA_MODEL_4_API_KEY", "sk-WGOCGHbfZAjX0G2nT0rYckllyOcby1RBcwTnNwJhONUEiJfE"),
         "base_url": os.getenv("QA_MODEL_4_BASE_URL", "https://api.lhyb.dpdns.org/v1"),
@@ -272,3 +285,10 @@ GRAPH_SEARCH_HOPS = int(os.getenv("GRAPH_SEARCH_HOPS", 2))  # 图检索的跳数
 
 # 文档上传配置
 MAX_DOCUMENT_SIZE = int(os.getenv("MAX_DOCUMENT_SIZE", 20 * 1024 * 1024))  # 最大文档大小 20MB
+
+# ==================== Elasticsearch 配置 ====================
+ES_HOST = os.getenv("ES_HOST", "localhost")
+ES_PORT = int(os.getenv("ES_PORT", 9200))
+ES_URL = f"http://{ES_HOST}:{ES_PORT}"
+ES_INDEX_LOGS = "app_logs"
+ES_INDEX_MUSIC = "music_songs"
