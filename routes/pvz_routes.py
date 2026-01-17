@@ -10,6 +10,7 @@ import redis.asyncio as redis
 import json
 from datetime import datetime, timedelta
 import logging
+from auth_deps import get_current_user
 
 logger = logging.getLogger(__name__)
 
@@ -21,12 +22,15 @@ mongo_client = AsyncIOMotorClient(MONGO_URI)
 
 
 @router.post("/pvz/save", response_model=GameStateResponse)
-async def save_game(game_state: GameStateSave, user_id: str = "default"):
+async def save_game(
+    game_state: GameStateSave,
+    current_user: str = Depends(get_current_user)
+):
     """
     保存游戏状态
     先保存到Redis（快速访问），再保存到MongoDB（持久化）
     """
-    save_key = f"pvz_save:{user_id}"
+    save_key = f"pvz_save:{current_user}"
     
     try:
         # 创建Redis连接
@@ -50,7 +54,7 @@ async def save_game(game_state: GameStateSave, user_id: str = "default"):
         collection = db["pvz_saves"]
         
         save_doc = {
-            "user_id": user_id,
+            "user_id": current_user,
             "game_state": game_state.dict(),
             "created_at": datetime.utcnow(),
             "updated_at": datetime.utcnow()
@@ -58,7 +62,7 @@ async def save_game(game_state: GameStateSave, user_id: str = "default"):
         
         # 更新或插入
         await collection.update_one(
-            {"user_id": user_id},
+            {"user_id": current_user},
             {"$set": save_doc},
             upsert=True
         )
@@ -66,7 +70,7 @@ async def save_game(game_state: GameStateSave, user_id: str = "default"):
         # 关闭Redis连接
         await redis_client.close()
         
-        logger.info(f"游戏保存成功: user_id={user_id}")
+        logger.info(f"游戏保存成功: user_id={current_user}")
         return GameStateResponse(
             success=True,
             message="游戏保存成功",
@@ -77,13 +81,13 @@ async def save_game(game_state: GameStateSave, user_id: str = "default"):
         raise HTTPException(status_code=500, detail=f"保存失败: {str(e)}")
 
 
-@router.get("/pvz/load/{user_id}", response_model=GameStateResponse)
-async def load_game(user_id: str = "default"):
+@router.get("/pvz/load", response_model=GameStateResponse)
+async def load_game(current_user: str = Depends(get_current_user)):
     """
     加载游戏状态
     优先从Redis加载，如果Redis没有则从MongoDB加载
     """
-    save_key = f"pvz_save:{user_id}"
+    save_key = f"pvz_save:{current_user}"
     
     try:
         # 创建Redis连接
@@ -100,7 +104,7 @@ async def load_game(user_id: str = "default"):
         if redis_data:
             game_state = json.loads(redis_data)
             await redis_client.close()
-            logger.info(f"从Redis加载游戏: user_id={user_id}")
+            logger.info(f"从Redis加载游戏: user_id={current_user}")
             return GameStateResponse(
                 success=True,
                 message="存档加载成功（来自Redis）",
@@ -111,7 +115,7 @@ async def load_game(user_id: str = "default"):
         db = mongo_client["chat_app_db"]
         collection = db["pvz_saves"]
         
-        save_doc = await collection.find_one({"user_id": user_id})
+        save_doc = await collection.find_one({"user_id": current_user})
         if save_doc:
             game_state = save_doc["game_state"]
             
@@ -123,7 +127,7 @@ async def load_game(user_id: str = "default"):
             )
             
             await redis_client.close()
-            logger.info(f"从MongoDB加载游戏: user_id={user_id}")
+            logger.info(f"从MongoDB加载游戏: user_id={current_user}")
             return GameStateResponse(
                 success=True,
                 message="存档加载成功（来自MongoDB）",
@@ -131,7 +135,7 @@ async def load_game(user_id: str = "default"):
             )
         
         await redis_client.close()
-        logger.info(f"未找到存档: user_id={user_id}")
+        logger.info(f"未找到存档: user_id={current_user}")
         return GameStateResponse(
             success=False,
             message="未找到存档"
