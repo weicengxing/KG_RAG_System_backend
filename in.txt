@@ -17,12 +17,29 @@ python database.py
 # 2. 激活虚拟环境 (PowerShell 示例)
 .\venv\Scripts\activate
 
+codex --sandbox workspace-write
+
 #启动项目
 cd backend
-.\venv\Scripts\activate
+#.\venv\Scripts\activate
 #cd venv/Scripts
-python main.py
 python database.py
+python -u main.py
+
+cd myprogram_three
+mvn  spring-boot:run
+cd myprogram
+# 1. Maven 打包（跳过测试，更快）
+mvn clean package -DskipTests
+
+# 2. Docker 构建
+docker build -t myprogram:latest .
+
+# 3. 运行容器（需要映射端口和数据卷）
+docker run -p 8080:8080 myprogram:latest
+
+
+
 
 D:
 cd KG_RAG_System
@@ -40,12 +57,12 @@ set ANTHROPIC_AUTH_TOKEN=sk-0Lr7p1OU6rnWCVlOdSXbEtCV6TbL6Od8
 set  ANTHROPIC_BASE_URL=https://api.univibe.cc/anthropic
 
 netstat -ano | findstr 6379
-taskkill /F /PID 33280
+taskkill /F /PID 41292
 
 
 
 git add .
-git commit -m "kg_0.0.4-1"
+git commit -m "kg_0.0.5"
 git push
 
 cpolar start-all --config D:\Cpolar\cpolar.yml
@@ -55,7 +72,7 @@ cpolar start-all --config D:\Cpolar\cpolar.yml
 
 这是我的JWT验证，请你给我修改后的需要替换的或者新增的所有函数的完整代码，其他不用给
 
-请你给我修改后的前端完整代码，一定不要有任何省略
+请你给我修改后的前端完整代码，一定不要有任何省略，一定不要有任何省略，一定不要有任何省略
 
 后端路径是backend，帮我找到所有跟创建用户相关的函数和他所在的文件，只用找创建用户
 
