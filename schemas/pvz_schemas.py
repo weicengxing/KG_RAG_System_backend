@@ -23,6 +23,13 @@ class ZombieData(BaseModel):
     shieldHp: Optional[int] = 0
 
 
+class LawnMowerData(BaseModel):
+    """小推车数据模型"""
+    id: int
+    state: str
+    x: float
+
+
 class GameStateSave(BaseModel):
     """游戏状态保存模型"""
     sunEnergy: int
@@ -31,6 +38,7 @@ class GameStateSave(BaseModel):
     plants: List[PlantData]
     zombies: List[ZombieData]
     plantCooldowns: Dict[str, float]
+    lawnMowers: List[LawnMowerData] = []
 
 
 class GameStateResponse(BaseModel):
@@ -38,3 +46,24 @@ class GameStateResponse(BaseModel):
     success: bool
     message: str
     data: Optional[GameStateSave] = None
+
+
+class GameStatsData(BaseModel):
+    """游戏统计数据模型"""
+    highScore: int = 0
+    totalKills: int = 0
+    totalWaves: int = 0
+
+
+class UpdateGameStatsRequest(BaseModel):
+    """更新统计数据请求模型"""
+    score: int = 0
+    kills: int = 0
+    waves: int = 0
+
+
+class GameStatsResponse(BaseModel):
+    """游戏统计响应模型"""
+    success: bool
+    message: str
+    data: Optional[GameStatsData] = None
