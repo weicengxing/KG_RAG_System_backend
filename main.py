@@ -433,6 +433,10 @@ app.include_router(log_router)
 # 注册植物大战僵尸路由
 from routes.pvz_routes import router as pvz_router
 app.include_router(pvz_router, prefix="/api", tags=["植物大战僵尸"])
+
+# 注册植物大战僵尸多人对战路由
+from routes.pvz_multiplayer import router as pvz_multiplayer_router
+app.include_router(pvz_multiplayer_router, prefix="/api", tags=["植物大战僵尸多人对战"])
 # 定义请求体模型
 class UserAuth(BaseModel):
     username: str

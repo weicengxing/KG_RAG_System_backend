@@ -3,7 +3,8 @@
 """
 
 from pydantic import BaseModel
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
+from datetime import datetime
 
 
 class PlantData(BaseModel):
@@ -67,3 +68,40 @@ class GameStatsResponse(BaseModel):
     success: bool
     message: str
     data: Optional[GameStatsData] = None
+
+
+# ==================== 多人对战模式数据模型 ====================
+
+class RoomJoin(BaseModel):
+    """加入房间请求模型"""
+    room_code: str
+
+
+class SimpleSuccessResponse(BaseModel):
+    """简单成功响应模型"""
+    success: bool
+    message: str
+    data: Optional[Any] = None
+
+
+class SimpleRoomState(BaseModel):
+    """简化版房间状态模型（用于存储在Redis中）"""
+    room_id: str
+    room_code: str
+    status: str  # waiting/playing/paused/finished
+    plant_player: Optional[str]
+    zombie_player: Optional[str]
+    created_at: str  # ISO format datetime string
+    game_state: Optional[Dict[str, Any]] = None
+
+
+class StartGameRequest(BaseModel):
+    """开始游戏请求模型"""
+    room_id: str
+
+
+class RoomInfoResponse(BaseModel):
+    """房间信息响应模型"""
+    success: bool
+    message: str
+    data: Optional[Dict[str, Any]] = None

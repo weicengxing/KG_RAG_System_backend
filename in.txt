@@ -57,12 +57,12 @@ set ANTHROPIC_AUTH_TOKEN=sk-0Lr7p1OU6rnWCVlOdSXbEtCV6TbL6Od8
 set  ANTHROPIC_BASE_URL=https://api.univibe.cc/anthropic
 
 netstat -ano | findstr 6379
-taskkill /F /PID 41292
+taskkill /F /PID 14696
 
 
 
 git add .
-git commit -m "kg_0.0.5"
+git commit -m "kg_0.0.6-2"
 git push
 
 cpolar start-all --config D:\Cpolar\cpolar.yml
@@ -174,7 +174,8 @@ set ANTHROPIC_MODEL=zai/glm-4.7
 claude
 
 
-
+但是不需要服务器权威校验，这太复杂，直接转发，信任客户端请求
+我想在植物大战僵尸里新加一个双人对战模式，这是计划，PVZ_MULTIPLAYER_IMPLEMENTATION_PLAN.md，第一阶段已经完成了，你帮我实现第一阶段，但是不需要服务器权威校验，这太复杂，直接转发，信任客户端请求
 
 动画效果还是不够，有点简陋，能不能改得更精美更好看，让人惊艳的那种，你先构思，再改
 
