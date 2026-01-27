@@ -9,6 +9,8 @@ import json
 import logging
 from datetime import datetime
 
+from services.room_service import simple_room_manager
+
 logger = logging.getLogger(__name__)
 
 
@@ -20,6 +22,8 @@ class SimplePvZWebSocketManager:
         self.active_connections: Dict[str, Dict[str, WebSocket]] = {}
         # 大厅连接: {user_id: websocket} - 用于未加入房间的用户监听房间列表变化
         self.lobby_connections: Dict[str, WebSocket] = {}
+        # 房间选择状态: {room_id: {"plant_selection": [...], "zombie_selection": [...], "plant_ready": False, "zombie_ready": False}}
+        self.room_selections: Dict[str, Dict] = {}
         # 当前序号
         self.sequence_number = 0
     
@@ -212,6 +216,77 @@ class SimplePvZWebSocketManager:
     def get_user_role(self, room_id: str, user_id: str) -> str:
         """获取用户在房间中的角色（植物/僵尸）"""
         return "unknown"
+    
+    async def handle_plant_selection(self, room_id: str, user_id: str, selected_plants: list):
+        """处理植物选择完成"""
+        if room_id not in self.room_selections:
+            self.room_selections[room_id] = {
+                "plant_selection": [],
+                "zombie_selection": [],
+                "plant_ready": False,
+                "zombie_ready": False
+            }
+        
+        # 保存植物选择
+        self.room_selections[room_id]["plant_selection"] = selected_plants
+        self.room_selections[room_id]["plant_ready"] = True
+        
+        logger.info(f"房间 {room_id} 植物玩家 {user_id} 完成选择: {selected_plants}")
+        
+        await self.send_to_user(room_id, user_id, "event.plant_selection_confirmed", {
+            "room_id": room_id,
+            "message": "植物选择已确认，等待僵尸玩家...",
+            "plant_selection": selected_plants
+        })
+
+        await self.check_both_selections_ready(room_id)
+    
+    async def handle_zombie_selection(self, room_id: str, user_id: str, selected_zombies: list):
+        """处理僵尸选择完成"""
+        if room_id not in self.room_selections:
+            self.room_selections[room_id] = {
+                "plant_selection": [],
+                "zombie_selection": [],
+                "plant_ready": False,
+                "zombie_ready": False
+            }
+        
+        # 保存僵尸选择
+        self.room_selections[room_id]["zombie_selection"] = selected_zombies
+        self.room_selections[room_id]["zombie_ready"] = True
+        
+        logger.info(f"房间 {room_id} 僵尸玩家 {user_id} 完成选择: {selected_zombies}")
+        
+        await self.send_to_user(room_id, user_id, "event.zombie_selection_confirmed", {
+            "room_id": room_id,
+            "message": "僵尸选择已确认，等待植物玩家...",
+            "zombie_selection": selected_zombies
+        })
+
+        await self.check_both_selections_ready(room_id)
+    
+    async def check_both_selections_ready(self, room_id: str):
+        """检查双方是否都完成选择"""
+        if room_id not in self.room_selections:
+            return
+        
+        selections = self.room_selections[room_id]
+        
+        if selections["plant_ready"] and selections["zombie_ready"]:
+            logger.info(f"房间 {room_id} 双方都完成选择，开始游戏")
+
+            await simple_room_manager.update_room_status(room_id, "playing")
+            
+            # 广播游戏开始事件，包含选择信息
+            await self.broadcast_to_room(room_id, "event.game_start", {
+                "room_id": room_id,
+                "message": "双方选择完成，游戏开始！",
+                "plant_selection": selections["plant_selection"],
+                "zombie_selection": selections["zombie_selection"]
+            })
+            
+            # 清理选择状态
+            del self.room_selections[room_id]
 
 
 # 全局实例

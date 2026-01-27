@@ -4,6 +4,7 @@
 """
 
 from fastapi import APIRouter, WebSocket, Depends, HTTPException, Query
+from starlette.websockets import WebSocketDisconnect
 from services.room_service import simple_room_manager
 from websocket.pvz_websocket import ws_manager
 from schemas.pvz_schemas import RoomJoin, SimpleSuccessResponse, StartGameRequest
@@ -290,7 +291,17 @@ async def pvz_websocket(
             # 简化版：直接转发所有游戏相关消息
             # 游戏消息类型包括：plant_action, zombie_action, game_state_update等
             
-            if message_type.startswith("plant_") and role == "plant":
+            if message_type == "plant_selection_complete":
+                # 植物选择完成
+                selected_plants = payload.get("selected_plants", [])
+                await ws_manager.handle_plant_selection(room_id, user_id, selected_plants)
+                
+            elif message_type == "zombie_selection_complete":
+                # 僵尸选择完成
+                selected_zombies = payload.get("selected_zombies", [])
+                await ws_manager.handle_zombie_selection(room_id, user_id, selected_zombies)
+                
+            elif message_type.startswith("plant_") and role == "plant":
                 # 植物玩家的操作，转发给僵尸玩家
                 await ws_manager.broadcast_to_others(room_id, user_id, message_type, payload)
                 

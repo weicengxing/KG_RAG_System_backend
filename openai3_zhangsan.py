@@ -2,13 +2,13 @@ import os
 import sys
 import requests
 
-API_URL = "https://inference.canopywave.io/v1/chat/completions"
-MODEL = "zai/glm-4.7"
+API_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
+MODEL = "z-ai/glm4.7"
 
 # ✅ 建议把 token 放到环境变量，避免写进代码
 # Windows (PowerShell): setx CANOPYWAVE_TOKEN "你的token"
 # macOS/Linux: export CANOPYWAVE_TOKEN="你的token"
-TOKEN = os.getenv("CANOPYWAVE_TOKEN") or "f_gi7mc7wl0FKSeAEHUbXhxWz7KtGoId8bjp0xoecpI"
+TOKEN = os.getenv("CANOPYWAVE_TOKEN") or "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"
 
 HEADERS = {
     "Content-Type": "application/json",
