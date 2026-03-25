@@ -8,7 +8,8 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime
 from elasticsearch import Elasticsearch
 from elasticsearch.helpers import bulk
-from config import ES_URL, ES_INDEX_LOGS, ES_INDEX_MUSIC
+from config import ES_URL, ES_INDEX_LOGS, ES_INDEX_MUSIC, BM25_INDEX_NAME
+import config
 
 logger = logging.getLogger(__name__)
 
@@ -37,13 +38,16 @@ class ElasticsearchManager:
                 # 初始化索引
                 self._init_logs_index()
                 self._init_music_index()
+                config.ES_AVAILABLE = True
                 return True
             else:
                 logger.error("❌ Elasticsearch连接失败：无法ping通服务器")
+                config.ES_AVAILABLE = False
                 return False
                 
         except Exception as e:
             logger.error(f"❌ Elasticsearch连接失败: {e}")
+            config.ES_AVAILABLE = False
             return False
     
     def _init_logs_index(self) -> bool:
@@ -551,3 +555,202 @@ class ElasticsearchManager:
 
 # 全局ES管理器实例
 es_manager = ElasticsearchManager()
+
+
+# ==================== 知识图谱文档 BM25 索引方法 ====================
+
+def init_kg_documents_index() -> bool:
+    """
+    初始化知识图谱文档索引（用于 BM25 搜索）
+    """
+    try:
+        if not es_manager.client.indices.exists(index=BM25_INDEX_NAME):
+            kg_doc_mapping = {
+                "mappings": {
+                    "properties": {
+                        "doc_id": {"type": "keyword"},
+                        "chunk_index": {"type": "integer"},
+                        "content": {
+                            "type": "text",
+                            "analyzer": "ik_max_word",
+                            "fields": {
+                                "keyword": {"type": "keyword"}
+                            }
+                        },
+                        "length": {"type": "integer"},
+                        "created_at": {"type": "date"}
+                    }
+                },
+                "settings": {
+                    "number_of_shards": 1,
+                    "number_of_replicas": 1
+                }
+            }
+            
+            es_manager.client.indices.create(
+                index=BM25_INDEX_NAME,
+                body=kg_doc_mapping
+            )
+            logger.info(f"✅ 创建知识图谱文档索引成功: {BM25_INDEX_NAME}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"❌ 初始化知识图谱文档索引失败: {e}")
+        return False
+
+
+def index_kg_documents(chunks: List[Dict[str, Any]], doc_id: str) -> int:
+    """
+    批量索引知识图谱文档块（用于 BM25 搜索）
+    
+    Args:
+        chunks: 文档块列表
+        doc_id: 文档ID
+    
+    Returns:
+        成功索引的数量
+    """
+    try:
+        if not chunks:
+            return 0
+        
+        # 确保索引存在
+        init_kg_documents_index()
+        
+        # 准备批量数据
+        actions = []
+        for chunk in chunks:
+            actions.append({
+                "_index": BM25_INDEX_NAME,
+                "_id": f"{doc_id}_{chunk['index']}",
+                "_source": {
+                    "doc_id": doc_id,
+                    "chunk_index": chunk["index"],
+                    "content": chunk["content"],
+                    "length": chunk.get("length", len(chunk["content"])),
+                    "created_at": datetime.now()
+                }
+            })
+        
+        # 执行批量索引
+        success, failed = bulk(
+            es_manager.client,
+            actions,
+            refresh=True,
+            raise_on_error=False
+        )
+        
+        logger.info(f"[BM25] 批量索引文档 {doc_id}: 成功 {success}, 失败 {len(failed)}")
+        return success
+        
+    except Exception as e:
+        logger.error(f"[BM25] 批量索引文档失败: {e}")
+        return 0
+
+
+def search_kg_documents(query: str, doc_id: Optional[str] = None, size: int = 20) -> List[Dict[str, Any]]:
+    """
+    搜索知识图谱文档（BM25 关键词检索）
+    
+    Args:
+        query: 搜索关键词
+        doc_id: 可选的文档ID过滤
+        size: 返回结果数量
+    
+    Returns:
+        检索结果列表
+    """
+    try:
+        # 构建查询条件
+        must_conditions = []
+        
+        # 关键词搜索（BM25）
+        if query:
+            must_conditions.append({
+                "match": {
+                    "content": {
+                        "query": query,
+                        "analyzer": "ik_max_word"
+                    }
+                }
+            })
+        
+        # 文档ID过滤
+        filter_conditions = []
+        if doc_id:
+            filter_conditions.append({"term": {"doc_id": doc_id}})
+        
+        # 组合查询
+        query_body = {"bool": {}}
+        if must_conditions:
+            query_body["bool"]["must"] = must_conditions
+        if filter_conditions:
+            query_body["bool"]["filter"] = filter_conditions
+        
+        # 如果没有查询条件，返回空
+        if not must_conditions:
+            return []
+        
+        # 执行搜索
+        result = es_manager.client.search(
+            index=BM25_INDEX_NAME,
+            body={
+                "query": query_body,
+                "size": size,
+                "sort": [{"_score": {"order": "desc"}}]
+            }
+        )
+        
+        # 格式化结果
+        hits = result["hits"]["hits"]
+        
+        results = []
+        for hit in hits:
+            source = hit["_source"]
+            results.append({
+                "content": source.get("content", ""),
+                "metadata": {
+                    "doc_id": source.get("doc_id"),
+                    "chunk_index": source.get("chunk_index"),
+                    "length": source.get("length")
+                },
+                "bm25_score": hit["_score"]
+            })
+        
+        logger.info(f"[BM25] 搜索 '{query}' 找到 {len(results)} 条结果")
+        return results
+        
+    except Exception as e:
+        logger.error(f"[BM25] 搜索文档失败: {e}")
+        return []
+
+
+def delete_kg_documents(doc_id: str) -> bool:
+    """
+    删除知识图谱文档索引（按 doc_id）
+    
+    Args:
+        doc_id: 文档ID
+    
+    Returns:
+        是否删除成功
+    """
+    try:
+        # 删除匹配 doc_id 的所有文档
+        result = es_manager.client.delete_by_query(
+            index=BM25_INDEX_NAME,
+            body={
+                "query": {
+                    "term": {"doc_id": doc_id}
+                }
+            },
+            refresh=True
+        )
+        
+        deleted = result.get("deleted", 0)
+        logger.info(f"[BM25] 删除文档 {doc_id} 的索引: 删除了 {deleted} 条")
+        return True
+        
+    except Exception as e:
+        logger.error(f"[BM25] 删除文档索引失败: {e}")
+        return False

@@ -1,8 +1,14 @@
 #1.
 D:
 cd KG_RAG_System
-set ANTHROPIC_AUTH_TOKEN=sk-OrBcGlhaqz79WvGUsm22Nr4Vw5EjEUW8732MgJ0488KheXSH
-set  ANTHROPIC_BASE_URL=https://anyrouter.top
+set ANTHROPIC_AUTH_TOKEN=sk-0HWcBkjFK5LxUCyFI86YVRONlYSvA27FjGaxfp1n5BKxOME6
+set  ANTHROPIC_BASE_URL= https://a-ocnfniawgw.cn-shanghai.fcapp.run
+claude
+D:
+cd KG_RAG_System
+set ANTHROPIC_AUTH_TOKEN=sZM2ZT3atBEPYs_cAv3M8o-76C_7spMiH3h46vQow3o
+set  ANTHROPIC_BASE_URL=https://inference.canopywave.io
+set ANTHROPIC_MODEL=moonshotai/kimi-k2.5
 claude
 D:
 cd KG_RAG_System
@@ -62,7 +68,7 @@ taskkill /F /PID 14696
 
 
 git add .
-git commit -m "kg_0.0.6-2"
+git commit -m "kg_0.0.6-3"
 git push
 
 cpolar start-all --config D:\Cpolar\cpolar.yml
@@ -178,4 +184,127 @@ claude
 我想在植物大战僵尸里新加一个双人对战模式，这是计划，PVZ_MULTIPLAYER_IMPLEMENTATION_PLAN.md，第一阶段已经完成了，你帮我实现第一阶段，但是不需要服务器权威校验，这太复杂，直接转发，信任客户端请求
 
 动画效果还是不够，有点简陋，能不能改得更精美更好看，让人惊艳的那种，你先构思，再改
+
+现在请你帮我把多人主战战僵尸的正式对战页面改一下,就是改成跟单人的对战界面一样,只是区别就在于一个玩家能够控制植物,一个玩家能够控制僵尸,界面显示应该是基本一样的。
+
+
+摩达
+https://api-inference.modelscope.cn/v1
+ms-7ae9b437-2d5d-47c9-b613-86e012766c2c
+ZhipuAI/GLM-4.7
+
+canopywave.io
+https://inference.canopywave.io/v1
+f_gi7mc7wl0FKSeAEHUbXhxWz7KtGoId8bjp0xoecpI
+deepseek/deepseek-chat-v3.2
+
+免费gitee
+https://ai.gitee.com/serverless-api
+https://ai.gitee.com/v1
+TXNQD9VKEOGDTE8YKX3QYRGIQR5DJEV7IJ2RGN1D
+DXFFGRQNKDGV95QWCXEQGY6M2HIUT2TS8G1MSW1N
+PIUU0DPHZLTMMUVYDHKXLSIDGHPLV2NBMIT9IC1Y
+Kimi-K2.5
+
+Puter.js
+https://docs.puter.com/playground（前端调用）
+
+fireworks.ai
+https://api.fireworks.ai/inference/v1
+https://app.fireworks.ai/models（6刀）（    fw_2ssoSyoYStHh5RNjgTb8j4  fw_XudhqcQpecPnD2KypQGPBw
+fw_NunLqX2oSdYnf97nNWsLeh  fw_UicWR9rG6b6pTmTeoYze1J）
+
+baseten
+https://app.baseten.co/model-apis/qrjp213（6刀）
+
+https://friendli.ai（部署GLM4.7但是免费额度太少了）
+
+https://tokenfactory.nebius.com/（1刀）
+
+groq
+https://console.groq.com/playground
+
+现在多人版植物大战僵尸里面，西瓜投手不会攻击僵尸，什么原因，不应该是继承单人版吗，单人版是正常的
+
+202214012046
+陈鑫邮箱
+202214012046@hbmu.edu.cn （邮箱密码 cx202214012046@ anyrouter12345678）
+邮箱别名
+202214012046001@hbmu.edu.cn
+
+
+# 选你要用的模型
+model = "zai/glm-4.7"
+
+# 指定 provider
+model_provider = "canopywave"
+
+# 强制走 API Key（避免走 ChatGPT 登录）
+forced_login_method = "api"
+
+# 关掉 unstable features 提示（可选）
+suppress_unstable_features_warning = true
+
+[features]
+experimental_windows_sandbox = true
+
+################################################################################
+# Model provider：第三方中转（OpenAI-compatible）
+################################################################################
+[model_providers]
+  [model_providers.canopywave]
+  name = "CanopyWave Proxy"
+  base_url = "http://127.0.0.1:8787/v1"
+  env_key = "CANOPYWAVE_API_KEY"  # 使用你设置的环境变量名
+  wire_api = "responses"  # 这里设置为 "responses" 以匹配你中转的接口
+
+[projects.'C:\Users\zhangyuanzhao']
+trust_level = "untrusted"
+
+[projects.'D:\KG_RAG_System']
+trust_level = "untrusted"
+你好请你帮我续写小说，我会给你设定和几个样例，你负责续写
+这是设定，接下来还有两个样例
+不要跟样例写重复了，不需要写之前已经写过的一些情节。主角和沈若的故事可以新写一些剧情，还有别人跟七席说话是要恭敬的，你要注意，你之前写别人和七席的对话都像是在跟朋友说话
+
+
+
+
+
+后来贺老六跟我说，投票的时候柳承恩投了反对。
+
+"他为什么反对？"
+
+"他觉得苏绾出身太低，崇礼学院镇不住场面。"
+
+"那另一个反对票是谁的？"
+
+贺老六看了我一眼。
+
+"陈恪。"
+
+"他反对？他的理由呢？"
+
+"没有说理由。就投了反对。"
+
+我想了想。
+
+陈恪。
+
+他跟裴家有姻亲关系。苏绾在崇礼学院十四年，做的事情是改革教育制度——这件事跟沈若查裴家控制郡学院的方向隐隐暗合。
+
+也许陈恪不是反对苏绾这个人。
+
+他是反对桌子上再多一个可能动裴家利益的人。
+
+也许。
+这个情节改一下，这两位写的太反面了，太浅显了，实际上他们都是正派人物，而且做到这个位置，智慧绝对顶尖，只是可能有自己的出发点，
+
+
+
+
+看一下我现在的知识图谱功能，目前已经实现了GPT2.md的前面部分，你看看帮我实现添加 BM25 关键词检索
+
+
+
 

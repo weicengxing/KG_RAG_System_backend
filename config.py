@@ -267,6 +267,34 @@ EMBED_API_KEY = "ms-7ae9b437-2d5d-47c9-b613-86e012766c2c"
 EMBED_BASE_URL = "https://api-inference.modelscope.cn/v1"
 EMBED_MODEL = "Qwen/Qwen3-Embedding-8B" # 魔搭上的模型名称
 
+# --- 4. Reranker 模型配置 (BGE Reranker) ---
+# Reranking 可显著提升检索质量，从 top-20 重排序后选 top-5
+RERANKER_ENABLED = os.getenv("RERANKER_ENABLED", "true").lower() == "true"
+RERANKER_MODEL = os.getenv("RERANKER_MODEL", "BAAI/bge-reranker-v2-m3")
+RERANKER_TOP_K = int(os.getenv("RERANKER_TOP_K", 5))  # Rerank 后返回的数量
+RERANKER_INITIAL_TOP_K = int(os.getenv("RERANKER_INITIAL_TOP_K", 20))  # Rerank 前取的数量
+RERANKER_SCORE_THRESHOLD = float(os.getenv("RERANKER_SCORE_THRESHOLD", 0.3))  # Rerank 分数阈值（0.3以上才保留）
+RERANKER_MAX_LENGTH = int(os.getenv("RERANKER_MAX_LENGTH", 1024))  # Reranker 最大输入长度（字符）
+RERANKER_WEIGHT = float(os.getenv("RERANKER_WEIGHT", 0.7))  # Rerank 分数权重
+VECTOR_WEIGHT = float(os.getenv("VECTOR_WEIGHT", 0.3))  # 向量分数权重
+
+# --- 5. RAG 检索缓存配置 ---
+# 使用 Redis 缓存检索结果，相同查询直接返回缓存，减少 API 调用
+RAG_CACHE_ENABLED = os.getenv("RAG_CACHE_ENABLED", "true").lower() == "true"
+RAG_CACHE_TTL = int(os.getenv("RAG_CACHE_TTL", 3600))  # 缓存过期时间（秒），默认1小时
+RAG_CACHE_PREFIX = "kg:search:"  # 缓存键前缀
+# 语义相似度缓存配置
+SEMANTIC_CACHE_ENABLED = os.getenv("SEMANTIC_CACHE_ENABLED", "true").lower() == "true"
+SEMANTIC_CACHE_SIMILARITY_THRESHOLD = float(os.getenv("SEMANTIC_CACHE_SIMILARITY_THRESHOLD", 0.95))  # 相似度阈值
+SEMANTIC_CACHE_MAX_ENTRIES = int(os.getenv("SEMANTIC_CACHE_MAX_ENTRIES", 1000))  # 最大缓存条目数
+
+# --- 6. Query Rewrite 配置 ---
+# 使用 LLM 改写用户查询，生成多个等价查询以提升检索召回率
+QUERY_REWRITE_ENABLED = os.getenv("QUERY_REWRITE_ENABLED", "true").lower() == "true"
+QUERY_REWRITE_COUNT = int(os.getenv("QUERY_REWRITE_COUNT", 3))  # 改写后的查询数量
+QUERY_REWRITE_TOP_K = int(os.getenv("QUERY_REWRITE_TOP_K", 10))  # 每个查询检索的文档数量
+QUERY_REWRITE_MERGE_TOP_K = int(os.getenv("QUERY_REWRITE_MERGE_TOP_K", 10))  # 合并后的最终数量
+
 # --- 4. 保留旧的配置变量名以保持向后兼容（可选）---
 LLM_API_KEY = EXTRACTION_API_KEY  # 向后兼容
 LLM_BASE_URL = EXTRACTION_BASE_URL
@@ -292,3 +320,33 @@ ES_PORT = int(os.getenv("ES_PORT", 9200))
 ES_URL = f"http://{ES_HOST}:{ES_PORT}"
 ES_INDEX_LOGS = "app_logs"
 ES_INDEX_MUSIC = "music_songs"
+
+# ES 可用性检查（在 elasticsearch_utils.py 中初始化后设置）
+ES_AVAILABLE = False
+
+# --- BM25 混合检索配置 ---
+BM25_ENABLED = os.getenv("BM25_ENABLED", "true").lower() == "true"
+BM25_INDEX_NAME = "kg_documents"  # 知识图谱文档索引
+BM25_TOP_K = int(os.getenv("BM25_TOP_K", 20))  # BM25 检索返回数量
+BM25_WEIGHT = float(os.getenv("BM25_WEIGHT", 0.5))  # BM25 结果权重
+VECTOR_WEIGHT_HYBRID = float(os.getenv("VECTOR_WEIGHT_HYBRID", 0.5))  # 向量结果权重（混合检索时）
+RRF_K = int(os.getenv("RRF_K", 60))  # RRF 融合参数 k
+
+# ==================== Milvus 向量数据库配置 ====================
+# 高性能向量数据库，支持高 QPS 场景
+MILVUS_HOST = os.getenv("MILVUS_HOST", "localhost")
+MILVUS_PORT = int(os.getenv("MILVUS_PORT", 19530))
+MILVUS_USER = os.getenv("MILVUS_USER", "")
+MILVUS_PASSWORD = os.getenv("MILVUS_PASSWORD", "")
+MILVUS_COLLECTION_NAME = os.getenv("MILVUS_COLLECTION_NAME", "kg_documents")
+MILVUS_INDEX_TYPE = os.getenv("MILVUS_INDEX_TYPE", "HNSW")  # 索引类型: HNSW, IVF_FLAT, DiskANN
+MILVUS_METRIC_TYPE = os.getenv("MILVUS_METRIC_TYPE", "COSINE")  # 距离度量: COSINE, IP, L2
+MILVUS_DIM = int(os.getenv("MILVUS_DIM", 1024))  # 向量维度 (Qwen3-Embedding-8B 输出 1024 维)
+MILVUS_EF = int(os.getenv("MILVUS_EF", 128))  # HNSW ef 参数（搜索宽度）
+MILVUS_M = int(os.getenv("MILVUS_M", 16))  # HNSW m 参数（每个节点的连接数）
+MILVUS_NLIST = int(os.getenv("MILVUS_NLIST", 1024))  # IVF 聚类数量
+MILVUS_NPROBE = int(os.getenv("MILVUS_NPROBE", 16))  # IVF 搜索探针数量
+MILVUS_CONSISTENCY_LEVEL = os.getenv("MILVUS_CONSISTENCY_LEVEL", "Eventually")  # 一致性级别
+
+# 是否启用 Milvus（设为 true 启用，false 则使用 ChromaDB）
+MILVUS_ENABLED = os.getenv("MILVUS_ENABLED", "false").lower() == "true"
