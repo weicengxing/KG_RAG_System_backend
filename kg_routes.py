@@ -102,6 +102,7 @@ class GraphQueryRequest(BaseModel):
     limit: int = 100
 
 
+<<<<<<< HEAD
 class GraphEditNode(BaseModel):
     id: str
     label: str
@@ -137,6 +138,8 @@ async def save_graph_edits_async(nodes: List[Dict[str, Any]], edges: List[Dict[s
         traceback.print_exc()
 
 
+=======
+>>>>>>> e39213f2cb253d197ef2c366c2eca68c7d252d21
 # ==================== 文档上传接口 ====================
 
 @router.post("/upload-document")

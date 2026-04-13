@@ -1292,7 +1292,11 @@ class KnowledgeGraphService:
                     }
 
                 for rel in r_list:
+<<<<<<< HEAD
                     edge_id = str(rel.element_id)
+=======
+                    edge_id = f"{rel.start_node.element_id}-{rel.type}-{rel.end_node.element_id}"
+>>>>>>> e39213f2cb253d197ef2c366c2eca68c7d252d21
                     if not any(e['id'] == edge_id for e in edges):
                         edges.append({
                             "id": edge_id,
@@ -2043,6 +2047,7 @@ def _save_chunks_with_es(self, chunks: List[Dict[str, Any]], doc_id: str):
             print(f"[BM25] 同步到 Elasticsearch 失败: {e}")
 
 # 替换原方法
+<<<<<<< HEAD
 def _get_graph_data_partitioned(self, doc_id: Optional[str] = None, limit: int = 100) -> Dict[str, Any]:
     """Build graph data with document-based combo partitions for the frontend."""
 
@@ -2274,6 +2279,11 @@ KnowledgeGraphService.save_triplets_to_neo4j = _save_triplets_to_neo4j_batched
 KnowledgeGraphService.save_chunks_to_chromadb = _save_chunks_with_es
 KnowledgeGraphService.get_graph_data = _get_graph_data_partitioned
 KnowledgeGraphService.apply_graph_edits = _apply_graph_edits
+=======
+KnowledgeGraphService.process_document_pipeline_async = _process_document_pipeline_async
+KnowledgeGraphService.save_triplets_to_neo4j = _save_triplets_to_neo4j_batched
+KnowledgeGraphService.save_chunks_to_chromadb = _save_chunks_with_es
+>>>>>>> e39213f2cb253d197ef2c366c2eca68c7d252d21
 
 
 # 全局服务实例
