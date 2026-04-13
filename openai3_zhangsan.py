@@ -1,80 +1,62 @@
-import os
-import sys
 import requests
+import json
+import sys
 
-API_URL = "https://inference.canopywave.io/v1/chat/completions"
-MODEL = "minimax/minimax-m2.1"
+# 强制控制台使用 UTF-8
+sys.stdout.reconfigure(encoding='utf-8')
+sys.stdin.reconfigure(encoding='utf-8')
 
-# ✅ 建议把 token 放到环境变量，避免写进代码
-# Windows (PowerShell): setx CANOPYWAVE_TOKEN "你的token"
-# macOS/Linux: export CANOPYWAVE_TOKEN="你的token"
-TOKEN = os.getenv("CANOPYWAVE_TOKEN") or "f_gi7mc7wl0FKSeAEHUbXhxWz7KtGoId8bjp0xoecpI"
+API_KEY = "sk-r0QnvIfixN70kxblq2AuQcfFslZNDlb1xy31I20GWQmBqnTy"
+BASE_URL = "https://terminal.pub/v1/messages"
+MODEL = "claude-opus-4-6"
 
-HEADERS = {
-    "Content-Type": "application/json",
-    "Authorization": f"Bearer {TOKEN}",
+headers = {
+    "Content-Type": "application/json; charset=utf-8",
+    "X-API-Key": API_KEY
 }
 
-def chat(messages, max_tokens=1000, temperature=0.7, timeout=60):
+conversation = []
+
+print("开始聊天（输入 exit 退出）\n")
+
+while True:
+    user_input = input("你: ")
+
+    if user_input.lower() in ["exit", "quit"]:
+        break
+
+    conversation.append({
+        "role": "user",
+        "content": user_input
+    })
+
     payload = {
         "model": MODEL,
-        "messages": messages,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
+        "max_tokens": 1024,
+        "messages": conversation
     }
-    r = requests.post(API_URL, headers=HEADERS, json=payload, timeout=timeout)
-    r.raise_for_status()
-    data = r.json()
 
-    # 兼容常见 OpenAI 风格返回：choices[0].message.content
     try:
-        return data["choices"][0]["message"]["content"]
-    except Exception:
-        # 如果返回结构不同，打印出来方便你调整解析
-        raise RuntimeError(f"Unexpected response format: {data}")
+        response = requests.post(
+            BASE_URL,
+            headers=headers,
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        )
 
-def main():
-    if not TOKEN or "把你的token放这里" in TOKEN:
-        print("请先设置 CANOPYWAVE_TOKEN 环境变量，或在代码里填入 token。")
-        sys.exit(1)
+        data = response.json()
 
-    # 你可以加 system 角色，定义助手风格/规则
-    messages = [
-        {"role": "system", "content": "你是一个有帮助的中文助手。"}
-    ]
-
-    print("✅ 连续对话已启动。输入 /exit 退出，/reset 清空上下文。\n")
-
-    while True:
-        user_text = input("你：").strip()
-        if not user_text:
-            continue
-        if user_text.lower() in ["/exit", "exit", "quit", "q"]:
-            print("已退出。")
-            break
-        if user_text.lower() == "/reset":
-            messages = [{"role": "system", "content": "你是一个有帮助的中文助手。"}]
-            print("✅ 已清空上下文。\n")
+        if "error" in data:
+            print("错误:", data)
             continue
 
-        # 追加用户消息
-        messages.append({"role": "user", "content": user_text})
+        reply = data["content"][0]["text"]
 
-        try:
-            assistant_text = chat(messages)
-        except requests.HTTPError as e:
-            print(f"\n❌ HTTP 错误：{e}\n响应内容：{getattr(e.response, 'text', '')}\n")
-            # 出错时把最后一条 user 消息弹出，避免坏状态污染上下文
-            messages.pop()
-            continue
-        except Exception as e:
-            print(f"\n❌ 错误：{e}\n")
-            messages.pop()
-            continue
+        print("Claude:", reply, "\n")
 
-        # 追加助手消息（关键：这样才能连续对话）
-        messages.append({"role": "assistant", "content": assistant_text})
-        print(f"\n助手：{assistant_text}\n")
+        conversation.append({
+            "role": "assistant",
+            "content": reply
+        })
 
-if __name__ == "__main__":
-    main()
+    except Exception as e:
+        print("请求失败:", e)
