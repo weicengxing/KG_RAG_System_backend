@@ -83,9 +83,9 @@ VECTOR_SEARCH_ENABLED = os.getenv("VECTOR_SEARCH_ENABLED", "true").lower() == "t
 VECTOR_SEARCH_IN_THREAD = os.getenv("VECTOR_SEARCH_IN_THREAD", "false").lower() == "true"
 
 # --- 1. 三元组提取模型配置 (用于实体关系抽取) ---
-EXTRACTION_API_KEY = os.getenv("EXTRACTION_API_KEY") or os.getenv("OPENROUTER_API_KEY", "")
-EXTRACTION_BASE_URL = os.getenv("EXTRACTION_BASE_URL") or os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
-EXTRACTION_MODEL = os.getenv("EXTRACTION_MODEL", "minimax/minimax-m2.5:free")
+EXTRACTION_API_KEY = os.getenv("EXTRACTION_API_KEY") or os.getenv("OPENROUTER_API_KEY", "sk-UfXXCQAA0HT8ZGCEZJSs9Z4LrWzBBgRureH5fvMIqLPH3LGH")
+EXTRACTION_BASE_URL = os.getenv("EXTRACTION_BASE_URL") or os.getenv("OPENROUTER_BASE_URL", "https://api.aipaibox.com/v1")
+EXTRACTION_MODEL = os.getenv("EXTRACTION_MODEL", "gpt-5.4")
 
 # --- 2. AI问答模型配置列表 (用户可在前端选择) ---
 QA_MODELS = [
@@ -163,9 +163,9 @@ QA_MODELS = [
     {
         "name": "Minimax-M2.5",
         "description": "MiniMax M2.5模型，强大的综合能力，适合大多数问答场景，性价比极高",
-        "api_key": os.getenv("QA_MODEL_4_API_KEY", "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"),
-        "base_url": os.getenv("QA_MODEL_4_BASE_URL", "https://openrouter.ai/api/v1"),
-        "model": os.getenv("QA_MODEL_4_MODEL", "minimax/minimax-m2.5:free")
+        "api_key": os.getenv("QA_MODEL_4_API_KEY", "sk-67af826bb2bd48de7ca5ade95af93c1cd8faffc6b3149f6a0c8693cdbb50ce41"),
+        "base_url": os.getenv("QA_MODEL_4_BASE_URL", "https://tokenflux.dev/v1"),
+        "model": os.getenv("QA_MODEL_4_MODEL", "gpt-5.4")
     },
     {
         "name": "GLM-4.7",
