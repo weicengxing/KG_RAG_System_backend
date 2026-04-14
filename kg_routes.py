@@ -15,7 +15,7 @@ import asyncio
 import hashlib
 import json
 from datetime import datetime
-from kg_service import kg_service
+from kg_service import kg_service, ExtractionAuthError
 from database_asy_mon_re import db_manager
 from task_manager import task_manager
 from confluent_kafka import Producer as KafkaProducer
@@ -102,7 +102,6 @@ class GraphQueryRequest(BaseModel):
     limit: int = 100
 
 
-<<<<<<< HEAD
 class GraphEditNode(BaseModel):
     id: str
     label: str
@@ -138,8 +137,6 @@ async def save_graph_edits_async(nodes: List[Dict[str, Any]], edges: List[Dict[s
         traceback.print_exc()
 
 
-=======
->>>>>>> e39213f2cb253d197ef2c366c2eca68c7d252d21
 # ==================== 文档上传接口 ====================
 
 @router.post("/upload-document")
@@ -382,6 +379,10 @@ async def extract_entities(
             "total_triplets": len(triplets),
             "message": "实体抽取成功"
         }
+    except ExtractionAuthError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

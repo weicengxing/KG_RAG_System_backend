@@ -267,6 +267,10 @@ def set_search_cache(query: str, results: List[Dict[str, Any]], query_embedding:
 
 # ==================== 知识图谱服务类 ====================
 
+class ExtractionAuthError(RuntimeError):
+    """Raised when the extraction model is misconfigured or unauthorized."""
+
+
 class KnowledgeGraphService:
     """知识图谱RAG服务类"""
 
@@ -528,6 +532,9 @@ class KnowledgeGraphService:
 
     def extract_entities_and_relations(self, text: str) -> List[Dict[str, str]]:
         """使用LLM提取实体和关系（三元组）"""
+        if not EXTRACTION_API_KEY:
+            raise ExtractionAuthError("未配置实体抽取模型 API Key，请设置 EXTRACTION_API_KEY 或 OPENROUTER_API_KEY")
+
         prompt = f"""你是一个知识图谱专家。请从以下文本中提取实体和关系，以JSON格式输出。
 
 要求：
@@ -577,7 +584,12 @@ class KnowledgeGraphService:
             return triplets if isinstance(triplets, list) else []
 
         except Exception as e:
-            logging.error(f"[EXTRACTION] 实体关系抽取失败: {str(e)}")
+            error_message = str(e)
+            logging.error(f"[EXTRACTION] 实体关系抽取失败: {error_message}")
+
+            if "401" in error_message or "User not found" in error_message or "Incorrect API key" in error_message:
+                raise ExtractionAuthError("实体抽取模型鉴权失败，请检查 EXTRACTION_API_KEY / OPENROUTER_API_KEY 是否有效")
+
             return []
 
     async def extract_batch_async(self, chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -596,6 +608,8 @@ class KnowledgeGraphService:
                     )
                     return result
                 except Exception as e:
+                    if isinstance(e, ExtractionAuthError):
+                        raise
                     print(f"抽取块 {chunk['index']} 失败: {e}")
                     return []
 
@@ -1292,11 +1306,7 @@ class KnowledgeGraphService:
                     }
 
                 for rel in r_list:
-<<<<<<< HEAD
                     edge_id = str(rel.element_id)
-=======
-                    edge_id = f"{rel.start_node.element_id}-{rel.type}-{rel.end_node.element_id}"
->>>>>>> e39213f2cb253d197ef2c366c2eca68c7d252d21
                     if not any(e['id'] == edge_id for e in edges):
                         edges.append({
                             "id": edge_id,
@@ -2047,7 +2057,6 @@ def _save_chunks_with_es(self, chunks: List[Dict[str, Any]], doc_id: str):
             print(f"[BM25] 同步到 Elasticsearch 失败: {e}")
 
 # 替换原方法
-<<<<<<< HEAD
 def _get_graph_data_partitioned(self, doc_id: Optional[str] = None, limit: int = 100) -> Dict[str, Any]:
     """Build graph data with document-based combo partitions for the frontend."""
 
@@ -2279,11 +2288,6 @@ KnowledgeGraphService.save_triplets_to_neo4j = _save_triplets_to_neo4j_batched
 KnowledgeGraphService.save_chunks_to_chromadb = _save_chunks_with_es
 KnowledgeGraphService.get_graph_data = _get_graph_data_partitioned
 KnowledgeGraphService.apply_graph_edits = _apply_graph_edits
-=======
-KnowledgeGraphService.process_document_pipeline_async = _process_document_pipeline_async
-KnowledgeGraphService.save_triplets_to_neo4j = _save_triplets_to_neo4j_batched
-KnowledgeGraphService.save_chunks_to_chromadb = _save_chunks_with_es
->>>>>>> e39213f2cb253d197ef2c366c2eca68c7d252d21
 
 
 # 全局服务实例

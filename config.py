@@ -83,8 +83,8 @@ VECTOR_SEARCH_ENABLED = os.getenv("VECTOR_SEARCH_ENABLED", "true").lower() == "t
 VECTOR_SEARCH_IN_THREAD = os.getenv("VECTOR_SEARCH_IN_THREAD", "false").lower() == "true"
 
 # --- 1. 三元组提取模型配置 (用于实体关系抽取) ---
-EXTRACTION_API_KEY = os.getenv("EXTRACTION_API_KEY", "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")
-EXTRACTION_BASE_URL = os.getenv("EXTRACTION_BASE_URL", "https://openrouter.ai/api/v1")
+EXTRACTION_API_KEY = os.getenv("EXTRACTION_API_KEY") or os.getenv("OPENROUTER_API_KEY", "")
+EXTRACTION_BASE_URL = os.getenv("EXTRACTION_BASE_URL") or os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
 EXTRACTION_MODEL = os.getenv("EXTRACTION_MODEL", "minimax/minimax-m2.5:free")
 
 # --- 2. AI问答模型配置列表 (用户可在前端选择) ---
