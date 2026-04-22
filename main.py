@@ -418,6 +418,8 @@ app.include_router(social_routes.router)
 # 注册聊天室路由
 from chat_routes import router as chat_router
 app.include_router(chat_router)
+from qa_web_routes import router as web_chat_router
+app.include_router(web_chat_router)
 # 注册群组路由
 from api.group_routes import router as group_router
 app.include_router(group_router)

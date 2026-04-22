@@ -4,9 +4,9 @@ from openai import OpenAI
 for key in ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"]:
     os.environ.pop(key, None)
 
-API_KEY = "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"
-BASE_URL = "https://openrouter.ai/api/v1"
-MODEL = "qwen/qwen3.6-plus:free"
+API_KEY = "sk-2ad2294a23410d8d46bb24213e3581109cd214a94a2fc7e617e2cb3e3abe2894"
+BASE_URL = "https://uuapi.net/v1"
+MODEL = "claude-opus-4-6"
 
 client = OpenAI(
     api_key=API_KEY,

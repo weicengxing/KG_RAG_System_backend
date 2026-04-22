@@ -1,0 +1,40 @@
+{
+  "e6e98c2d-f3fa-4b29-92fc-0f783a72cf7b": {
+    "session_id": "e6e98c2d-f3fa-4b29-92fc-0f783a72cf7b",
+    "title": "???????????????",
+    "model": "claude-sonnet-4-6",
+    "created_at": "2026-04-16T07:38:15.321891+00:00",
+    "updated_at": "2026-04-16T07:38:20.231540+00:00",
+    "messages": [
+      {
+        "role": "user",
+        "content": "???????????????",
+        "created_at": "2026-04-16T07:38:15.331810+00:00"
+      },
+      {
+        "role": "assistant",
+        "content": "# 你好！👋\n\n看起来你可能有些困惑，或者不确定从哪里开始？\n\n**我可以帮你：**\n- 💬 回答问题\n- 📝 写作/翻译\n- 🧮 解决数学问题\n- 💻 编写代码\n- 🎨 创意写作\n- 📚 学习新知识\n- 以及更多...\n\n**请告诉我你需要什么帮助？** 😊",
+        "created_at": "2026-04-16T07:38:20.231540+00:00"
+      }
+    ]
+  },
+  "1240d6c7-55cf-4e01-b1d4-98a561019245": {
+    "session_id": "1240d6c7-55cf-4e01-b1d4-98a561019245",
+    "title": "???????????????",
+    "model": "claude-sonnet-4-6",
+    "created_at": "2026-04-16T07:39:15.466754+00:00",
+    "updated_at": "2026-04-16T07:39:20.337375+00:00",
+    "messages": [
+      {
+        "role": "user",
+        "content": "???????????????",
+        "created_at": "2026-04-16T07:39:15.483438+00:00"
+      },
+      {
+        "role": "assistant",
+        "content": "It looks like your message didn't come through clearly! 😊\n\n**How can I help you?**\n\nFeel free to ask me anything — I'm here to help with:\n- ❓ Questions\n- 💡 Ideas & brainstorming\n- 📝 Writing & editing\n- 🔢 Math & problem-solving\n- 💬 Conversation\n- And much more!\n\nWhat's on your mind? 🙂",
+        "created_at": "2026-04-16T07:39:20.337375+00:00"
+      }
+    ]
+  }
+}

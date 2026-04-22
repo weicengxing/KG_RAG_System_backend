@@ -161,10 +161,10 @@ QA_MODELS = [
 
 
     {
-        "name": "Minimax-M2.5",
-        "description": "MiniMax M2.5模型，强大的综合能力，适合大多数问答场景，性价比极高",
-        "api_key": os.getenv("QA_MODEL_4_API_KEY", "sk-67af826bb2bd48de7ca5ade95af93c1cd8faffc6b3149f6a0c8693cdbb50ce41"),
-        "base_url": os.getenv("QA_MODEL_4_BASE_URL", "https://tokenflux.dev/v1"),
+        "name": "GPT-5.4",
+        "description": "OpenAI GPT-5.4模型，最新一代大模型，具备卓越的语言理解和生成能力,当今最强模型梯队",
+        "api_key": os.getenv("QA_MODEL_4_API_KEY", "sk-ajA9UcVAwdjYGxUv3i3XsJwaNx2DuHPQ1vmQLQAE5mIxTmtn"),
+        "base_url": os.getenv("QA_MODEL_4_BASE_URL", "http://beefapi.com/v1"),
         "model": os.getenv("QA_MODEL_4_MODEL", "gpt-5.4")
     },
     {
@@ -260,7 +260,7 @@ QA_MODELS = [
 ]
 
 # 默认AI问答模型名称
-DEFAULT_QA_MODEL = os.getenv("DEFAULT_QA_MODEL", "Minimax-M2.5")
+DEFAULT_QA_MODEL = os.getenv("DEFAULT_QA_MODEL", "GPT-5.4")
 
 # --- 3. Embedding 向量模型配置 (使用 ModelScope) ---
 EMBED_API_KEY = "ms-7ae9b437-2d5d-47c9-b613-86e012766c2c"
