@@ -368,16 +368,67 @@ class GameWorldLogicMixin:
             return []
         return [item for item in landmarks if not self._is_tribe_decoration(item)]
 
+    def _flag_boundary_relation(self, tribe_id: Optional[str], flag: dict) -> Optional[dict]:
+        if not tribe_id or not isinstance(flag, dict):
+            return None
+        flag_x = float(flag.get("x", 0) or 0)
+        flag_z = float(flag.get("z", 0) or 0)
+        nearest = None
+        nearest_distance = None
+        for other_tribe in self.tribes.values():
+            other_id = other_tribe.get("id")
+            if not other_id or other_id == tribe_id:
+                continue
+            for other_flag in other_tribe.get("territory_flags", []) or []:
+                if not isinstance(other_flag, dict):
+                    continue
+                dx = flag_x - float(other_flag.get("x", 0) or 0)
+                dz = flag_z - float(other_flag.get("z", 0) or 0)
+                distance = math.sqrt(dx * dx + dz * dz)
+                if nearest_distance is None or distance < nearest_distance:
+                    nearest_distance = distance
+                    nearest = (other_tribe, other_flag)
+        if not nearest or nearest_distance is None or nearest_distance > TRIBE_FLAG_BOUNDARY_NEAR_DISTANCE:
+            return None
+        other_tribe, other_flag = nearest
+        tribe = self.tribes.get(tribe_id) or {}
+        own_oath = (self._tribe_oath(tribe) or {}).get("key")
+        other_oath = (self._tribe_oath(other_tribe) or {}).get("key")
+        if own_oath == "trade" or other_oath == "trade":
+            state, label = "trade", "可贸易边界"
+        elif nearest_distance <= TRIBE_FLAG_BOUNDARY_TENSION_DISTANCE:
+            state, label = "tension", "紧张边界"
+        else:
+            state, label = "neighbor", "相邻边界"
+        return {
+            "state": state,
+            "label": label,
+            "distance": round(nearest_distance),
+            "otherTribeId": other_tribe.get("id"),
+            "otherTribeName": other_tribe.get("name", "部落"),
+            "otherFlagId": other_flag.get("id")
+        }
+
     def _get_dynamic_tribe_decorations(self) -> List[dict]:
         decorations: List[dict] = []
         for tribe in self.tribes.values():
+            oath = self._tribe_oath(tribe)
             camp = tribe.get("camp") or {}
             buildings = camp.get("buildings") or []
             for building in buildings:
-                decorations.append(dict(building))
+                item = dict(building)
+                if oath:
+                    item["oathKey"] = oath.get("key")
+                    item["oathLabel"] = oath.get("label")
+                decorations.append(item)
             for flag in tribe.get("territory_flags", []) or []:
                 if isinstance(flag, dict):
-                    decorations.append(dict(flag))
+                    item = dict(flag)
+                    if oath:
+                        item["oathKey"] = oath.get("key")
+                        item["oathLabel"] = oath.get("label")
+                    item["boundaryRelation"] = self._flag_boundary_relation(tribe.get("id"), item)
+                    decorations.append(item)
             beast_marker = self._tribe_beast_marker(tribe)
             if beast_marker:
                 decorations.append(beast_marker)
@@ -452,6 +503,7 @@ class GameWorldLogicMixin:
             spawn = camp.get("spawn") or {}
             tribe_name = tribe.get("name", "部落")
             tribe_id = tribe.get("id")
+            oath = self._tribe_oath(tribe)
             if tribe_id and center:
                 landmarks.append({
                     "id": f"{tribe_id}_camp_center",
@@ -459,7 +511,9 @@ class GameWorldLogicMixin:
                     "label": f"{tribe_name}营地",
                     "x": center.get("x", 0),
                     "z": center.get("z", 0),
-                    "type": "tribe_camp"
+                    "type": "tribe_camp",
+                    "oathKey": oath.get("key") if oath else None,
+                    "oathLabel": oath.get("label") if oath else None
                 })
             if tribe_id and spawn:
                 landmarks.append({
@@ -482,6 +536,8 @@ class GameWorldLogicMixin:
                         "x": building.get("x", 0),
                         "z": building.get("z", 0),
                         "type": building.get("type"),
+                        "oathKey": oath.get("key") if oath else None,
+                        "oathLabel": oath.get("label") if oath else None,
                         "runeSummary": rune_summary if building.get("type") == "tribe_totem" else None,
                         "renownState": renown_state if building.get("type") == "tribe_totem" else None
                     })
@@ -495,8 +551,13 @@ class GameWorldLogicMixin:
                     "x": flag.get("x", 0),
                     "z": flag.get("z", 0),
                     "type": "tribe_flag",
+                    "oathKey": oath.get("key") if oath else None,
+                    "oathLabel": oath.get("label") if oath else None,
                     "claimedBy": flag.get("claimedBy"),
                     "claimedAt": flag.get("claimedAt"),
+                    "lastPatrolledAt": flag.get("lastPatrolledAt"),
+                    "lastPatrolledBy": flag.get("lastPatrolledBy"),
+                    "boundaryRelation": self._flag_boundary_relation(tribe_id, flag),
                     "claimNote": flag.get("claimNote", "这里已经被部落宣告为活动区域。")
                 })
             beast_marker = self._tribe_beast_marker(tribe)

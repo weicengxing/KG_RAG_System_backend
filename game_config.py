@@ -28,6 +28,10 @@ TRIBE_TRADE_RENOWN_BONUS = 3
 TRIBE_FLAG_MAX = 4
 TRIBE_FLAG_WOOD_COST = 8
 TRIBE_FLAG_STONE_COST = 4
+TRIBE_FLAG_PATROL_COOLDOWN_SECONDS = 300
+TRIBE_FLAG_PATROL_CHAIN_TARGET = 2
+TRIBE_FLAG_BOUNDARY_TENSION_DISTANCE = 28
+TRIBE_FLAG_BOUNDARY_NEAR_DISTANCE = 52
 TRIBE_SCOUT_FOOD_COST = 4
 TRIBE_SCOUT_EVENT_COUNT = 2
 TRIBE_ORAL_EPIC_RENOWN_BONUS = 7
@@ -38,6 +42,12 @@ TRIBE_OATHS = {
     "trail": {"label": "远行誓约", "summary": "优先探索洞穴、季节目标和远方事件。"},
     "trade": {"label": "互市誓约", "summary": "优先贸易、集市和跨部落信誉。"},
     "beast": {"label": "兽伴誓约", "summary": "优先驯养幼兽和营地守护。"}
+}
+TRIBE_OATH_TASK_REWARDS = {
+    "hearth": {"title": "守火补粮", "summary": "围绕营火整理食物与柴草。", "food": 10, "renown": 3},
+    "trail": {"title": "远行踏勘", "summary": "派人记录洞穴和远方路线。", "discoveryProgress": 1, "renown": 4},
+    "trade": {"title": "互市邀约", "summary": "整理可交换物资并向外释放善意。", "tradeReputation": 1, "renown": 4},
+    "beast": {"title": "兽伴训练", "summary": "训练幼兽熟悉营地号令。", "beastExperience": 1, "food": 4, "renown": 3}
 }
 TRIBE_BEAST_LEVEL_STEP = 3
 TRIBE_BEAST_SPECIALTY_LEVEL = 3

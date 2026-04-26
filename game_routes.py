@@ -22,8 +22,9 @@ router = APIRouter()
 
 from game_config import *
 from game_world_logic import GameWorldLogicMixin
+from game_tribe_progression import GameTribeProgressionMixin
 
-class ConnectionManager(GameWorldLogicMixin):
+class ConnectionManager(GameTribeProgressionMixin, GameWorldLogicMixin):
     def __init__(self):
         # 活跃连接：{player_id: websocket}
         self.active_connections: Dict[str, WebSocket] = {}
@@ -859,6 +860,28 @@ class ConnectionManager(GameWorldLogicMixin):
             return 0
         return max(0, int(buff.get(key, 0) or 0))
 
+    def _tribe_oath(self, tribe: dict) -> Optional[dict]:
+        oath = tribe.get("oath") if isinstance(tribe.get("oath"), dict) else None
+        if not oath:
+            return None
+        key = oath.get("key")
+        if key not in TRIBE_OATHS:
+            return None
+        return {**TRIBE_OATHS[key], **oath}
+
+    def _oath_bonus(self, tribe: dict, key: str) -> int:
+        oath = self._tribe_oath(tribe)
+        if not oath:
+            return 0
+        oath_key = oath.get("key")
+        bonuses = {
+            "hearth": {"gatherBonus": 1, "foodBonus": 2},
+            "trail": {"caveFindsBonus": 1, "discoveryBonus": 1},
+            "trade": {"tradeRenownBonus": 2},
+            "beast": {"beastRewardBonus": 1}
+        }
+        return max(0, int(bonuses.get(oath_key, {}).get(key, 0) or 0))
+
     def _public_member(self, member: dict) -> dict:
         return {
             "id": member.get("id"),
@@ -901,6 +924,10 @@ class ConnectionManager(GameWorldLogicMixin):
             "renown": int(tribe.get("renown", 0) or 0),
             "renownState": self._tribe_renown_state(tribe),
             "tradeReputation": self._trade_reputation_state(tribe),
+            "oath": self._tribe_oath(tribe),
+            "oathOptions": TRIBE_OATHS if not tribe.get("oath") else {},
+            "oathConfig": {"renownBonus": TRIBE_OATH_RENOWN_BONUS},
+            "oathTask": self._current_oath_task(tribe),
             "celebrationBuff": self._active_celebration_buff(tribe),
             "scoutConfig": {
                 "foodCost": TRIBE_SCOUT_FOOD_COST,
@@ -933,6 +960,10 @@ class ConnectionManager(GameWorldLogicMixin):
                 "maxActive": TRIBE_TRADE_MAX_ACTIVE
             },
             "territoryFlags": list(tribe.get("territory_flags", []) or []),
+            "flagPatrolChain": {
+                "regions": list(tribe.get("flag_patrol_chain_regions", []) or []),
+                "target": TRIBE_FLAG_PATROL_CHAIN_TARGET
+            },
             "flagConfig": {
                 "max": TRIBE_FLAG_MAX,
                 "woodCost": TRIBE_FLAG_WOOD_COST,
@@ -1530,8 +1561,14 @@ class ConnectionManager(GameWorldLogicMixin):
             to_tribe["trade_reputation"] = max(0, int(to_tribe.get("trade_reputation", 0) or 0)) + 1
             from_trade_bonus = int((self._active_celebration_buff(from_tribe) or {}).get("tradeRenownBonus", 0) or 0)
             to_trade_bonus = int((self._active_celebration_buff(to_tribe) or {}).get("tradeRenownBonus", 0) or 0)
+            from_oath_bonus = self._oath_bonus(from_tribe, "tradeRenownBonus")
+            to_oath_bonus = self._oath_bonus(to_tribe, "tradeRenownBonus")
             from_tribe["renown"] = max(0, int(from_tribe.get("renown", 0) or 0)) + TRIBE_TRADE_RENOWN_BONUS + from_trade_bonus
             to_tribe["renown"] = max(0, int(to_tribe.get("renown", 0) or 0)) + TRIBE_TRADE_RENOWN_BONUS + to_trade_bonus
+            if from_oath_bonus:
+                from_tribe["renown"] += from_oath_bonus
+            if to_oath_bonus:
+                to_tribe["renown"] += to_oath_bonus
             trade["status"] = "accepted"
             trade["resolvedAt"] = datetime.now().isoformat()
             detail = f"{member.get('name', '管理者')} 接受了 {trade.get('fromTribeName', '部落')} 的贸易：收到 {trade['offer']['amount']} {trade['offer']['resource']}，交付 {request_amount} {request_resource}。"
@@ -1547,6 +1584,8 @@ class ConnectionManager(GameWorldLogicMixin):
                     "fromTribeId": from_tribe_id,
                     "toTribeId": to_tribe_id,
                     "renownBonus": TRIBE_TRADE_RENOWN_BONUS,
+                    "fromOathBonus": from_oath_bonus,
+                    "toOathBonus": to_oath_bonus,
                     "fromReputation": self._trade_reputation_state(from_tribe),
                     "toReputation": self._trade_reputation_state(to_tribe)
                 }
@@ -1557,144 +1596,6 @@ class ConnectionManager(GameWorldLogicMixin):
 
         await self.broadcast_tribe_state(from_tribe_id)
         await self.broadcast_tribe_state(to_tribe_id)
-
-    async def claim_tribe_flag(self, player_id: str, x: float, z: float):
-        tribe_id = self.player_tribes.get(player_id)
-        tribe = self.tribes.get(tribe_id)
-        if not tribe:
-            await self._send_tribe_error(player_id, "请先加入一个部落")
-            return
-
-        member = tribe.get("members", {}).get(player_id, {})
-        if member.get("role") not in ("leader", "elder"):
-            await self._send_tribe_error(player_id, "只有首领或长老可以插下领地旗帜")
-            return
-
-        flags = tribe.setdefault("territory_flags", [])
-        if len(flags) >= TRIBE_FLAG_MAX:
-            await self._send_tribe_error(player_id, f"最多只能保留 {TRIBE_FLAG_MAX} 面领地旗帜")
-            return
-
-        storage = tribe.setdefault("storage", {"wood": 0, "stone": 0})
-        if int(storage.get("wood", 0) or 0) < TRIBE_FLAG_WOOD_COST or int(storage.get("stone", 0) or 0) < TRIBE_FLAG_STONE_COST:
-            await self._send_tribe_error(player_id, "仓库资源不足，插旗需要木材和石块")
-            return
-
-        safe_x = max(-490, min(490, float(x or 0)))
-        safe_z = max(-490, min(490, float(z or 0)))
-        storage["wood"] = int(storage.get("wood", 0) or 0) - TRIBE_FLAG_WOOD_COST
-        storage["stone"] = int(storage.get("stone", 0) or 0) - TRIBE_FLAG_STONE_COST
-        flag_id = f"{tribe_id}_flag_{int(datetime.now().timestamp() * 1000)}_{random.randint(100, 999)}"
-        flag = {
-            "id": flag_id,
-            "tribeId": tribe_id,
-            "type": "tribe_flag",
-            "label": f"{tribe.get('name', '部落')}领地旗帜",
-            "x": safe_x,
-            "z": safe_z,
-            "size": 1.0,
-            "claimedBy": member.get("name", "成员"),
-            "claimedAt": datetime.now().isoformat(),
-            "claimNote": "旗帜周围会成为部落公开宣告的资源活动区。"
-        }
-        flags.append(flag)
-        tribe["renown"] = max(0, int(tribe.get("renown", 0) or 0)) + 2
-        detail = f"{member.get('name', '成员')} 在 ({round(safe_x)}, {round(safe_z)}) 插下领地旗帜，消耗木材 {TRIBE_FLAG_WOOD_COST}、石块 {TRIBE_FLAG_STONE_COST}。"
-        self._add_tribe_history(tribe, "governance", "插下领地旗帜", detail, player_id, {"kind": "territory_flag", **flag})
-        await self._publish_world_rumor(
-            "territory",
-            "领地旗帜",
-            f"{tribe.get('name', '部落')} 在新的资源点插下旗帜，公开宣告活动范围。",
-            {"tribeId": tribe_id, "flagId": flag_id, "x": safe_x, "z": safe_z}
-        )
-        await self.broadcast_tribe_state(tribe_id)
-        await self._broadcast_current_map()
-
-    async def start_tribe_scout(self, player_id: str):
-        tribe_id = self.player_tribes.get(player_id)
-        tribe = self.tribes.get(tribe_id)
-        if not tribe:
-            await self._send_tribe_error(player_id, "请先加入一个部落")
-            return
-
-        member = tribe.get("members", {}).get(player_id, {})
-        food = int(tribe.get("food", 0) or 0)
-        if food < TRIBE_SCOUT_FOOD_COST:
-            await self._send_tribe_error(player_id, f"侦察需要食物 {TRIBE_SCOUT_FOOD_COST}")
-            return
-
-        env = self._get_current_environment()
-        tribe["food"] = food - TRIBE_SCOUT_FOOD_COST
-        env["resourceTide"] = self._pick_resource_tide(env)
-        events = [event for event in (env.get("worldEvents", []) or []) if isinstance(event, dict)]
-        for _ in range(TRIBE_SCOUT_EVENT_COUNT):
-            events.append(self._pick_world_event(env))
-        env["worldEvents"] = events[-4:]
-
-        report = {
-            "id": f"scout_{int(datetime.now().timestamp() * 1000)}_{random.randint(100, 999)}",
-            "memberName": member.get("name", "成员"),
-            "regionLabel": env["resourceTide"].get("regionLabel", "未知区域"),
-            "eventTitles": [event.get("title", "世界事件") for event in env["worldEvents"][-TRIBE_SCOUT_EVENT_COUNT:]],
-            "createdAt": datetime.now().isoformat()
-        }
-        tribe.setdefault("scout_reports", []).append(report)
-        tribe["scout_reports"] = tribe["scout_reports"][-8:]
-
-        map_data = self.maps.get(self.current_map_name) or {}
-        map_data["environment"] = env
-        map_data["updated_at"] = datetime.now().isoformat()
-        detail = f"{report['memberName']} 派出侦察队，标记了{report['regionLabel']}的大地馈赠，并发现 {'、'.join(report['eventTitles'])}。"
-        self._add_tribe_history(tribe, "world_event", "派出侦察", detail, player_id, {"kind": "scout", **report})
-        await self._notify_tribe(tribe_id, detail)
-        await self._publish_world_rumor(
-            "scout",
-            "侦察标记",
-            f"{tribe.get('name', '部落')} 派出侦察队，远方资源与事件被重新标记。",
-            {"tribeId": tribe_id, "reportId": report["id"]}
-        )
-        await self.broadcast_tribe_state(tribe_id)
-        await self._broadcast_current_map()
-
-    async def compose_oral_epic(self, player_id: str):
-        tribe_id = self.player_tribes.get(player_id)
-        tribe = self.tribes.get(tribe_id)
-        if not tribe:
-            await self._send_tribe_error(player_id, "请先加入一个部落")
-            return
-
-        member = tribe.get("members", {}).get(player_id, {})
-        if member.get("role") not in ("leader", "elder"):
-            await self._send_tribe_error(player_id, "只有首领或长老可以整理部落史诗")
-            return
-
-        history = [item for item in (tribe.get("history", []) or []) if isinstance(item, dict)]
-        if len(history) < TRIBE_ORAL_EPIC_MIN_HISTORY:
-            await self._send_tribe_error(player_id, f"至少需要 {TRIBE_ORAL_EPIC_MIN_HISTORY} 条部落日志才能整理史诗")
-            return
-
-        source_titles = [item.get("title", "部落记忆") for item in history[-5:]][-3:]
-        epic = {
-            "id": f"epic_{int(datetime.now().timestamp() * 1000)}_{random.randint(100, 999)}",
-            "title": f"{tribe.get('name', '部落')}口述史",
-            "summary": f"长老把{'、'.join(source_titles)}编成夜火旁的故事。",
-            "composedBy": member.get("name", "管理者"),
-            "renownBonus": TRIBE_ORAL_EPIC_RENOWN_BONUS,
-            "sourceTitles": source_titles,
-            "createdAt": datetime.now().isoformat()
-        }
-        tribe.setdefault("oral_epics", []).append(epic)
-        tribe["oral_epics"] = tribe["oral_epics"][-8:]
-        tribe["renown"] = int(tribe.get("renown", 0) or 0) + TRIBE_ORAL_EPIC_RENOWN_BONUS
-        detail = f"{epic['composedBy']} 整理了《{epic['title']}》：{epic['summary']} 声望 +{TRIBE_ORAL_EPIC_RENOWN_BONUS}。"
-        self._add_tribe_history(tribe, "ritual", "整理部落史诗", detail, player_id, {"kind": "oral_epic", **epic})
-        await self._publish_world_rumor(
-            "epic",
-            "口述史诗",
-            f"{tribe.get('name', '部落')} 的故事被传唱：{epic['summary']}",
-            {"tribeId": tribe_id, "epicId": epic["id"], "renownBonus": TRIBE_ORAL_EPIC_RENOWN_BONUS}
-        )
-        await self.broadcast_tribe_state(tribe_id)
 
     async def assign_beast_task(self, player_id: str, task_key: str):
         tribe_id = self.player_tribes.get(player_id)
@@ -1713,6 +1614,8 @@ class ConnectionManager(GameWorldLogicMixin):
         storage = tribe.setdefault("storage", {"wood": 0, "stone": 0})
         growth = self._beast_growth_state(tribe)
         reward_multiplier = float(growth.get("rewardMultiplier", 1) or 1)
+        if self._oath_bonus(tribe, "beastRewardBonus"):
+            reward_multiplier += 0.25
         reward_parts = []
         for resource_key, label in (("wood", "木材"), ("stone", "石块")):
             amount = math.floor(int(task.get(resource_key, 0) or 0) * reward_multiplier)
@@ -1802,7 +1705,7 @@ class ConnectionManager(GameWorldLogicMixin):
         if renown:
             tribe["renown"] = int(tribe.get("renown", 0) or 0) + renown
             reward_parts.append(f"声望+{renown}")
-        discovery_buff_bonus = self._celebration_bonus(tribe, "discoveryBonus")
+        discovery_buff_bonus = self._celebration_bonus(tribe, "discoveryBonus") + self._oath_bonus(tribe, "discoveryBonus")
         progress = int(reward.get("discoveryProgress", 0) or 0)
         if progress and discovery_buff_bonus:
             progress += discovery_buff_bonus
@@ -2136,6 +2039,10 @@ class ConnectionManager(GameWorldLogicMixin):
         if cave_finds_bonus > 0:
             safe_finds += cave_finds_bonus
             food_detail += f" 图腾稀有铭文共鸣，额外收获 +{cave_finds_bonus}。"
+        oath_cave_bonus = self._oath_bonus(tribe, "caveFindsBonus")
+        if oath_cave_bonus:
+            safe_finds += oath_cave_bonus
+            food_detail += f" 远行誓约让队伍多带回 +{oath_cave_bonus}。"
         discoveries = tribe.setdefault("discoveries", [])
         discovery_key = "deep_cave_echo"
         discovery_depth = max(1, int(route_plan.get("discoveryDepth", 4) or 4))
@@ -2166,6 +2073,7 @@ class ConnectionManager(GameWorldLogicMixin):
                 "routeFindsMultiplier": route_plan.get("findsMultiplier", 1) if food_supported else 1,
                 "routeFindsBonus": route_plan.get("findsBonus", 0) if food_supported else 0,
                 "runeFindsBonus": cave_finds_bonus,
+                "oathFindsBonus": oath_cave_bonus,
                 "discoveryUnlocked": discovery_unlocked,
                 "discoveryKey": discovery_key if discovery_unlocked else None
             }
@@ -2215,7 +2123,7 @@ class ConnectionManager(GameWorldLogicMixin):
         if food_reward > 0:
             tribe["food"] = int(tribe.get("food", 0) or 0) + food_reward
             reward_parts.append(f"食物+{food_reward}")
-        discovery_buff_bonus = self._celebration_bonus(tribe, "discoveryBonus")
+        discovery_buff_bonus = self._celebration_bonus(tribe, "discoveryBonus") + self._oath_bonus(tribe, "discoveryBonus")
         discovery_progress = int(reward.get("discoveryProgress", 0) or 0)
         if discovery_progress > 0 and discovery_buff_bonus > 0:
             discovery_progress += discovery_buff_bonus
@@ -2877,6 +2785,12 @@ async def game_websocket(
                         message.get("z", 0)
                     )
 
+                elif message_type == "tribe_patrol_flag":
+                    await manager.patrol_tribe_flag(
+                        player_id,
+                        message.get("flagId", "")
+                    )
+
                 elif message_type == "tribe_unlock_rune":
                     await manager.unlock_tribe_rune(
                         player_id,
@@ -2938,6 +2852,15 @@ async def game_websocket(
 
                 elif message_type == "tribe_compose_epic":
                     await manager.compose_oral_epic(player_id)
+
+                elif message_type == "tribe_choose_oath":
+                    await manager.choose_tribe_oath(
+                        player_id,
+                        message.get("oathKey", "")
+                    )
+
+                elif message_type == "tribe_complete_oath_task":
+                    await manager.complete_oath_task(player_id)
 
                 elif message_type == "tribe_beast_task":
                     await manager.assign_beast_task(
