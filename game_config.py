@@ -7,6 +7,114 @@ TRIBE_STATE_PATH = GAME_DATA_DIR / "game_tribes.json"
 WEATHER_TYPES = ["sunny", "rain", "snow", "fog"]
 DEFAULT_SHORE_RADIUS = 95.0
 PLAYER_RADIUS = 0.7
+PLAYER_CONFLICT_DISTANCE = 4.5
+PLAYER_CONFLICT_COOLDOWN_SECONDS = 45
+PLAYER_CONFLICT_FATIGUE_MAX = 6
+PLAYER_CONFLICT_FATIGUE_DECAY_SECONDS = 180
+PLAYER_CONFLICT_GUARD_SECONDS = 60
+PLAYER_CONFLICT_ACTIONS = {
+    "intimidate": {"label": "威慑", "summary": "靠近对方发出警告，提升个人声望并轻微影响部落关系。", "renown": 1, "fatigue": 1, "relationDelta": -1},
+    "challenge": {"label": "挑战", "summary": "进行一次短促的近身冲突，胜负只造成疲劳和击退，不造成死亡。", "renown": 2, "fatigue": 2, "relationDelta": -2, "knockback": 2.4},
+    "spar": {"label": "切磋", "summary": "同部落成员之间的练习冲突，只留下少量疲劳和个人声望。", "renown": 1, "fatigue": 1, "sameTribeOnly": True, "relationDelta": 0, "knockback": 1.0},
+    "guard": {"label": "守势", "summary": "对靠近的目标摆出防备姿态，短时间内降低下一次个人冲突造成的疲劳。", "guard": True}
+}
+TRIBE_SKIRMISH_ACTIVE_MINUTES = 8
+TRIBE_SKIRMISH_SCORE_TARGET = 4
+TRIBE_SKIRMISH_RENOWN_REWARD = 6
+TRIBE_SKIRMISH_FOOD_REWARD = 6
+TRIBE_SKIRMISH_LIMIT = 3
+TRIBE_SKIRMISH_JOIN_DISTANCE = 12
+TRIBE_SKIRMISH_ROAD_TRADE_REWARD = 2
+TRIBE_SKIRMISH_FLAG_RENOWN_REWARD = 3
+TRIBE_SKIRMISH_CAVE_RADIUS = 170
+TRIBE_SKIRMISH_CAVE_DISCOVERY_REWARD = 2
+TRIBE_SKIRMISH_WAR_PRESSURE_THRESHOLD = 3
+TRIBE_WAR_WOOD_COST = 12
+TRIBE_WAR_STONE_COST = 8
+TRIBE_WAR_FOOD_COST = 10
+TRIBE_WAR_SCORE_TARGET = 6
+TRIBE_WAR_RENOWN_REWARD = 10
+TRIBE_WAR_REPARATION_FOOD = 6
+TRIBE_WAR_TRUCE_FOOD_COST = 6
+TRIBE_WAR_REPAIR_WOOD_COST = 6
+TRIBE_WAR_REPAIR_STONE_COST = 4
+TRIBE_WAR_REPAIR_RENOWN = 3
+TRIBE_WAR_FATIGUE_WINNER = 1
+TRIBE_WAR_FATIGUE_LOSER = 2
+TRIBE_WAR_FATIGUE_SECONDS = 900
+TRIBE_WAR_REVIVAL_FOOD_COST = 8
+TRIBE_WAR_REVIVAL_WOOD_COST = 4
+TRIBE_WAR_REVIVAL_RENOWN = 4
+TRIBE_WAR_REVIVAL_FATIGUE_RELIEF = 2
+TRIBE_WAR_REVIVAL_BRANCH_FOOD_REWARD = 6
+TRIBE_WAR_REVIVAL_BRANCH_TRADE_REWARD = 2
+TRIBE_WAR_REVIVAL_BRANCH_OATH_RENOWN = 5
+TRIBE_WAR_REVIVAL_BRANCH_PRESSURE = 1
+TRIBE_WAR_REVIVAL_STORAGE_FOOD_BONUS = 4
+TRIBE_WAR_REVIVAL_ROAD_TRADE_BONUS = 1
+TRIBE_WAR_REVIVAL_FLAG_RENOWN_BONUS = 2
+TRIBE_WAR_REVIVAL_FENCE_FATIGUE_BONUS = 1
+TRIBE_WAR_SUPPORT_FOOD_COST = 5
+TRIBE_WAR_SUPPORT_SCORE = 2
+TRIBE_WAR_SUPPORT_RENOWN = 2
+TRIBE_WAR_BETRAYAL_RENOWN = 3
+TRIBE_WAR_BETRAYAL_PRESSURE = 1
+TRIBE_WAR_ALLY_SUPPLY_FOOD_COST = 4
+TRIBE_WAR_ALLY_SUPPLY_RENOWN = 3
+TRIBE_WAR_ALLY_SUPPLY_TRADE = 1
+TRIBE_WAR_ALLY_RECEPTION_FOOD = 5
+TRIBE_WAR_ALLY_RECEPTION_RENOWN = 2
+TRIBE_WAR_ALLY_GRIEVANCE_RENOWN = 3
+TRIBE_WAR_ALLY_GRIEVANCE_PRESSURE = 1
+TRIBE_WAR_ALLY_REPARATION_FOOD_COST = 5
+TRIBE_WAR_ALLY_REPARATION_RENOWN = 2
+TRIBE_WAR_ALLY_REPARATION_PRESSURE_RELIEF = 1
+TRIBE_WAR_MEDIATION_FOOD_COST = 6
+TRIBE_WAR_MEDIATION_SCORE_REDUCTION = 1
+TRIBE_WAR_MEDIATION_RENOWN = 3
+TRIBE_WAR_DIPLOMACY_FOOD_COST = 4
+TRIBE_WAR_DIPLOMACY_RENOWN = 3
+TRIBE_WAR_GRIEVANCE_RENOWN = 2
+TRIBE_WAR_AFTERMATH_FOOD_COST = 3
+TRIBE_WAR_AFTERMATH_FOOD_REWARD = 6
+TRIBE_WAR_AFTERMATH_TRADE_REWARD = 2
+TRIBE_WAR_AFTERMATH_PRESSURE_RELIEF = 1
+TRIBE_WAR_AFTERMATH_RENOWN = 3
+TRIBE_WAR_GOALS = {
+    "resource_site": {
+        "label": "粮草争夺",
+        "summary": "围绕资源点爆发的正式战争，胜方额外取得粮草与仓储收益。",
+        "rewardText": "胜方额外获得粮草",
+        "foodReward": 8,
+        "renownReward": 2
+    },
+    "boundary_flag": {
+        "label": "边旗压制",
+        "summary": "围绕边界旗帜爆发的正式战争，胜方额外取得部落声望。",
+        "rewardText": "胜方边旗声望上升",
+        "renownReward": 5
+    },
+    "boundary_road": {
+        "label": "通路控制",
+        "summary": "围绕营地道路爆发的正式战争，胜方额外取得贸易信誉。",
+        "rewardText": "胜方通路与贸易信誉上升",
+        "tradeReward": 4,
+        "renownReward": 2
+    },
+    "cave_entrance": {
+        "label": "洞口远征权",
+        "summary": "围绕洞口爆发的正式战争，胜方额外取得发现进度。",
+        "rewardText": "胜方洞口发现进度上升",
+        "discoveryReward": 4,
+        "renownReward": 2
+    },
+    "border_front": {
+        "label": "边境战线",
+        "summary": "围绕长期敌意边境爆发的正式战争，胜方获得稳定声望。",
+        "rewardText": "胜方稳定边境声望",
+        "renownReward": 3
+    }
+}
 TRIBE_LEADER_VOTE_MIN_MEMBERS = 5
 TRIBE_ELDER_VOTE_MIN_MEMBERS = 3
 TRIBE_LEADER_CANDIDATE_MIN_CONTRIBUTION = 50
@@ -36,6 +144,8 @@ TRIBE_BOUNDARY_ACTION_COOLDOWN_SECONDS = 300
 TRIBE_BOUNDARY_RELATION_STAGE_STEP = 6
 TRIBE_BOUNDARY_OUTCOME_LIMIT = 4
 TRIBE_BOUNDARY_PRESSURE_MINUTES = 12
+TRIBE_BOUNDARY_TRUCE_MINUTES = 10
+TRIBE_BOUNDARY_HOSTILE_FOOD_COST = 2
 TRIBE_OATH_TASK_STREAK_TARGET = 3
 TRIBE_SCOUT_FOOD_COST = 4
 TRIBE_SCOUT_EVENT_COUNT = 2
@@ -50,6 +160,10 @@ TRIBE_CONTROLLED_SITE_YIELD_COOLDOWN_SECONDS = 300
 TRIBE_CONTROLLED_SITE_UPGRADE_COLLECTS = 2
 TRIBE_CONTROLLED_SITE_MAX_LEVEL = 3
 TRIBE_CONTROLLED_SITE_UPGRADE_EXTEND_MINUTES = 8
+TRIBE_CONTROLLED_SITE_PATROL_COOLDOWN_SECONDS = 240
+TRIBE_CONTROLLED_SITE_PATROL_EXTEND_MINUTES = 5
+TRIBE_CONTROLLED_SITE_RELAY_COOLDOWN_SECONDS = 300
+TRIBE_CONTROLLED_SITE_RELAY_EXTEND_MINUTES = 4
 TRIBE_ORAL_EPIC_RENOWN_BONUS = 7
 TRIBE_ORAL_EPIC_MIN_HISTORY = 3
 TRIBE_OATH_RENOWN_BONUS = 5
@@ -97,6 +211,9 @@ TRIBE_BOUNDARY_ACTIONS = {
     "greet": {"label": "示好", "summary": "向边界另一侧留下善意标记。", "renown": 3, "tradeReputation": 1, "relationDelta": 2, "tradeTrustDelta": 1},
     "guard": {"label": "警戒", "summary": "加强边界巡逻，提醒成员保持警惕，并清理本部落遭遇的边界压力。", "renown": 5, "relationDelta": -2, "clearIncomingPressure": True},
     "gift": {"label": "交换信物", "summary": "消耗少量食物换取跨部落信任。", "foodCost": 3, "renown": 2, "tradeReputation": 2, "relationDelta": 3, "tradeTrustDelta": 2},
+    "truce": {"label": "停争议和", "summary": "在紧张边界摆出停争标记，清理双方短时压力，把冲突拉回可谈判状态。", "foodCost": 4, "renown": 3, "tradeReputation": 1, "relationDelta": 4, "tradeTrustDelta": 1, "allowedStates": ["tension", "hostile"], "clearIncomingPressure": True, "clearOutgoingPressure": True, "truce": True},
+    "relief": {"label": "互助补给", "summary": "向边界另一侧送出一批食物，缓和关系并显著提高贸易信任。", "foodCost": 6, "renown": 4, "tradeReputation": 3, "relationDelta": 3, "tradeTrustDelta": 3, "allowedStates": ["trade", "alliance", "tension"], "clearIncomingPressure": True, "aidFood": 4},
+    "joint_watch": {"label": "联合守望", "summary": "约定两边旗帜共同观察资源路，降低误判并标出双方都能前往确认的共享资源线索。", "foodCost": 2, "renown": 5, "tradeReputation": 1, "relationDelta": 2, "tradeTrustDelta": 2, "allowedStates": ["neighbor", "trade", "alliance", "tension"], "clearIncomingPressure": True, "clearOutgoingPressure": True, "sharedScout": True},
     "press": {"label": "边界压制", "summary": "在紧张边界集结巡逻，短时间压迫对方营地行动。", "renown": 4, "relationDelta": -3, "allowedStates": ["tension", "hostile"], "pressure": True},
     "blockade": {"label": "资源封锁", "summary": "封住边界小路，扰乱对方的物资往来。", "renown": 4, "relationDelta": -4, "allowedStates": ["tension", "hostile"], "pressure": True, "tradeDisrupt": 1},
     "drive_away": {"label": "边界驱离", "summary": "把对方留下的巡路标记驱出边界，压低对方声望但让关系更快恶化。", "renown": 6, "relationDelta": -5, "allowedStates": ["hostile"], "pressure": True, "renownDisrupt": 2, "clearIncomingPressure": True}

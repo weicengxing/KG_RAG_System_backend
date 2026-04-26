@@ -23,8 +23,9 @@ router = APIRouter()
 from game_config import *
 from game_world_logic import GameWorldLogicMixin
 from game_tribe_progression import GameTribeProgressionMixin
+from game_conflict import GameConflictMixin
 
-class ConnectionManager(GameTribeProgressionMixin, GameWorldLogicMixin):
+class ConnectionManager(GameConflictMixin, GameTribeProgressionMixin, GameWorldLogicMixin):
     def __init__(self):
         # 活跃连接：{player_id: websocket}
         self.active_connections: Dict[str, WebSocket] = {}
@@ -797,6 +798,24 @@ class ConnectionManager(GameTribeProgressionMixin, GameWorldLogicMixin):
             tribe["boundary_pressures"] = active[-TRIBE_BOUNDARY_OUTCOME_LIMIT:]
         return active[-TRIBE_BOUNDARY_OUTCOME_LIMIT:]
 
+    def _active_boundary_truces(self, tribe: dict) -> List[dict]:
+        active = []
+        now = datetime.now()
+        for item in tribe.get("boundary_truces", []) or []:
+            if not isinstance(item, dict):
+                continue
+            active_until = item.get("activeUntil")
+            if active_until:
+                try:
+                    if datetime.fromisoformat(active_until) < now:
+                        continue
+                except (TypeError, ValueError):
+                    pass
+            active.append(item)
+        if len(active) != len(tribe.get("boundary_truces", []) or []):
+            tribe["boundary_truces"] = active[-TRIBE_BOUNDARY_OUTCOME_LIMIT:]
+        return active[-TRIBE_BOUNDARY_OUTCOME_LIMIT:]
+
     def _active_trade_requests_for_tribe(self, tribe_id: str) -> List[dict]:
         return [
             self._public_trade(trade)
@@ -957,7 +976,9 @@ class ConnectionManager(GameTribeProgressionMixin, GameWorldLogicMixin):
                 "eventCount": TRIBE_SCOUT_EVENT_COUNT,
                 "siteMinutes": TRIBE_SCOUT_SITE_ACTIVE_MINUTES,
                 "siteFlagRadius": TRIBE_SCOUT_SITE_FLAG_RADIUS,
-                "siteContestRadius": TRIBE_SCOUT_SITE_CONTEST_RADIUS
+                "siteContestRadius": TRIBE_SCOUT_SITE_CONTEST_RADIUS,
+                "controlledPatrolMinutes": TRIBE_CONTROLLED_SITE_PATROL_EXTEND_MINUTES,
+                "controlledRelayMinutes": TRIBE_CONTROLLED_SITE_RELAY_EXTEND_MINUTES
             },
             "scoutReports": list(tribe.get("scout_reports", []) or [])[-3:],
             "scoutedResourceSites": self._active_scouted_resource_sites(tribe),
@@ -994,6 +1015,18 @@ class ConnectionManager(GameTribeProgressionMixin, GameWorldLogicMixin):
             "territoryFlags": list(tribe.get("territory_flags", []) or []),
             "boundaryRelations": dict(tribe.get("boundary_relations", {}) or {}),
             "boundaryPressures": self._active_boundary_pressures(tribe),
+            "boundaryTruces": self._active_boundary_truces(tribe),
+            "personalConflicts": list(tribe.get("personal_conflicts", []) or [])[-5:],
+            "smallConflicts": self._public_small_conflicts(tribe),
+            "warPressure": self._public_war_pressure(tribe),
+            "formalWars": self._public_formal_wars(tribe),
+            "warRepairTasks": self._public_war_repair_tasks(tribe),
+            "warRevivalTasks": self._public_war_revival_tasks(tribe),
+            "warDiplomacyTasks": self._public_war_diplomacy_tasks(tribe),
+            "warAftermathTasks": self._public_war_aftermath_tasks(tribe),
+            "warAllyRecords": self._public_war_ally_records(tribe),
+            "warAllyTasks": self._public_war_ally_tasks(tribe),
+            "warInterventionTargets": self._public_war_intervention_targets(tribe),
             "flagPatrolChain": {
                 "regions": list(tribe.get("flag_patrol_chain_regions", []) or []),
                 "target": TRIBE_FLAG_PATROL_CHAIN_TARGET
@@ -2498,6 +2531,8 @@ class ConnectionManager(GameTribeProgressionMixin, GameWorldLogicMixin):
             "y": 2,
             "z": spawn_z,
             "health": 100,
+            "conflict_fatigue": 0,
+            "personal_renown": 0,
             "level": 1,
             "connected_at": datetime.now().isoformat()
         }
@@ -2511,6 +2546,7 @@ class ConnectionManager(GameTribeProgressionMixin, GameWorldLogicMixin):
             "playerCount": len(self.active_connections),
             "data": self.players[player_id]
         })
+        await self.send_personal_conflict_status(player_id)
 
         # 向新玩家发送当前所有玩家状态
         nearby_ids = set(self._players_in_range(player_id, self.aoi_radius))
@@ -2623,6 +2659,227 @@ class ConnectionManager(GameTribeProgressionMixin, GameWorldLogicMixin):
 
             # 给自己回一个 AOI 快照，客户端可据此创建/移除远端玩家
             await self.send_aoi_state(player_id)
+
+    def _active_player_fatigue(self, player: dict) -> int:
+        fatigue = int(player.get("conflict_fatigue", 0) or 0)
+        until_text = player.get("conflict_fatigue_until")
+        if fatigue and until_text:
+            try:
+                if datetime.fromisoformat(until_text).timestamp() < datetime.now().timestamp():
+                    player["conflict_fatigue"] = 0
+                    player.pop("conflict_fatigue_until", None)
+                    return 0
+            except (TypeError, ValueError):
+                pass
+        return max(0, min(PLAYER_CONFLICT_FATIGUE_MAX, fatigue))
+
+    def _active_personal_guard(self, player: dict):
+        guard = player.get("personal_guard") if isinstance(player.get("personal_guard"), dict) else None
+        if not guard:
+            return None
+        try:
+            if datetime.fromisoformat(guard.get("activeUntil")).timestamp() < datetime.now().timestamp():
+                player.pop("personal_guard", None)
+                return None
+        except (TypeError, ValueError):
+            player.pop("personal_guard", None)
+            return None
+        return guard
+
+    def _public_personal_conflict_status(self, player: dict) -> dict:
+        fatigue = self._active_player_fatigue(player)
+        guard = self._active_personal_guard(player)
+        return {
+            "fatigue": fatigue,
+            "fatigueMax": PLAYER_CONFLICT_FATIGUE_MAX,
+            "fatigueUntil": player.get("conflict_fatigue_until") if fatigue else "",
+            "guardUntil": guard.get("activeUntil") if guard else "",
+            "guardTargetName": guard.get("targetName") if guard else "",
+            "personalRenown": int(player.get("personal_renown", 0) or 0),
+            "fatigueDecaySeconds": PLAYER_CONFLICT_FATIGUE_DECAY_SECONDS,
+            "guardSeconds": PLAYER_CONFLICT_GUARD_SECONDS
+        }
+
+    async def send_personal_conflict_status(self, player_id: str):
+        player = self.players.get(player_id)
+        if player:
+            await self.send_personal_message(player_id, {
+                "type": "personal_conflict_status",
+                "status": self._public_personal_conflict_status(player)
+            })
+
+    async def resolve_personal_conflict(self, player_id: str, target_id: str, action_key: str):
+        actor = self.players.get(player_id)
+        target = self.players.get(target_id)
+        action = PLAYER_CONFLICT_ACTIONS.get(action_key)
+        if not actor or not target or not action or player_id == target_id:
+            await self.send_personal_message(player_id, {"type": "personal_conflict_error", "message": "无法发起这次个人冲突"})
+            return
+        actor_tribe_id = self.player_tribes.get(player_id)
+        target_tribe_id = self.player_tribes.get(target_id)
+        if action.get("sameTribeOnly") and actor_tribe_id != target_tribe_id:
+            await self.send_personal_message(player_id, {"type": "personal_conflict_error", "message": "切磋只能对同部落成员发起"})
+            return
+
+        dx = float(target.get("x", 0) or 0) - float(actor.get("x", 0) or 0)
+        dz = float(target.get("z", 0) or 0) - float(actor.get("z", 0) or 0)
+        if dx * dx + dz * dz > PLAYER_CONFLICT_DISTANCE * PLAYER_CONFLICT_DISTANCE:
+            await self.send_personal_message(player_id, {"type": "personal_conflict_error", "message": "靠近目标玩家后才能发起冲突"})
+            return
+
+        if action.get("guard"):
+            actor["personal_guard"] = {
+                "targetId": target_id,
+                "targetName": target.get("name", "玩家"),
+                "activeUntil": datetime.fromtimestamp(datetime.now().timestamp() + PLAYER_CONFLICT_GUARD_SECONDS).isoformat()
+            }
+            await self.send_personal_message(player_id, {
+                "type": "personal_conflict_result",
+                "actionKey": action_key,
+                "actionLabel": action.get("label", "守势"),
+                "actorId": player_id,
+                "actorName": actor.get("name", "玩家"),
+                "targetId": target_id,
+                "targetName": target.get("name", "玩家"),
+                "winnerId": player_id,
+                "guardUntil": actor["personal_guard"]["activeUntil"],
+                "fatigue": actor.get("conflict_fatigue", 0),
+                "status": self._public_personal_conflict_status(actor),
+                "renownGain": 0
+            })
+            await self.send_personal_conflict_status(player_id)
+            return
+
+        cooldowns = actor.setdefault("personal_conflict_cooldowns", {})
+        last_action_at = cooldowns.get(target_id)
+        if last_action_at:
+            try:
+                elapsed = datetime.now().timestamp() - datetime.fromisoformat(last_action_at).timestamp()
+                if elapsed < PLAYER_CONFLICT_COOLDOWN_SECONDS:
+                    remaining = max(1, math.ceil(PLAYER_CONFLICT_COOLDOWN_SECONDS - elapsed))
+                    await self.send_personal_message(player_id, {"type": "personal_conflict_error", "message": f"刚刚冲突过，还需 {remaining} 秒"})
+                    return
+            except (TypeError, ValueError):
+                pass
+
+        actor_fatigue = self._active_player_fatigue(actor)
+        target_fatigue = self._active_player_fatigue(target)
+        actor_roll = random.randint(1, 6) + max(0, 3 - actor_fatigue)
+        target_roll = random.randint(1, 6) + max(0, 3 - target_fatigue)
+        target_guard = target.get("personal_guard") if isinstance(target.get("personal_guard"), dict) else None
+        guard_active = False
+        if target_guard and target_guard.get("targetId") == player_id:
+            try:
+                guard_active = datetime.fromisoformat(target_guard.get("activeUntil")).timestamp() >= datetime.now().timestamp()
+            except (TypeError, ValueError):
+                guard_active = False
+        if guard_active:
+            target_roll += 2
+        actor_won = actor_roll >= target_roll
+        fatigue_gain = int(action.get("fatigue", 1) or 1)
+        if guard_active:
+            fatigue_gain = max(0, fatigue_gain - 1)
+            target.pop("personal_guard", None)
+        target["conflict_fatigue"] = min(PLAYER_CONFLICT_FATIGUE_MAX, target_fatigue + fatigue_gain)
+        target["conflict_fatigue_until"] = datetime.fromtimestamp(datetime.now().timestamp() + PLAYER_CONFLICT_FATIGUE_DECAY_SECONDS).isoformat()
+        if action_key == "challenge" and not actor_won:
+            actor["conflict_fatigue"] = min(PLAYER_CONFLICT_FATIGUE_MAX, actor_fatigue + 1)
+            actor["conflict_fatigue_until"] = target["conflict_fatigue_until"]
+
+        renown_gain = int(action.get("renown", 0) or 0)
+        if actor_won:
+            actor["personal_renown"] = int(actor.get("personal_renown", 0) or 0) + renown_gain
+        cooldowns[target_id] = datetime.now().isoformat()
+
+        if actor_tribe_id and target_tribe_id and actor_tribe_id != target_tribe_id:
+            relation_delta = int(action.get("relationDelta", 0) or 0)
+            actor_tribe = self.tribes.get(actor_tribe_id)
+            target_tribe = self.tribes.get(target_tribe_id)
+            if actor_tribe:
+                progress = actor_tribe.setdefault("boundary_relations", {}).setdefault(target_tribe_id, {})
+                progress["score"] = max(-9, min(9, int(progress.get("score", 0) or 0) + relation_delta))
+                progress["lastAction"] = f"personal:{action_key}"
+                progress["lastActionAt"] = cooldowns[target_id]
+            if target_tribe:
+                progress = target_tribe.setdefault("boundary_relations", {}).setdefault(actor_tribe_id, {})
+                progress["score"] = max(-9, min(9, int(progress.get("score", 0) or 0) + relation_delta))
+                progress["lastAction"] = f"incoming_personal:{action_key}"
+                progress["lastActionAt"] = cooldowns[target_id]
+
+        knockback = float(action.get("knockback", 0) or 0)
+        if knockback and actor_won:
+            length = math.sqrt(dx * dx + dz * dz) or 0.001
+            new_x = float(target.get("x", 0) or 0) + (dx / length) * knockback
+            new_z = float(target.get("z", 0) or 0) + (dz / length) * knockback
+            new_x, new_z, _ = self._clamp_to_shore(new_x, new_z, margin=PLAYER_RADIUS)
+            target["x"] = new_x
+            target["z"] = new_z
+            await self.send_personal_message(target_id, {
+                "type": "position_correction",
+                "data": {"x": new_x, "y": target.get("y", 2), "z": new_z}
+            })
+
+        result = {
+            "type": "personal_conflict_result",
+            "actionKey": action_key,
+            "actionLabel": action.get("label", "冲突"),
+            "actorId": player_id,
+            "actorName": actor.get("name", "玩家"),
+            "targetId": target_id,
+            "targetName": target.get("name", "玩家"),
+            "winnerId": player_id if actor_won else target_id,
+            "winnerName": actor.get("name", "玩家") if actor_won else target.get("name", "玩家"),
+            "fatigue": target.get("conflict_fatigue", 0),
+            "fatigueUntil": target.get("conflict_fatigue_until"),
+            "fatigueGain": fatigue_gain,
+            "actorRoll": actor_roll,
+            "targetRoll": target_roll,
+            "actorFatigue": actor.get("conflict_fatigue", 0),
+            "targetFatigue": target.get("conflict_fatigue", 0),
+            "cooldownSeconds": PLAYER_CONFLICT_COOLDOWN_SECONDS,
+            "guarded": guard_active,
+            "renownGain": renown_gain if actor_won else 0
+        }
+        record = {
+            "actionLabel": result["actionLabel"],
+            "actorName": result["actorName"],
+            "targetName": result["targetName"],
+            "winnerName": result["actorName"] if actor_won else result["targetName"],
+            "actorRoll": actor_roll,
+            "targetRoll": target_roll,
+            "fatigueGain": fatigue_gain,
+            "targetFatigue": target.get("conflict_fatigue", 0),
+            "fatigueUntil": target.get("conflict_fatigue_until"),
+            "renownGain": renown_gain if actor_won else 0,
+            "guarded": guard_active,
+            "createdAt": cooldowns[target_id]
+        }
+        for tribe_id in {actor_tribe_id, target_tribe_id}:
+            tribe = self.tribes.get(tribe_id)
+            if tribe:
+                tribe.setdefault("personal_conflicts", []).append(record)
+                tribe["personal_conflicts"] = tribe["personal_conflicts"][-8:]
+        nearby = set(self._players_in_range(player_id, self.aoi_radius)) | set(self._players_in_range(target_id, self.aoi_radius)) | {player_id, target_id}
+        await self.broadcast(result, include=list(nearby))
+        await self.broadcast({
+            "type": "player_move",
+            "playerId": target_id,
+            "data": {
+                "x": target.get("x", 0),
+                "y": target.get("y", 2),
+                "z": target.get("z", 0),
+                "conflict_fatigue": target.get("conflict_fatigue", 0),
+                "conflict_fatigue_until": target.get("conflict_fatigue_until"),
+                "personal_renown": target.get("personal_renown", 0)
+            }
+        }, exclude=[target_id], include=list(nearby))
+        await self.send_personal_conflict_status(player_id)
+        await self.send_personal_conflict_status(target_id)
+
+        if actor_tribe_id:
+            await self.broadcast_tribe_state(actor_tribe_id)
+        if target_tribe_id and target_tribe_id != actor_tribe_id:
+            await self.broadcast_tribe_state(target_tribe_id)
 
     async def broadcast_chat(self, player_id: str, message: str):
         """广播聊天消息"""
@@ -2749,6 +3006,100 @@ async def game_websocket(
                     chat_message = message.get("message", "")
                     if chat_message.strip():
                         await manager.broadcast_chat(player_id, chat_message)
+
+                elif message_type == "personal_conflict":
+                    await manager.resolve_personal_conflict(
+                        player_id,
+                        message.get("targetId", ""),
+                        message.get("actionKey", "challenge")
+                    )
+
+                elif message_type == "tribe_start_skirmish":
+                    await manager.start_small_conflict(
+                        player_id,
+                        message.get("outcomeId", "")
+                    )
+
+                elif message_type == "tribe_join_skirmish":
+                    await manager.join_small_conflict(
+                        player_id,
+                        message.get("conflictId", "")
+                    )
+
+                elif message_type == "tribe_resolve_skirmish":
+                    await manager.resolve_small_conflict(
+                        player_id,
+                        message.get("conflictId", "")
+                    )
+
+                elif message_type == "tribe_declare_war":
+                    await manager.declare_formal_war(
+                        player_id,
+                        message.get("otherTribeId", "")
+                    )
+
+                elif message_type == "tribe_join_war":
+                    await manager.join_formal_war(
+                        player_id,
+                        message.get("warId", "")
+                    )
+
+                elif message_type == "tribe_resolve_war":
+                    await manager.resolve_formal_war(
+                        player_id,
+                        message.get("warId", "")
+                    )
+
+                elif message_type == "tribe_request_war_truce":
+                    await manager.request_war_truce(
+                        player_id,
+                        message.get("warId", "")
+                    )
+
+                elif message_type == "tribe_complete_war_repair":
+                    await manager.complete_war_repair(
+                        player_id,
+                        message.get("repairId", "")
+                    )
+
+                elif message_type == "tribe_complete_war_revival":
+                    await manager.complete_war_revival(
+                        player_id,
+                        message.get("revivalId", "")
+                    )
+
+                elif message_type == "tribe_support_war":
+                    await manager.support_formal_war(
+                        player_id,
+                        message.get("warId", ""),
+                        message.get("sideTribeId", "")
+                    )
+
+                elif message_type == "tribe_mediate_war":
+                    await manager.mediate_formal_war(
+                        player_id,
+                        message.get("warId", "")
+                    )
+
+                elif message_type == "tribe_resolve_war_diplomacy":
+                    await manager.resolve_war_diplomacy(
+                        player_id,
+                        message.get("diplomacyId", ""),
+                        message.get("action", "")
+                    )
+
+                elif message_type == "tribe_complete_war_aftermath":
+                    await manager.complete_war_aftermath(
+                        player_id,
+                        message.get("aftermathId", "")
+                    )
+
+                elif message_type == "tribe_complete_war_ally_task":
+                    await manager.complete_war_ally_task(
+                        player_id,
+                        message.get("taskId", ""),
+                        message.get("action", "")
+                    )
 
                 elif message_type == "tribe_list":
                     await manager.send_personal_message(player_id, manager.get_tribes_overview())
@@ -2908,6 +3259,18 @@ async def game_websocket(
 
                 elif message_type == "tribe_collect_controlled_site":
                     await manager.collect_controlled_resource_site(
+                        player_id,
+                        message.get("siteId", "")
+                    )
+
+                elif message_type == "tribe_patrol_controlled_site":
+                    await manager.patrol_controlled_resource_site(
+                        player_id,
+                        message.get("siteId", "")
+                    )
+
+                elif message_type == "tribe_relay_controlled_site":
+                    await manager.relay_controlled_resource_site(
                         player_id,
                         message.get("siteId", "")
                     )

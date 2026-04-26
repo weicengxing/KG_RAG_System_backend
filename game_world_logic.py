@@ -633,9 +633,12 @@ class GameWorldLogicMixin:
                     "z": site.get("z", 0),
                     "type": "scouted_resource_site",
                     "regionType": site.get("regionType"),
+                    "regionLabel": site.get("regionLabel"),
                     "resourceLabel": site.get("resourceLabel"),
                     "contested": bool(site.get("contested")),
                     "contestedByTribeName": site.get("contestedByTribeName"),
+                    "sharedWithTribeName": site.get("sharedWithTribeName"),
+                    "jointWatchId": site.get("jointWatchId"),
                     "claimedBy": site.get("foundBy"),
                     "claimedAt": site.get("createdAt"),
                     "activeUntil": site.get("activeUntil")
@@ -652,10 +655,18 @@ class GameWorldLogicMixin:
                     "resourceLabel": site.get("resourceLabel"),
                     "level": int(site.get("level", 1) or 1),
                     "yieldCount": int(site.get("yieldCount", 0) or 0),
+                    "patrolCount": int(site.get("patrolCount", 0) or 0),
+                    "relayCount": int(site.get("relayCount", 0) or 0),
+                    "roadLinked": bool(site.get("roadLinked")),
                     "claimedBy": site.get("securedByName"),
                     "claimedAt": site.get("controlledAt"),
                     "activeUntil": site.get("activeUntil"),
-                    "lastYieldAt": site.get("lastYieldAt")
+                    "lastYieldAt": site.get("lastYieldAt"),
+                    "lastPatrolledAt": site.get("lastPatrolledAt"),
+                    "lastPatrolledBy": site.get("lastPatrolledBy"),
+                    "lastRelayedAt": site.get("lastRelayedAt"),
+                    "lastRelayedBy": site.get("lastRelayedBy"),
+                    "contestResolvedAs": site.get("contestResolvedAs")
                 })
         return landmarks
 

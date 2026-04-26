@@ -631,6 +631,22 @@ class GameTribeProgressionMixin:
         if site.get("contested"):
             tribe["renown"] = int(tribe.get("renown", 0) or 0) + 2
             reward_parts.append("争夺确认声望+2")
+        shared_with_id = site.get("sharedWithTribeId")
+        if site.get("jointWatchId") and shared_with_id:
+            tribe["trade_reputation"] = int(tribe.get("trade_reputation", 0) or 0) + 1
+            relation_progress = tribe.setdefault("boundary_relations", {}).setdefault(shared_with_id, {})
+            relation_progress["tradeTrust"] = min(9, int(relation_progress.get("tradeTrust", 0) or 0) + 1)
+            relation_progress["score"] = min(9, int(relation_progress.get("score", 0) or 0) + 1)
+            relation_progress["lastAction"] = "joint_watch_confirmed"
+            relation_progress["lastActionAt"] = datetime.now().isoformat()
+            other_tribe = self.tribes.get(shared_with_id)
+            if other_tribe:
+                other_progress = other_tribe.setdefault("boundary_relations", {}).setdefault(tribe_id, {})
+                other_progress["tradeTrust"] = min(9, int(other_progress.get("tradeTrust", 0) or 0) + 1)
+                other_progress["score"] = min(9, int(other_progress.get("score", 0) or 0) + 1)
+                other_progress["lastAction"] = "joint_watch_confirmed"
+                other_progress["lastActionAt"] = relation_progress["lastActionAt"]
+            reward_parts.append("联合守望信誉+1")
 
         linked_flag = next((
             flag for flag in (tribe.get("territory_flags", []) or [])
@@ -660,9 +676,14 @@ class GameTribeProgressionMixin:
             "status": "controlled",
             "level": 1,
             "yieldCount": 0,
+            "patrolCount": 0,
+            "relayCount": 0,
+            "roadLinked": self._has_tribe_structure_type(tribe, "tribe_road"),
             "securedByName": member.get("name", "成员"),
             "controlledAt": site["securedAt"],
             "lastYieldAt": None,
+            "lastPatrolledAt": None,
+            "lastRelayedAt": None,
             "activeUntil": datetime.fromtimestamp(datetime.now().timestamp() + TRIBE_CONTROLLED_SITE_ACTIVE_MINUTES * 60).isoformat()
         }
         tribe.setdefault("controlled_resource_sites", []).append(controlled_site)
@@ -793,6 +814,172 @@ class GameTribeProgressionMixin:
         }
         detail = f"{record['memberName']} 收取了{record['siteLabel']}的控制收益：{'、'.join(reward_parts)}。"
         self._add_tribe_history(tribe, "world_event", "收取控制资源点", detail, player_id, record)
+        await self._notify_tribe(tribe_id, detail)
+        await self.broadcast_tribe_state(tribe_id)
+        await self._broadcast_current_map()
+
+    async def patrol_controlled_resource_site(self, player_id: str, site_id: str):
+        tribe_id = self.player_tribes.get(player_id)
+        tribe = self.tribes.get(tribe_id)
+        if not tribe:
+            await self._send_tribe_error(player_id, "请先加入一个部落")
+            return
+
+        sites = self._active_controlled_resource_sites(tribe)
+        site = next((item for item in sites if item.get("id") == site_id), None)
+        if not site:
+            await self._send_tribe_error(player_id, "这个控制资源点已经消散")
+            return
+
+        player = self.players.get(player_id, {})
+        dx = float(player.get("x", 0) or 0) - float(site.get("x", 0) or 0)
+        dz = float(player.get("z", 0) or 0) - float(site.get("z", 0) or 0)
+        if dx * dx + dz * dz > TRIBE_SCOUT_SITE_INTERACT_DISTANCE * TRIBE_SCOUT_SITE_INTERACT_DISTANCE:
+            await self._send_tribe_error(player_id, "靠近控制资源点后才能巡守")
+            return
+
+        last_patrolled_at = site.get("lastPatrolledAt")
+        if last_patrolled_at:
+            try:
+                elapsed = (datetime.now() - datetime.fromisoformat(last_patrolled_at)).total_seconds()
+                if elapsed < TRIBE_CONTROLLED_SITE_PATROL_COOLDOWN_SECONDS:
+                    remaining = max(1, math.ceil((TRIBE_CONTROLLED_SITE_PATROL_COOLDOWN_SECONDS - elapsed) / 60))
+                    await self._send_tribe_error(player_id, f"这处资源点刚巡守过，还需约 {remaining} 分钟")
+                    return
+            except (TypeError, ValueError):
+                pass
+
+        site_level = max(1, int(site.get("level", 1) or 1))
+        extend_minutes = TRIBE_CONTROLLED_SITE_PATROL_EXTEND_MINUTES + max(0, site_level - 1)
+        extend_from = datetime.now().timestamp()
+        try:
+            extend_from = max(extend_from, datetime.fromisoformat(site.get("activeUntil")).timestamp())
+        except (TypeError, ValueError):
+            pass
+        site["activeUntil"] = datetime.fromtimestamp(extend_from + extend_minutes * 60).isoformat()
+        site["lastPatrolledAt"] = datetime.now().isoformat()
+        site["patrolCount"] = int(site.get("patrolCount", 0) or 0) + 1
+
+        reward_parts = [f"控制时间+{extend_minutes}分钟"]
+        tribe["renown"] = int(tribe.get("renown", 0) or 0) + 1
+        reward_parts.append("声望+1")
+        if self._has_tribe_structure_type(tribe, "tribe_fence"):
+            tribe["renown"] = int(tribe.get("renown", 0) or 0) + 1
+            reward_parts.append("围栏巡守声望+1")
+        if site.get("contestResolvedAs") == "trade_path":
+            tribe["trade_reputation"] = int(tribe.get("trade_reputation", 0) or 0) + 1
+            reward_parts.append("通路信誉+1")
+            other_id = site.get("contestedByTribeId")
+            if other_id:
+                progress = tribe.setdefault("boundary_relations", {}).setdefault(other_id, {})
+                progress["tradeTrust"] = max(0, min(9, int(progress.get("tradeTrust", 0) or 0) + 1))
+                progress["lastAction"] = "controlled_site_patrol"
+                progress["lastActionAt"] = site["lastPatrolledAt"]
+
+        member = tribe.get("members", {}).get(player_id, {})
+        site["lastPatrolledBy"] = member.get("name", "成员")
+        record = {
+            "kind": "controlled_resource_site_patrol",
+            "siteId": site.get("id"),
+            "siteLabel": site.get("label", "控制资源点"),
+            "siteLevel": site.get("level", 1),
+            "memberName": member.get("name", "成员"),
+            "rewardParts": reward_parts,
+            "createdAt": site["lastPatrolledAt"]
+        }
+        detail = f"{record['memberName']} 巡守了{record['siteLabel']}：{'、'.join(reward_parts)}。"
+        self._add_tribe_history(tribe, "governance", "巡守控制资源点", detail, player_id, record)
+        await self._notify_tribe(tribe_id, detail)
+        await self.broadcast_tribe_state(tribe_id)
+        await self._broadcast_current_map()
+
+
+    async def relay_controlled_resource_site(self, player_id: str, site_id: str):
+        tribe_id = self.player_tribes.get(player_id)
+        tribe = self.tribes.get(tribe_id)
+        if not tribe:
+            await self._send_tribe_error(player_id, "请先加入一个部落")
+            return
+        if not self._has_tribe_structure_type(tribe, "tribe_road"):
+            await self._send_tribe_error(player_id, "需要先建造营地道路才能组织运输")
+            return
+
+        sites = self._active_controlled_resource_sites(tribe)
+        site = next((item for item in sites if item.get("id") == site_id), None)
+        if not site:
+            await self._send_tribe_error(player_id, "这个控制资源点已经消散")
+            return
+
+        player = self.players.get(player_id, {})
+        dx = float(player.get("x", 0) or 0) - float(site.get("x", 0) or 0)
+        dz = float(player.get("z", 0) or 0) - float(site.get("z", 0) or 0)
+        if dx * dx + dz * dz > TRIBE_SCOUT_SITE_INTERACT_DISTANCE * TRIBE_SCOUT_SITE_INTERACT_DISTANCE:
+            await self._send_tribe_error(player_id, "靠近控制资源点后才能组织运输")
+            return
+
+        last_relayed_at = site.get("lastRelayedAt")
+        if last_relayed_at:
+            try:
+                elapsed = (datetime.now() - datetime.fromisoformat(last_relayed_at)).total_seconds()
+                if elapsed < TRIBE_CONTROLLED_SITE_RELAY_COOLDOWN_SECONDS:
+                    remaining = max(1, math.ceil((TRIBE_CONTROLLED_SITE_RELAY_COOLDOWN_SECONDS - elapsed) / 60))
+                    await self._send_tribe_error(player_id, f"这条运输路线刚整理过，还需约 {remaining} 分钟")
+                    return
+            except (TypeError, ValueError):
+                pass
+
+        source_reward = dict(site.get("reward") or {})
+        storage = tribe.setdefault("storage", {"wood": 0, "stone": 0})
+        reward_parts = []
+        site_level = max(1, int(site.get("level", 1) or 1))
+        relay_amount = 2 + site_level
+        if int(source_reward.get("wood", 0) or 0):
+            storage["wood"] = int(storage.get("wood", 0) or 0) + relay_amount
+            reward_parts.append(f"木材+{relay_amount}")
+        if int(source_reward.get("stone", 0) or 0):
+            storage["stone"] = int(storage.get("stone", 0) or 0) + relay_amount
+            reward_parts.append(f"石块+{relay_amount}")
+        if int(source_reward.get("food", 0) or 0):
+            tribe["food"] = int(tribe.get("food", 0) or 0) + relay_amount
+            reward_parts.append(f"食物+{relay_amount}")
+        if int(source_reward.get("discoveryProgress", 0) or 0):
+            tribe["discovery_progress"] = int(tribe.get("discovery_progress", 0) or 0) + 1
+            reward_parts.append("发现进度+1")
+
+        storage["wood"] = int(storage.get("wood", 0) or 0) + 1
+        storage["stone"] = int(storage.get("stone", 0) or 0) + 1
+        reward_parts.append("路线维护木材+1/石块+1")
+
+        if site.get("contestResolvedAs") == "trade_path":
+            tribe["trade_reputation"] = int(tribe.get("trade_reputation", 0) or 0) + 1
+            reward_parts.append("贸易信誉+1")
+
+        extend_minutes = TRIBE_CONTROLLED_SITE_RELAY_EXTEND_MINUTES + max(0, site_level - 1)
+        extend_from = datetime.now().timestamp()
+        try:
+            extend_from = max(extend_from, datetime.fromisoformat(site.get("activeUntil")).timestamp())
+        except (TypeError, ValueError):
+            pass
+        site["activeUntil"] = datetime.fromtimestamp(extend_from + extend_minutes * 60).isoformat()
+        site["lastRelayedAt"] = datetime.now().isoformat()
+        site["relayCount"] = int(site.get("relayCount", 0) or 0) + 1
+        site["roadLinked"] = True
+        reward_parts.append(f"控制时间+{extend_minutes}分钟")
+
+        member = tribe.get("members", {}).get(player_id, {})
+        member_name = member.get("name", "成员")
+        site["lastRelayedBy"] = member_name
+        record = {
+            "kind": "controlled_resource_site_relay",
+            "siteId": site.get("id"),
+            "siteLabel": site.get("label", "控制资源点"),
+            "siteLevel": site.get("level", 1),
+            "memberName": member_name,
+            "rewardParts": reward_parts,
+            "createdAt": site["lastRelayedAt"]
+        }
+        detail = f"{member_name} 组织了{record['siteLabel']}的道路运输：{'、'.join(reward_parts)}。"
+        self._add_tribe_history(tribe, "world_event", "控制点道路运输", detail, player_id, record)
         await self._notify_tribe(tribe_id, detail)
         await self.broadcast_tribe_state(tribe_id)
         await self._broadcast_current_map()
@@ -965,6 +1152,65 @@ class GameTribeProgressionMixin:
         }
         return count, count >= TRIBE_OATH_TASK_STREAK_TARGET
 
+    def _create_joint_watch_scout_sites(self, tribe: dict, other_tribe: dict, flag: dict, relation: dict, member_name: str) -> list:
+        other_flag = next((
+            item for item in (other_tribe.get("territory_flags", []) or [])
+            if isinstance(item, dict) and item.get("id") == relation.get("otherFlagId")
+        ), None)
+        if not other_flag:
+            return []
+
+        own_x = float(flag.get("x", 0) or 0)
+        own_z = float(flag.get("z", 0) or 0)
+        other_x = float(other_flag.get("x", 0) or 0)
+        other_z = float(other_flag.get("z", 0) or 0)
+        mid_x = (own_x + other_x) / 2
+        mid_z = (own_z + other_z) / 2
+        nearest_region = min(
+            WORLD_REGIONS,
+            key=lambda region: (mid_x - region["x"]) ** 2 + (mid_z - region["z"]) ** 2
+        )
+        region_type = nearest_region.get("type", "region_forest")
+        site_reward = TRIBE_SCOUT_SITE_REWARDS.get(region_type, TRIBE_SCOUT_SITE_REWARDS["region_forest"])
+        angle = random.random() * math.pi * 2
+        distance = random.randint(5, max(8, min(18, int(nearest_region.get("radius", 18) or 18))))
+        site_x = max(-490, min(490, mid_x + math.cos(angle) * distance))
+        site_z = max(-490, min(490, mid_z + math.sin(angle) * distance))
+        now_text = datetime.now().isoformat()
+        active_until = datetime.fromtimestamp(datetime.now().timestamp() + TRIBE_SCOUT_SITE_ACTIVE_MINUTES * 60).isoformat()
+        shared_id = f"joint_watch_{int(datetime.now().timestamp() * 1000)}_{random.randint(100, 999)}"
+        shared_label = f"联合守望线索：{site_reward.get('label', '资源点')}"
+        created_sites = []
+        for target_tribe, partner_tribe in ((tribe, other_tribe), (other_tribe, tribe)):
+            target_id = target_tribe.get("id")
+            if not target_id:
+                continue
+            site = {
+                "id": f"{shared_id}_{target_id}",
+                "tribeId": target_id,
+                "type": "scouted_resource_site",
+                "label": shared_label,
+                "regionType": region_type,
+                "regionLabel": nearest_region.get("label", "边界地带"),
+                "resourceLabel": site_reward.get("label", "资源点"),
+                "x": site_x,
+                "z": site_z,
+                "size": 1.05,
+                "reward": {key: value for key, value in site_reward.items() if key != "label"},
+                "foundBy": member_name,
+                "status": "active",
+                "sharedByTribeId": tribe.get("id"),
+                "sharedWithTribeId": partner_tribe.get("id"),
+                "sharedWithTribeName": partner_tribe.get("name", "其他部落"),
+                "jointWatchId": shared_id,
+                "createdAt": now_text,
+                "activeUntil": active_until
+            }
+            target_tribe.setdefault("scouted_resource_sites", []).append(site)
+            target_tribe["scouted_resource_sites"] = target_tribe["scouted_resource_sites"][-TRIBE_SCOUT_SITE_LIMIT:]
+            created_sites.append(site)
+        return created_sites
+
     async def complete_oath_task(self, player_id: str):
         tribe_id = self.player_tribes.get(player_id)
         tribe = self.tribes.get(tribe_id)
@@ -1089,10 +1335,19 @@ class GameTribeProgressionMixin:
         if not relation:
             await self._send_tribe_error(player_id, "这面旗帜附近还没有形成边界关系")
             return
+        other_tribe_id = relation.get("otherTribeId")
         allowed_states = action.get("allowedStates")
         if allowed_states and relation.get("state") not in allowed_states:
             await self._send_tribe_error(player_id, f"{action.get('label', '边界行动')}只能在紧张或敌意边界使用")
             return
+        if action.get("pressure"):
+            active_truce = next((
+                item for item in self._active_boundary_truces(tribe)
+                if isinstance(item, dict) and item.get("otherTribeId") == other_tribe_id
+            ), None)
+            if active_truce:
+                await self._send_tribe_error(player_id, "停争保护仍在，暂时不能继续施压")
+                return
         cooldowns = flag.setdefault("boundaryActionCooldowns", {})
         cooldown_key = f"{action_key}:{relation.get('otherTribeId')}"
         last_action_at = cooldowns.get(cooldown_key)
@@ -1107,6 +1362,8 @@ class GameTribeProgressionMixin:
                 pass
 
         food_cost = int(action.get("foodCost", 0) or 0)
+        if action.get("pressure") and relation.get("state") == "hostile":
+            food_cost += TRIBE_BOUNDARY_HOSTILE_FOOD_COST
         if food_cost and int(tribe.get("food", 0) or 0) < food_cost:
             await self._send_tribe_error(player_id, f"{action.get('label')}需要食物 {food_cost}")
             return
@@ -1125,9 +1382,10 @@ class GameTribeProgressionMixin:
         if food_cost:
             reward_parts.append(f"食物-{food_cost}")
 
-        other_tribe_id = relation.get("otherTribeId")
         boundary_progress = {}
         affected_tribe_ids = set()
+        other_tribe = None
+        pressure_chain_count = 0
         if action.get("clearIncomingPressure"):
             before_count = len(tribe.get("boundary_pressures", []) or [])
             tribe["boundary_pressures"] = [
@@ -1144,10 +1402,32 @@ class GameTribeProgressionMixin:
                 if self._has_tribe_structure_type(tribe, "tribe_fence"):
                     tribe["renown"] = int(tribe.get("renown", 0) or 0) + 2
                     reward_parts.append("围栏守边声望+2")
+        if action.get("clearOutgoingPressure"):
+            before_count = len(tribe.get("boundary_pressures", []) or [])
+            tribe["boundary_pressures"] = [
+                item for item in (tribe.get("boundary_pressures", []) or [])
+                if not (
+                    isinstance(item, dict)
+                    and item.get("otherTribeId") == other_tribe_id
+                    and item.get("state") == "pressing"
+                )
+            ]
+            cleared_count = before_count - len(tribe.get("boundary_pressures", []) or [])
+            if cleared_count:
+                reward_parts.append("撤回己方压力")
         if other_tribe_id:
             relation_records = tribe.setdefault("boundary_relations", {})
             boundary_progress = relation_records.setdefault(other_tribe_id, {})
+            if action.get("pressure"):
+                pressure_chain_count = sum(
+                    1 for item in self._active_boundary_pressures(tribe)
+                    if isinstance(item, dict)
+                    and item.get("otherTribeId") == other_tribe_id
+                    and item.get("state") == "pressing"
+                )
             relation_delta = int(action.get("relationDelta", 0) or 0)
+            if pressure_chain_count:
+                relation_delta -= 1
             trade_delta = int(action.get("tradeTrustDelta", 0) or 0)
             if relation_delta:
                 boundary_progress["score"] = max(-9, min(9, int(boundary_progress.get("score", 0) or 0) + relation_delta))
@@ -1175,6 +1455,48 @@ class GameTribeProgressionMixin:
                 if renown_disrupt:
                     other_tribe["renown"] = max(0, int(other_tribe.get("renown", 0) or 0) - renown_disrupt)
                     reward_parts.append(f"压低对方声望-{renown_disrupt}")
+                aid_food = int(action.get("aidFood", 0) or 0)
+                if aid_food:
+                    other_tribe["food"] = int(other_tribe.get("food", 0) or 0) + aid_food
+                    affected_tribe_ids.add(other_tribe_id)
+                    reward_parts.append(f"援助对方食物+{aid_food}")
+                if action.get("clearOutgoingPressure"):
+                    before_count = len(other_tribe.get("boundary_pressures", []) or [])
+                    other_tribe["boundary_pressures"] = [
+                        item for item in (other_tribe.get("boundary_pressures", []) or [])
+                        if not (
+                            isinstance(item, dict)
+                            and item.get("otherTribeId") == tribe_id
+                            and item.get("state") == "pressured"
+                        )
+                    ]
+                    if before_count != len(other_tribe.get("boundary_pressures", []) or []):
+                        affected_tribe_ids.add(other_tribe_id)
+                if action.get("truce"):
+                    active_until = datetime.fromtimestamp(datetime.now().timestamp() + TRIBE_BOUNDARY_TRUCE_MINUTES * 60).isoformat()
+                    truce_record = {
+                        "id": f"truce_{int(datetime.now().timestamp() * 1000)}_{random.randint(100, 999)}",
+                        "state": "truce",
+                        "title": action.get("label", "停争保护"),
+                        "summary": f"与 {other_tribe.get('name', '其他部落')} 的边界进入短时停争，期间不能继续施压。",
+                        "otherTribeId": other_tribe_id,
+                        "otherTribeName": other_tribe.get("name", "其他部落"),
+                        "activeUntil": active_until,
+                        "createdAt": boundary_progress["lastActionAt"]
+                    }
+                    incoming_truce = {
+                        **truce_record,
+                        "id": f"incoming_truce_{int(datetime.now().timestamp() * 1000)}_{random.randint(100, 999)}",
+                        "summary": f"{tribe.get('name', '对方部落')} 提出停争，边界进入短时保护。",
+                        "otherTribeId": tribe_id,
+                        "otherTribeName": tribe.get("name", "对方部落")
+                    }
+                    tribe.setdefault("boundary_truces", []).append(truce_record)
+                    tribe["boundary_truces"] = tribe["boundary_truces"][-TRIBE_BOUNDARY_OUTCOME_LIMIT:]
+                    other_tribe.setdefault("boundary_truces", []).append(incoming_truce)
+                    other_tribe["boundary_truces"] = other_tribe["boundary_truces"][-TRIBE_BOUNDARY_OUTCOME_LIMIT:]
+                    affected_tribe_ids.add(other_tribe_id)
+                    reward_parts.append(f"停争保护{TRIBE_BOUNDARY_TRUCE_MINUTES}分钟")
                 if action.get("pressure"):
                     active_until = datetime.fromtimestamp(datetime.now().timestamp() + TRIBE_BOUNDARY_PRESSURE_MINUTES * 60).isoformat()
                     pressure_title = action.get("label", "边界压力")
@@ -1205,9 +1527,22 @@ class GameTribeProgressionMixin:
                     affected_tribe_ids.add(other_tribe_id)
                     reward_parts.append(f"边界压制{TRIBE_BOUNDARY_PRESSURE_MINUTES}分钟")
             relation = self._flag_boundary_relation(tribe_id, flag) or relation
-            affected_tribe_ids = self._ensure_boundary_outcome(tribe, relation)
+            affected_tribe_ids.update(self._ensure_boundary_outcome(tribe, relation))
+            if action.get("pressure") and pressure_chain_count:
+                reward_parts.append(f"压力连锁x{pressure_chain_count + 1}")
 
         member = tribe.get("members", {}).get(player_id, {})
+        if action.get("sharedScout") and other_tribe:
+            shared_sites = self._create_joint_watch_scout_sites(
+                tribe,
+                other_tribe,
+                flag,
+                relation,
+                member.get("name", "成员")
+            )
+            if shared_sites:
+                affected_tribe_ids.add(other_tribe_id)
+                reward_parts.append("共享资源线索+1")
         record = {
             "kind": "boundary_action",
             "flagId": flag.get("id"),
@@ -1240,3 +1575,5 @@ class GameTribeProgressionMixin:
                 f"{tribe.get('name', '对方部落')} 在共同边界上执行了{record['actionLabel']}，部落面板出现了可回应的边界机会。"
             )
             await self.broadcast_tribe_state(other_tribe_id)
+        if action.get("sharedScout") and reward_parts:
+            await self._broadcast_current_map()
