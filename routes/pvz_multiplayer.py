@@ -316,6 +316,9 @@ async def pvz_websocket(
                 # 同时保存到Redis
                 await simple_room_manager.update_room_state(room_id, payload)
                 
+            elif message_type == "plant_state_delta" and role == "plant":
+                await ws_manager.broadcast_to_others(room_id, user_id, "plant_state_delta", payload)
+
             elif message_type == "ping":
                 # 心跳包，回复pong
                 await ws_manager.send_to_user(room_id, user_id, "pong", {
