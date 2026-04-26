@@ -131,7 +131,7 @@ class GameTribeProgressionMixin:
                 other_progress["lastOutcomeState"] = response_marker
         return affected_tribe_ids
 
-    async def resolve_boundary_outcome(self, player_id: str, outcome_id: str):
+    async def resolve_boundary_outcome(self, player_id: str, outcome_id: str, response_key: str = ""):
         tribe_id = self.player_tribes.get(player_id)
         tribe = self.tribes.get(tribe_id)
         if not tribe:
@@ -144,6 +144,9 @@ class GameTribeProgressionMixin:
             return
 
         reward = dict(outcome.get("reward") or {})
+        if outcome.get("kind") == "resource_site_contest":
+            response_key = response_key if response_key in {"hold", "cede", "trade_path"} else "hold"
+            reward = self._apply_resource_contest_response(tribe, outcome, response_key)
         storage = tribe.setdefault("storage", {"wood": 0, "stone": 0})
         reward_parts = []
         for resource_key, label in (("wood", "木材"), ("stone", "石块")):
@@ -170,7 +173,13 @@ class GameTribeProgressionMixin:
 
         relation_records = tribe.setdefault("boundary_relations", {})
         relation_progress = relation_records.get(outcome.get("otherTribeId"), {})
-        if outcome.get("state") == "hostile":
+        if outcome.get("kind") == "resource_site_contest":
+            relation_delta = int(outcome.get("relationDelta", 0) or 0)
+            trade_delta = int(outcome.get("tradeTrustDelta", 0) or 0)
+            relation_progress["score"] = max(-9, min(9, int(relation_progress.get("score", 0) or 0) + relation_delta))
+            if trade_delta:
+                relation_progress["tradeTrust"] = max(0, min(9, int(relation_progress.get("tradeTrust", 0) or 0) + trade_delta))
+        elif outcome.get("state") == "hostile":
             relation_progress["score"] = max(-9, int(relation_progress.get("score", 0) or 0) - 1)
         else:
             relation_progress["score"] = min(9, int(relation_progress.get("score", 0) or 0) + 1)
@@ -185,6 +194,8 @@ class GameTribeProgressionMixin:
             "title": outcome.get("title", "边界结果"),
             "summary": outcome.get("summary", ""),
             "state": outcome.get("state"),
+            "responseKey": response_key,
+            "responseLabel": outcome.get("responseLabel"),
             "otherTribeName": outcome.get("otherTribeName", "其他部落"),
             "memberName": member.get("name", "成员"),
             "rewardParts": reward_parts,
@@ -201,6 +212,46 @@ class GameTribeProgressionMixin:
             {"tribeId": tribe_id, "outcomeId": outcome_id, "state": outcome.get("state")}
         )
         await self.broadcast_tribe_state(tribe_id)
+
+    def _apply_resource_contest_response(self, tribe: dict, outcome: dict, response_key: str) -> dict:
+        site_id = outcome.get("siteId")
+        site = next((
+            item for item in (tribe.get("scouted_resource_sites", []) or [])
+            if isinstance(item, dict) and item.get("id") == site_id
+        ), None)
+        base_reward = dict(outcome.get("reward") or {})
+        if response_key == "cede":
+            outcome["responseLabel"] = "让渡"
+            outcome["relationDelta"] = 2
+            outcome["tradeTrustDelta"] = 1
+            if site:
+                site["status"] = "ceded"
+                tribe["scouted_resource_sites"] = [
+                    item for item in (tribe.get("scouted_resource_sites", []) or [])
+                    if not (isinstance(item, dict) and item.get("id") == site_id)
+                ]
+            return {"tradeReputation": 1, "renown": 1}
+        if response_key == "trade_path":
+            outcome["responseLabel"] = "交换通路"
+            outcome["relationDelta"] = 1
+            outcome["tradeTrustDelta"] = 3
+            if site:
+                site["contested"] = False
+                site["contestResolvedAs"] = "trade_path"
+            return {
+                "food": max(2, int(base_reward.get("food", 0) or 0) // 2),
+                "wood": max(0, int(base_reward.get("wood", 0) or 0) // 2),
+                "stone": max(0, int(base_reward.get("stone", 0) or 0) // 2),
+                "tradeReputation": 2,
+                "renown": 2
+            }
+        outcome["responseLabel"] = "守住"
+        outcome["relationDelta"] = -2
+        outcome["tradeTrustDelta"] = 0
+        if site:
+            site["contestResolvedAs"] = "hold"
+        base_reward["renown"] = int(base_reward.get("renown", 0) or 0) + 2
+        return base_reward
 
     async def claim_tribe_flag(self, player_id: str, x: float, z: float):
         tribe_id = self.player_tribes.get(player_id)
@@ -527,6 +578,11 @@ class GameTribeProgressionMixin:
             "otherTribeId": other_id,
             "otherTribeName": other_tribe.get("name", "其他部落"),
             "reward": reward,
+            "responseOptions": [
+                {"key": "hold", "label": "守住"},
+                {"key": "cede", "label": "让渡"},
+                {"key": "trade_path", "label": "交换通路"}
+            ],
             "status": "pending",
             "createdAt": datetime.now().isoformat()
         })
@@ -602,6 +658,8 @@ class GameTribeProgressionMixin:
             "id": f"controlled_{site.get('id')}",
             "type": "controlled_resource_site",
             "status": "controlled",
+            "level": 1,
+            "yieldCount": 0,
             "securedByName": member.get("name", "成员"),
             "controlledAt": site["securedAt"],
             "lastYieldAt": None,
@@ -672,42 +730,65 @@ class GameTribeProgressionMixin:
         source_reward = dict(site.get("reward") or {})
         storage = tribe.setdefault("storage", {"wood": 0, "stone": 0})
         reward_parts = []
+        site_level = max(1, int(site.get("level", 1) or 1))
+        base_yield = 3 + site_level
         if int(source_reward.get("wood", 0) or 0):
-            amount = 4
+            amount = base_yield
             storage["wood"] = int(storage.get("wood", 0) or 0) + amount
             reward_parts.append(f"木材+{amount}")
         if int(source_reward.get("stone", 0) or 0):
-            amount = 4
+            amount = base_yield
             storage["stone"] = int(storage.get("stone", 0) or 0) + amount
             reward_parts.append(f"石块+{amount}")
         if int(source_reward.get("food", 0) or 0):
-            amount = 4
+            amount = base_yield
             tribe["food"] = int(tribe.get("food", 0) or 0) + amount
             reward_parts.append(f"食物+{amount}")
         if int(source_reward.get("discoveryProgress", 0) or 0):
-            tribe["discovery_progress"] = int(tribe.get("discovery_progress", 0) or 0) + 1
-            reward_parts.append("发现进度+1")
+            progress_amount = 1 + (1 if site_level >= 3 else 0)
+            tribe["discovery_progress"] = int(tribe.get("discovery_progress", 0) or 0) + progress_amount
+            reward_parts.append(f"发现进度+{progress_amount}")
 
         if site.get("linkedFlagId"):
             tribe["renown"] = int(tribe.get("renown", 0) or 0) + 1
             reward_parts.append("旗帜控制声望+1")
         if self._has_tribe_structure_type(tribe, "tribe_road"):
-            storage["wood"] = int(storage.get("wood", 0) or 0) + 1
-            storage["stone"] = int(storage.get("stone", 0) or 0) + 1
-            reward_parts.append("道路运输木材+1/石块+1")
+            road_bonus = 1 + (1 if site_level >= 2 else 0)
+            storage["wood"] = int(storage.get("wood", 0) or 0) + road_bonus
+            storage["stone"] = int(storage.get("stone", 0) or 0) + road_bonus
+            reward_parts.append(f"道路运输木材+{road_bonus}/石块+{road_bonus}")
 
         if not reward_parts:
             tribe["renown"] = int(tribe.get("renown", 0) or 0) + 1
             reward_parts.append("声望+1")
 
         site["lastYieldAt"] = datetime.now().isoformat()
+        site["yieldCount"] = int(site.get("yieldCount", 0) or 0) + 1
+        upgraded = False
+        if site_level < TRIBE_CONTROLLED_SITE_MAX_LEVEL and site["yieldCount"] >= TRIBE_CONTROLLED_SITE_UPGRADE_COLLECTS:
+            site["level"] = site_level + 1
+            site["yieldCount"] = 0
+            extend_from = datetime.now().timestamp()
+            try:
+                extend_from = max(extend_from, datetime.fromisoformat(site.get("activeUntil")).timestamp())
+            except (TypeError, ValueError):
+                pass
+            site["activeUntil"] = datetime.fromtimestamp(
+                extend_from + TRIBE_CONTROLLED_SITE_UPGRADE_EXTEND_MINUTES * 60
+            ).isoformat()
+            tribe["renown"] = int(tribe.get("renown", 0) or 0) + 2
+            reward_parts.append(f"控制点升级Lv.{site['level']}")
+            reward_parts.append("声望+2")
+            upgraded = True
         member = tribe.get("members", {}).get(player_id, {})
         record = {
             "kind": "controlled_resource_site",
             "siteId": site.get("id"),
             "siteLabel": site.get("label", "控制资源点"),
+            "siteLevel": site.get("level", 1),
             "memberName": member.get("name", "成员"),
             "rewardParts": reward_parts,
+            "upgraded": upgraded,
             "createdAt": site["lastYieldAt"]
         }
         detail = f"{record['memberName']} 收取了{record['siteLabel']}的控制收益：{'、'.join(reward_parts)}。"

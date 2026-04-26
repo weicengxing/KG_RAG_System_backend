@@ -2927,7 +2927,8 @@ async def game_websocket(
                 elif message_type == "tribe_resolve_boundary_outcome":
                     await manager.resolve_boundary_outcome(
                         player_id,
-                        message.get("outcomeId", "")
+                        message.get("outcomeId", ""),
+                        message.get("responseKey", "")
                     )
 
                 elif message_type == "tribe_beast_task":

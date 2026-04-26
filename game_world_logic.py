@@ -650,6 +650,8 @@ class GameWorldLogicMixin:
                     "type": "controlled_resource_site",
                     "regionType": site.get("regionType"),
                     "resourceLabel": site.get("resourceLabel"),
+                    "level": int(site.get("level", 1) or 1),
+                    "yieldCount": int(site.get("yieldCount", 0) or 0),
                     "claimedBy": site.get("securedByName"),
                     "claimedAt": site.get("controlledAt"),
                     "activeUntil": site.get("activeUntil"),
