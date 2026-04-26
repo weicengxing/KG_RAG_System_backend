@@ -348,7 +348,9 @@ class GameWorldLogicMixin:
             "tribe_totem",
             "tribe_storage",
             "tribe_workbench",
-            "tribe_hut"
+            "tribe_hut",
+            "tribe_fence",
+            "tribe_road"
         }
 
     def _get_base_decorations(self, map_name: Optional[str] = None) -> List[dict]:
@@ -394,7 +396,12 @@ class GameWorldLogicMixin:
         tribe = self.tribes.get(tribe_id) or {}
         own_oath = (self._tribe_oath(tribe) or {}).get("key")
         other_oath = (self._tribe_oath(other_tribe) or {}).get("key")
-        if own_oath == "trade" or other_oath == "trade":
+        progress = self._boundary_relation_progress(tribe_id, other_tribe.get("id"))
+        if progress.get("score", 0) >= TRIBE_BOUNDARY_RELATION_STAGE_STEP:
+            state, label = "alliance", "友好边界"
+        elif progress.get("score", 0) <= -TRIBE_BOUNDARY_RELATION_STAGE_STEP:
+            state, label = "hostile", "敌意边界"
+        elif own_oath == "trade" or other_oath == "trade" or progress.get("tradeTrust", 0) >= TRIBE_BOUNDARY_RELATION_STAGE_STEP:
             state, label = "trade", "可贸易边界"
         elif nearest_distance <= TRIBE_FLAG_BOUNDARY_TENSION_DISTANCE:
             state, label = "tension", "紧张边界"
@@ -406,7 +413,23 @@ class GameWorldLogicMixin:
             "distance": round(nearest_distance),
             "otherTribeId": other_tribe.get("id"),
             "otherTribeName": other_tribe.get("name", "部落"),
-            "otherFlagId": other_flag.get("id")
+            "otherFlagId": other_flag.get("id"),
+            "relationScore": progress.get("score", 0),
+            "tradeTrust": progress.get("tradeTrust", 0),
+            "lastAction": progress.get("lastAction"),
+            "lastActionAt": progress.get("lastActionAt")
+        }
+
+    def _boundary_relation_progress(self, tribe_id: Optional[str], other_tribe_id: Optional[str]) -> dict:
+        if not tribe_id or not other_tribe_id:
+            return {"score": 0, "tradeTrust": 0}
+        tribe = self.tribes.get(tribe_id) or {}
+        own_record = (tribe.get("boundary_relations") or {}).get(other_tribe_id) or {}
+        return {
+            "score": int(own_record.get("score", 0) or 0),
+            "tradeTrust": int(own_record.get("tradeTrust", 0) or 0),
+            "lastAction": own_record.get("lastAction"),
+            "lastActionAt": own_record.get("lastActionAt")
         }
 
     def _get_dynamic_tribe_decorations(self) -> List[dict]:
@@ -432,7 +455,45 @@ class GameWorldLogicMixin:
             beast_marker = self._tribe_beast_marker(tribe)
             if beast_marker:
                 decorations.append(beast_marker)
+            decorations.extend(self._active_scouted_resource_sites(tribe))
+            decorations.extend(self._active_controlled_resource_sites(tribe))
         return decorations
+
+    def _active_scouted_resource_sites(self, tribe: dict) -> List[dict]:
+        active = []
+        now = datetime.now()
+        for site in tribe.get("scouted_resource_sites", []) or []:
+            if not isinstance(site, dict) or site.get("status") == "secured":
+                continue
+            active_until = site.get("activeUntil")
+            if active_until:
+                try:
+                    if datetime.fromisoformat(active_until) <= now:
+                        continue
+                except (TypeError, ValueError):
+                    pass
+            active.append(site)
+        if len(active) != len(tribe.get("scouted_resource_sites", []) or []):
+            tribe["scouted_resource_sites"] = active[-TRIBE_SCOUT_SITE_LIMIT:]
+        return active[-TRIBE_SCOUT_SITE_LIMIT:]
+
+    def _active_controlled_resource_sites(self, tribe: dict) -> List[dict]:
+        active = []
+        now = datetime.now()
+        for site in tribe.get("controlled_resource_sites", []) or []:
+            if not isinstance(site, dict):
+                continue
+            active_until = site.get("activeUntil")
+            if active_until:
+                try:
+                    if datetime.fromisoformat(active_until) <= now:
+                        continue
+                except (TypeError, ValueError):
+                    pass
+            active.append(site)
+        if len(active) != len(tribe.get("controlled_resource_sites", []) or []):
+            tribe["controlled_resource_sites"] = active[-TRIBE_CONTROLLED_SITE_LIMIT:]
+        return active[-TRIBE_CONTROLLED_SITE_LIMIT:]
 
     def _tribe_beast_marker(self, tribe: dict) -> Optional[dict]:
         if int(tribe.get("tamed_beasts", 0) or 0) <= 0:
@@ -526,7 +587,7 @@ class GameWorldLogicMixin:
                 })
 
             for building in camp.get("buildings", []):
-                if building.get("type") in {"tribe_totem", "tribe_storage", "tribe_workbench"}:
+                if building.get("type") in {"tribe_totem", "tribe_storage", "tribe_workbench", "tribe_fence", "tribe_road"}:
                     rune_summary = self._tribe_public_rune_summary(tribe)
                     renown_state = self._tribe_renown_state(tribe)
                     landmarks.append({
@@ -563,6 +624,37 @@ class GameWorldLogicMixin:
             beast_marker = self._tribe_beast_marker(tribe)
             if beast_marker:
                 landmarks.append(beast_marker)
+            for site in self._active_scouted_resource_sites(tribe):
+                landmarks.append({
+                    "id": site.get("id"),
+                    "tribeId": tribe_id,
+                    "label": site.get("label", "侦察资源点"),
+                    "x": site.get("x", 0),
+                    "z": site.get("z", 0),
+                    "type": "scouted_resource_site",
+                    "regionType": site.get("regionType"),
+                    "resourceLabel": site.get("resourceLabel"),
+                    "contested": bool(site.get("contested")),
+                    "contestedByTribeName": site.get("contestedByTribeName"),
+                    "claimedBy": site.get("foundBy"),
+                    "claimedAt": site.get("createdAt"),
+                    "activeUntil": site.get("activeUntil")
+                })
+            for site in self._active_controlled_resource_sites(tribe):
+                landmarks.append({
+                    "id": site.get("id"),
+                    "tribeId": tribe_id,
+                    "label": site.get("label", "控制资源点"),
+                    "x": site.get("x", 0),
+                    "z": site.get("z", 0),
+                    "type": "controlled_resource_site",
+                    "regionType": site.get("regionType"),
+                    "resourceLabel": site.get("resourceLabel"),
+                    "claimedBy": site.get("securedByName"),
+                    "claimedAt": site.get("controlledAt"),
+                    "activeUntil": site.get("activeUntil"),
+                    "lastYieldAt": site.get("lastYieldAt")
+                })
         return landmarks
 
     def _compose_map_data(self, map_name: Optional[str] = None) -> Optional[dict]:

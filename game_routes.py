@@ -536,6 +536,10 @@ class ConnectionManager(GameTribeProgressionMixin, GameWorldLogicMixin):
     def _tribe_total_contribution(self, tribe: dict) -> int:
         return sum(int(member.get("contribution", 0) or 0) for member in tribe.get("members", {}).values())
 
+    def _has_tribe_structure_type(self, tribe: dict, structure_type: str) -> bool:
+        buildings = tribe.get("camp", {}).get("buildings", []) or []
+        return any(isinstance(building, dict) and building.get("type") == structure_type for building in buildings)
+
     def _unlocked_rune_keys(self, tribe: dict) -> Set[str]:
         runes = tribe.get("runes", [])
         if not isinstance(runes, list):
@@ -775,6 +779,24 @@ class ConnectionManager(GameTribeProgressionMixin, GameWorldLogicMixin):
             "resolvedAt": trade.get("resolvedAt")
         }
 
+    def _active_boundary_pressures(self, tribe: dict) -> List[dict]:
+        active = []
+        now = datetime.now()
+        for item in tribe.get("boundary_pressures", []) or []:
+            if not isinstance(item, dict):
+                continue
+            active_until = item.get("activeUntil")
+            if active_until:
+                try:
+                    if datetime.fromisoformat(active_until) < now:
+                        continue
+                except (TypeError, ValueError):
+                    pass
+            active.append(item)
+        if len(active) != len(tribe.get("boundary_pressures", []) or []):
+            tribe["boundary_pressures"] = active[-TRIBE_BOUNDARY_OUTCOME_LIMIT:]
+        return active[-TRIBE_BOUNDARY_OUTCOME_LIMIT:]
+
     def _active_trade_requests_for_tribe(self, tribe_id: str) -> List[dict]:
         return [
             self._public_trade(trade)
@@ -928,12 +950,18 @@ class ConnectionManager(GameTribeProgressionMixin, GameWorldLogicMixin):
             "oathOptions": TRIBE_OATHS if not tribe.get("oath") else {},
             "oathConfig": {"renownBonus": TRIBE_OATH_RENOWN_BONUS},
             "oathTask": self._current_oath_task(tribe),
+            "oathTaskStreak": dict(tribe.get("oath_task_streak", {})),
             "celebrationBuff": self._active_celebration_buff(tribe),
             "scoutConfig": {
                 "foodCost": TRIBE_SCOUT_FOOD_COST,
-                "eventCount": TRIBE_SCOUT_EVENT_COUNT
+                "eventCount": TRIBE_SCOUT_EVENT_COUNT,
+                "siteMinutes": TRIBE_SCOUT_SITE_ACTIVE_MINUTES,
+                "siteFlagRadius": TRIBE_SCOUT_SITE_FLAG_RADIUS,
+                "siteContestRadius": TRIBE_SCOUT_SITE_CONTEST_RADIUS
             },
             "scoutReports": list(tribe.get("scout_reports", []) or [])[-3:],
+            "scoutedResourceSites": self._active_scouted_resource_sites(tribe),
+            "controlledResourceSites": self._active_controlled_resource_sites(tribe),
             "tamedBeasts": int(tribe.get("tamed_beasts", 0) or 0),
             "beastGrowth": self._beast_growth_state(tribe),
             "beastTaskConfig": TRIBE_BEAST_TASK_REWARDS,
@@ -953,6 +981,10 @@ class ConnectionManager(GameTribeProgressionMixin, GameWorldLogicMixin):
                 "minHistory": TRIBE_ORAL_EPIC_MIN_HISTORY
             },
             "tradeRequests": self._active_trade_requests_for_tribe(tribe.get("id")),
+            "boundaryOutcomes": [
+                item for item in (tribe.get("boundary_outcomes", []) or [])
+                if isinstance(item, dict) and item.get("status") == "pending"
+            ],
             "tradeTargets": self._trade_targets_for_tribe(tribe.get("id")),
             "tradeConfig": {
                 "resources": ["wood", "stone", "food"],
@@ -960,10 +992,13 @@ class ConnectionManager(GameTribeProgressionMixin, GameWorldLogicMixin):
                 "maxActive": TRIBE_TRADE_MAX_ACTIVE
             },
             "territoryFlags": list(tribe.get("territory_flags", []) or []),
+            "boundaryRelations": dict(tribe.get("boundary_relations", {}) or {}),
+            "boundaryPressures": self._active_boundary_pressures(tribe),
             "flagPatrolChain": {
                 "regions": list(tribe.get("flag_patrol_chain_regions", []) or []),
                 "target": TRIBE_FLAG_PATROL_CHAIN_TARGET
             },
+            "boundaryActions": TRIBE_BOUNDARY_ACTIONS,
             "flagConfig": {
                 "max": TRIBE_FLAG_MAX,
                 "woodCost": TRIBE_FLAG_WOOD_COST,
@@ -1559,6 +1594,12 @@ class ConnectionManager(GameTribeProgressionMixin, GameWorldLogicMixin):
             self._add_trade_resource(from_tribe, request_resource, request_amount)
             from_tribe["trade_reputation"] = max(0, int(from_tribe.get("trade_reputation", 0) or 0)) + 1
             to_tribe["trade_reputation"] = max(0, int(to_tribe.get("trade_reputation", 0) or 0)) + 1
+            from_road_bonus = 1 if self._has_tribe_structure_type(from_tribe, "tribe_road") else 0
+            to_road_bonus = 1 if self._has_tribe_structure_type(to_tribe, "tribe_road") else 0
+            if from_road_bonus:
+                from_tribe["trade_reputation"] += from_road_bonus
+            if to_road_bonus:
+                to_tribe["trade_reputation"] += to_road_bonus
             from_trade_bonus = int((self._active_celebration_buff(from_tribe) or {}).get("tradeRenownBonus", 0) or 0)
             to_trade_bonus = int((self._active_celebration_buff(to_tribe) or {}).get("tradeRenownBonus", 0) or 0)
             from_oath_bonus = self._oath_bonus(from_tribe, "tradeRenownBonus")
@@ -1586,6 +1627,8 @@ class ConnectionManager(GameTribeProgressionMixin, GameWorldLogicMixin):
                     "renownBonus": TRIBE_TRADE_RENOWN_BONUS,
                     "fromOathBonus": from_oath_bonus,
                     "toOathBonus": to_oath_bonus,
+                    "fromRoadBonus": from_road_bonus,
+                    "toRoadBonus": to_road_bonus,
                     "fromReputation": self._trade_reputation_state(from_tribe),
                     "toReputation": self._trade_reputation_state(to_tribe)
                 }
@@ -2791,6 +2834,13 @@ async def game_websocket(
                         message.get("flagId", "")
                     )
 
+                elif message_type == "tribe_boundary_action":
+                    await manager.resolve_boundary_action(
+                        player_id,
+                        message.get("flagId", ""),
+                        message.get("actionKey", "")
+                    )
+
                 elif message_type == "tribe_unlock_rune":
                     await manager.unlock_tribe_rune(
                         player_id,
@@ -2850,6 +2900,18 @@ async def game_websocket(
                 elif message_type == "tribe_start_scout":
                     await manager.start_tribe_scout(player_id)
 
+                elif message_type == "tribe_secure_scout_site":
+                    await manager.secure_scouted_resource_site(
+                        player_id,
+                        message.get("siteId", "")
+                    )
+
+                elif message_type == "tribe_collect_controlled_site":
+                    await manager.collect_controlled_resource_site(
+                        player_id,
+                        message.get("siteId", "")
+                    )
+
                 elif message_type == "tribe_compose_epic":
                     await manager.compose_oral_epic(player_id)
 
@@ -2861,6 +2923,12 @@ async def game_websocket(
 
                 elif message_type == "tribe_complete_oath_task":
                     await manager.complete_oath_task(player_id)
+
+                elif message_type == "tribe_resolve_boundary_outcome":
+                    await manager.resolve_boundary_outcome(
+                        player_id,
+                        message.get("outcomeId", "")
+                    )
 
                 elif message_type == "tribe_beast_task":
                     await manager.assign_beast_task(

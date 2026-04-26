@@ -32,11 +32,30 @@ TRIBE_FLAG_PATROL_COOLDOWN_SECONDS = 300
 TRIBE_FLAG_PATROL_CHAIN_TARGET = 2
 TRIBE_FLAG_BOUNDARY_TENSION_DISTANCE = 28
 TRIBE_FLAG_BOUNDARY_NEAR_DISTANCE = 52
+TRIBE_BOUNDARY_ACTION_COOLDOWN_SECONDS = 300
+TRIBE_BOUNDARY_RELATION_STAGE_STEP = 6
+TRIBE_BOUNDARY_OUTCOME_LIMIT = 4
+TRIBE_BOUNDARY_PRESSURE_MINUTES = 12
+TRIBE_OATH_TASK_STREAK_TARGET = 3
 TRIBE_SCOUT_FOOD_COST = 4
 TRIBE_SCOUT_EVENT_COUNT = 2
+TRIBE_SCOUT_SITE_LIMIT = 4
+TRIBE_SCOUT_SITE_ACTIVE_MINUTES = 15
+TRIBE_SCOUT_SITE_INTERACT_DISTANCE = 6
+TRIBE_SCOUT_SITE_FLAG_RADIUS = 34
+TRIBE_SCOUT_SITE_CONTEST_RADIUS = 42
+TRIBE_CONTROLLED_SITE_LIMIT = 3
+TRIBE_CONTROLLED_SITE_ACTIVE_MINUTES = 20
+TRIBE_CONTROLLED_SITE_YIELD_COOLDOWN_SECONDS = 300
 TRIBE_ORAL_EPIC_RENOWN_BONUS = 7
 TRIBE_ORAL_EPIC_MIN_HISTORY = 3
 TRIBE_OATH_RENOWN_BONUS = 5
+TRIBE_SCOUT_SITE_REWARDS = {
+    "region_forest": {"wood": 12, "renown": 2, "label": "林缘木料点"},
+    "region_mountain": {"stone": 12, "renown": 2, "label": "山脚石料点"},
+    "region_coast": {"food": 12, "renown": 2, "label": "潮岸食物点"},
+    "region_ruin": {"discoveryProgress": 2, "renown": 3, "label": "旧迹线索点"}
+}
 TRIBE_OATHS = {
     "hearth": {"label": "守火誓约", "summary": "优先保护食物、营火和新成员。"},
     "trail": {"label": "远行誓约", "summary": "优先探索洞穴、季节目标和远方事件。"},
@@ -48,6 +67,59 @@ TRIBE_OATH_TASK_REWARDS = {
     "trail": {"title": "远行踏勘", "summary": "派人记录洞穴和远方路线。", "discoveryProgress": 1, "renown": 4},
     "trade": {"title": "互市邀约", "summary": "整理可交换物资并向外释放善意。", "tradeReputation": 1, "renown": 4},
     "beast": {"title": "兽伴训练", "summary": "训练幼兽熟悉营地号令。", "beastExperience": 1, "food": 4, "renown": 3}
+}
+TRIBE_OATH_TASK_VARIANTS = {
+    "hearth": [
+        {"key": "food_pressure", "title": "守火补粮", "summary": "部落食物紧张，先稳住火堆旁的储粮。", "food": 12, "renown": 3, "sourceLabel": "食物紧张"},
+        {"key": "tide_harvest", "title": "潮汐补给", "summary": "趁资源潮汐还在，尽快把能吃的都带回营地。", "food": 10, "renown": 4, "sourceLabel": "资源潮汐"},
+        {"key": "camp_stock", "title": "营地备柴", "summary": "给营火和棚屋补一轮木柴，让营地撑过接下来的天气。", "wood": 6, "food": 6, "renown": 3, "sourceLabel": "营地补给"}
+    ],
+    "trail": [
+        {"key": "season_objective", "title": "远行踏勘", "summary": "季节目标已经出现，先去确认路线和附近地形。", "discoveryProgress": 2, "renown": 4, "sourceLabel": "季节目标"},
+        {"key": "world_event", "title": "异象追踪", "summary": "远方世界事件正在发酵，需要有人记录并带回线索。", "discoveryProgress": 2, "renown": 5, "sourceLabel": "世界事件"},
+        {"key": "cave_route", "title": "洞口记路", "summary": "给洞穴远征队补充路线标记，为下一次深入做准备。", "discoveryProgress": 1, "renown": 4, "food": 4, "sourceLabel": "洞穴远征"}
+    ],
+    "trade": [
+        {"key": "open_trade", "title": "互市应答", "summary": "现有贸易请求需要尽快回应，别让边界商路冷下去。", "tradeReputation": 2, "renown": 4, "sourceLabel": "贸易请求"},
+        {"key": "border_trade", "title": "边界试探", "summary": "趁边界气氛还算稳定，先送出一批轻便信物试探往来。", "tradeReputation": 2, "renown": 4, "food": 4, "sourceLabel": "边界关系"},
+        {"key": "gift_pack", "title": "互市备礼", "summary": "整理仓库里适合交换的轻货，为下一次部落贸易做准备。", "tradeReputation": 1, "renown": 4, "wood": 4, "stone": 2, "sourceLabel": "仓库整备"}
+    ],
+    "beast": [
+        {"key": "tame_young", "title": "寻幼兽踪迹", "summary": "部落还没有稳定兽伴，先循着营地周边的痕迹试着驯养。", "tamedBeasts": 1, "renown": 4, "sourceLabel": "尚无兽伴"},
+        {"key": "border_guard", "title": "兽伴守边", "summary": "边界紧张起来了，让兽伴先熟悉守边号令。", "beastExperience": 2, "renown": 4, "food": 4, "sourceLabel": "边界警戒"},
+        {"key": "beast_haul", "title": "兽伴驮运", "summary": "资源点活跃时让兽伴跟着搬运，顺便练熟营地路线。", "beastExperience": 1, "food": 6, "renown": 3, "sourceLabel": "资源潮汐"}
+    ]
+}
+TRIBE_BOUNDARY_ACTIONS = {
+    "greet": {"label": "示好", "summary": "向边界另一侧留下善意标记。", "renown": 3, "tradeReputation": 1, "relationDelta": 2, "tradeTrustDelta": 1},
+    "guard": {"label": "警戒", "summary": "加强边界巡逻，提醒成员保持警惕，并清理本部落遭遇的边界压力。", "renown": 5, "relationDelta": -2, "clearIncomingPressure": True},
+    "gift": {"label": "交换信物", "summary": "消耗少量食物换取跨部落信任。", "foodCost": 3, "renown": 2, "tradeReputation": 2, "relationDelta": 3, "tradeTrustDelta": 2},
+    "press": {"label": "边界压制", "summary": "在紧张边界集结巡逻，短时间压迫对方营地行动。", "renown": 4, "relationDelta": -3, "allowedStates": ["tension", "hostile"], "pressure": True},
+    "blockade": {"label": "资源封锁", "summary": "封住边界小路，扰乱对方的物资往来。", "renown": 4, "relationDelta": -4, "allowedStates": ["tension", "hostile"], "pressure": True, "tradeDisrupt": 1},
+    "drive_away": {"label": "边界驱离", "summary": "把对方留下的巡路标记驱出边界，压低对方声望但让关系更快恶化。", "renown": 6, "relationDelta": -5, "allowedStates": ["hostile"], "pressure": True, "renownDisrupt": 2, "clearIncomingPressure": True}
+}
+TRIBE_BOUNDARY_OUTCOME_TEMPLATES = {
+    "alliance": {
+        "title": "边界互访",
+        "summary": "边界守望者交换巡路见闻，营地之间形成更稳的互信。",
+        "renown": 5,
+        "discoveryProgress": 1,
+        "food": 6
+    },
+    "trade": {
+        "title": "贸易试探",
+        "summary": "边界两侧先交换一批轻便物资，试探后续通路是否稳定。",
+        "renown": 4,
+        "tradeReputation": 2,
+        "food": 4
+    },
+    "hostile": {
+        "title": "边境纠纷",
+        "summary": "边界巡逻升级成正面驱离，营地开始囤积守边物资。",
+        "renown": 6,
+        "wood": 6,
+        "stone": 4
+    }
 }
 TRIBE_BEAST_LEVEL_STEP = 3
 TRIBE_BEAST_SPECIALTY_LEVEL = 3
@@ -141,6 +213,8 @@ TRIBE_CAMP_BUILDING_LAYOUT = [
     {"key": "workbench", "type": "tribe_workbench", "dx": 4.2, "dz": 1.8, "size": 1.0, "wood": 70, "stone": 45, "label": "石器台"},
     {"key": "hut_a", "type": "tribe_hut", "dx": -5.8, "dz": 4.2, "size": 1.0, "wood": 35, "stone": 15, "label": "棚屋一"},
     {"key": "hut_b", "type": "tribe_hut", "dx": 6.2, "dz": 4.5, "size": 0.95, "wood": 35, "stone": 15, "label": "棚屋二"},
+    {"key": "fence_ring", "type": "tribe_fence", "dx": 0.0, "dz": 8.2, "size": 1.0, "wood": 48, "stone": 12, "label": "营地围栏"},
+    {"key": "road_marker", "type": "tribe_road", "dx": 0.0, "dz": -9.2, "size": 1.0, "wood": 24, "stone": 18, "label": "营地道路"},
 ]
 TRIBE_TARGET_LIBRARY = [
     {
