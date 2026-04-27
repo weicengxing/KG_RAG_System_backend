@@ -76,6 +76,10 @@ class GameRumorTruthMixin:
         return self._active_rumor_truth_hints(tribe)
 
     def _rumor_truth_source(self, tribe: dict) -> dict | None:
+        if hasattr(self, "_dispute_witness_rumor_truth_source"):
+            witness_source = self._dispute_witness_rumor_truth_source(tribe)
+            if witness_source:
+                return witness_source
         if hasattr(self, "_traveler_song_tune_sources"):
             song_sources = self._traveler_song_tune_sources(tribe)
             if song_sources:
@@ -84,6 +88,16 @@ class GameRumorTruthMixin:
             oral_source = self._oral_map_lineage_rumor_source(tribe)
             if oral_source:
                 return oral_source
+        if hasattr(self, "_oral_map_record_for_context"):
+            oral_record = self._oral_map_record_for_context(tribe, "rumor_truth")
+            if oral_record:
+                return {
+                    "sourceId": f"oral_map:{oral_record.get('id')}",
+                    "sourceKind": "oral_map",
+                    "sourceLabel": "口述地图",
+                    "title": oral_record.get("actionLabel", "口述地图待辨"),
+                    "summary": oral_record.get("summary", "这条口述路线已经在营地里流传，适合拿来辨认传闻真假。")
+                }
         if self.world_rumors:
             rumor = self.world_rumors[-1]
             return {
@@ -151,6 +165,15 @@ class GameRumorTruthMixin:
             "createdAt": now.isoformat(),
             "activeUntil": datetime.fromtimestamp(now.timestamp() + TRIBE_RUMOR_TRUTH_ACTIVE_MINUTES * 60).isoformat()
         }
+        if source.get("sourceKind") == "dispute_witness" and hasattr(self, "_record_dispute_witness_reference"):
+            reference_count, bonus_parts = self._record_dispute_witness_reference(
+                tribe,
+                source.get("sourceId", ""),
+                "rumor_truth",
+                "传闻真假"
+            )
+            task["evidenceReferenceCount"] = reference_count
+            task["evidenceBonusParts"] = bonus_parts
         tribe["rumor_truth_tasks"] = [task][-TRIBE_RUMOR_TRUTH_LIMIT:]
         return task
 
@@ -222,10 +245,15 @@ class GameRumorTruthMixin:
         if tune_truth_bonus:
             tribe["discovery_progress"] = int(tribe.get("discovery_progress", 0) or 0) + tune_truth_bonus
             reward_parts.append(f"曲牌辨认+{tune_truth_bonus}")
-        oral_truth_bonus, oral_truth_label = self._oral_map_lineage_rumor_bonus(tribe) if hasattr(self, "_oral_map_lineage_rumor_bonus") else (0, "")
+        oral_truth_bonus, oral_truth_label = self._oral_map_lineage_rumor_bonus(tribe) if task.get("sourceKind") in {"oral_map", "oral_map_lineage"} and hasattr(self, "_oral_map_lineage_rumor_bonus") else (0, "")
         if oral_truth_bonus:
             tribe["discovery_progress"] = int(tribe.get("discovery_progress", 0) or 0) + oral_truth_bonus
             reward_parts.append(f"{oral_truth_label or '路线讲述'}+{oral_truth_bonus}")
+        reward_parts.extend(task.get("evidenceBonusParts", []) or [])
+        oral_reference = None
+        oral_lineage = None
+        if task.get("sourceKind") in {"oral_map", "oral_map_lineage"} and hasattr(self, "_record_oral_map_context_reference"):
+            oral_reference, oral_lineage = self._record_oral_map_context_reference(tribe, "rumor_truth", task.get("title", "传闻真假"), member_name, action.get("label", "辨认"))
 
         now = datetime.now()
         outcome_label = "坐实" if truth_state == "true" else ("存疑" if truth_state == "uncertain" else "走偏")
@@ -249,7 +277,9 @@ class GameRumorTruthMixin:
             "sourceId": task.get("sourceId"),
             "truthState": truth_state,
             "toneLabel": task.get("toneLabel", ""),
-            "memberName": member_name
+            "memberName": member_name,
+            "oralMapReference": oral_reference,
+            "oralMapLineage": oral_lineage
         }
         tribe.setdefault("rumor_truth_records", []).append(record)
         tribe["rumor_truth_records"] = tribe["rumor_truth_records"][-TRIBE_RUMOR_TRUTH_RECORD_LIMIT:]
@@ -261,6 +291,10 @@ class GameRumorTruthMixin:
         detail = f"{member_name}对“{task.get('title', '传闻')}”选择{action.get('label', '处理')}，结果：{outcome_label}。"
         if reward_parts:
             detail += f" 收获：{'、'.join(reward_parts)}。"
+        if oral_reference:
+            detail += f" 传闻辨认引用了{oral_reference.get('actionLabel', '口述地图')}。"
+        if oral_lineage:
+            detail += f" 形成{oral_lineage.get('label', '路线讲述谱系')}。"
         self._add_tribe_history(tribe, "world_event", "辨认真伪", detail, player_id, {
             "kind": "rumor_truth",
             "record": record,

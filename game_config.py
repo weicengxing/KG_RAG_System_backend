@@ -279,6 +279,39 @@ TRIBE_FORBIDDEN_EDGE_DANGER_TARGET = 4
 TRIBE_FORBIDDEN_EDGE_SAFE_STREAK_TARGET = 2
 TRIBE_FORBIDDEN_EDGE_ROUTE_EXPERIENCE_LIMIT = 4
 TRIBE_FORBIDDEN_EDGE_ROUTE_EXPERIENCE_SAFETY = 2
+TRIBE_FORBIDDEN_EDGE_ROUTE_PROOF_LIMIT = 5
+TRIBE_FORBIDDEN_EDGE_ROUTE_PROOF_RECORD_LIMIT = 8
+TRIBE_FORBIDDEN_EDGE_ROUTE_PROOF_TARGET = 2
+TRIBE_FORBIDDEN_EDGE_ROUTE_PROOF_SAFETY = 3
+TRIBE_FORBIDDEN_EDGE_ROUTE_PROOF_ACTIONS = {
+    "carve_safe_return": {
+        "key": "carve_safe_return",
+        "label": "刻写回撤",
+        "summary": "把安全回撤、营救归线或禁地经验刻成公开路证，优先换取声望和发现。",
+        "reward": {"renown": 1, "discoveryProgress": 1},
+        "relationDelta": 0,
+        "tradeTrustDelta": 0,
+        "animation": "ritual"
+    },
+    "bind_old_relic": {
+        "key": "bind_old_relic",
+        "label": "系旧物作证",
+        "summary": "把旧营旧物或收藏墙来源系到路证旁，让后来者相信这条回路。",
+        "reward": {"renown": 1, "tradeReputation": 1},
+        "relationDelta": 0,
+        "tradeTrustDelta": 1,
+        "animation": "gather"
+    },
+    "cite_witness_stone": {
+        "key": "cite_witness_stone",
+        "label": "引见证石",
+        "summary": "引用争端见证石的公开证据，把禁地路证讲成可核对的跨部落来源。",
+        "reward": {"discoveryProgress": 1, "tradeReputation": 1},
+        "relationDelta": 1,
+        "tradeTrustDelta": 1,
+        "animation": "guard"
+    }
+}
 TRIBE_FORBIDDEN_EDGE_ACTIONS = {
     "torch_probe": {
         "key": "torch_probe",
@@ -1498,6 +1531,12 @@ TRIBE_ASH_COUNT_LIMIT = 10
 TRIBE_ASH_COUNT_PENDING_LIMIT = 3
 TRIBE_ASH_COUNT_RECORD_LIMIT = 6
 TRIBE_ASH_COUNT_SOURCE_SCAN_LIMIT = 8
+TRIBE_ASH_LEDGER_ACTIVE_MINUTES = 50
+TRIBE_ASH_LEDGER_LIMIT = 5
+TRIBE_ASH_LEDGER_SOURCE_SCAN_LIMIT = 8
+TRIBE_ASH_LEDGER_PUBLIC_SHARE_TARGET = 2
+TRIBE_ASH_LEDGER_RENOWN_BONUS = 1
+TRIBE_ASH_LEDGER_TRUST_BONUS = 1
 TRIBE_ASH_COUNT_ACTIONS = {
     "tally_loss": {
         "label": "清点损耗",
@@ -1945,43 +1984,6 @@ TRIBE_MUTUAL_AID_ALERT_ACTIONS = {
 }
 TRIBE_ALLIANCE_SIGNAL_ACTIVE_MINUTES = 12
 TRIBE_ALLIANCE_SIGNAL_LIMIT = 8
-TRIBE_ALLIANCE_SIGNAL_RECORD_LIMIT = 8
-TRIBE_ALLIANCE_SIGNAL_MIN_RELATION = 2
-TRIBE_ALLIANCE_SIGNAL_MIN_TRADE_TRUST = 2
-TRIBE_ALLIANCE_SIGNAL_ACTIONS = {
-    "aid": {
-        "label": "求援旗语",
-        "summary": "把友好边界上的火烟、旗帜和手势约成短时求援信号，后续互助更容易接住。",
-        "source": {"renown": 1, "relationDelta": 1, "warPressureRelief": 1},
-        "target": {"food": 2, "relationDelta": 1, "tradeTrustDelta": 1},
-        "channels": ["mutual_aid", "messenger"],
-        "influenceSummary": "下一次互助或信使会引用这面求援旗。"
-    },
-    "market": {
-        "label": "互市旗语",
-        "summary": "在边市或通路旁约定交换手势，让来往货物先获得一点公开信任。",
-        "source": {"tradeReputation": 1, "relationDelta": 1, "tradeTrustDelta": 2},
-        "target": {"tradeReputation": 1, "relationDelta": 1, "tradeTrustDelta": 2},
-        "channels": ["messenger", "border_theater"],
-        "influenceSummary": "下一次信使或边境戏台会把互市旗语写进开场文案。"
-    },
-    "watch": {
-        "label": "守望旗语",
-        "summary": "用旗面和夜火约定共同守望，把误判和战争压力先压低一点。",
-        "source": {"renown": 1, "relationDelta": 1, "warPressureRelief": 2},
-        "target": {"renown": 1, "relationDelta": 1, "warPressureRelief": 2},
-        "channels": ["mutual_aid", "border_theater"],
-        "influenceSummary": "下一次互助或边境戏台会带上联合守望的说法。"
-    },
-    "celebrate": {
-        "label": "庆功旗语",
-        "summary": "把试炼、庆典或守边后的好消息用旗语送到友好营地，维持热络边界。",
-        "source": {"renown": 2, "relationDelta": 2, "tradeTrustDelta": 1},
-        "target": {"renown": 1, "relationDelta": 2, "tradeTrustDelta": 1},
-        "channels": ["messenger", "border_theater"],
-        "influenceSummary": "下一次信使或边境戏台会提到这次庆功旗语。"
-    }
-}
 TRIBE_OATH_RENOWN_BONUS = 5
 TRIBE_SCOUT_SITE_REWARDS = {
     "region_forest": {"wood": 12, "renown": 2, "label": "林缘木料点"},
@@ -2327,6 +2329,12 @@ TRIBE_CAMP_COUNCIL_LIBRARY = {
         "summary": "律令、补救和禁忌留下分歧，火边议事可以把规矩讲得更能执行。",
         "resultLabel": "律令有边",
         "reward": {"renown": 1, "tradeReputation": 1, "warPressureRelief": 1}
+    },
+    "ash": {
+        "label": "灰烬该如何分明",
+        "summary": "近期灰烬清点和公开分配留下明账，成员需要决定后续资源该如何继续公开。",
+        "resultLabel": "灰账成约",
+        "reward": {"renown": 1, "tradeReputation": 1, "food": 1}
     },
     "hearth": {
         "label": "火边该记下谁的话",

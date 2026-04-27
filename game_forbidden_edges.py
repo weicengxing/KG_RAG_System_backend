@@ -127,6 +127,232 @@ class GameForbiddenEdgeMixin:
         tribe["forbidden_edge_route_experiences"] = [*experiences, experience][-TRIBE_FORBIDDEN_EDGE_ROUTE_EXPERIENCE_LIMIT:]
         return experience
 
+    def _forbidden_edge_route_proof_source_key(self, source_kind: str, source_id: str) -> str:
+        return f"{source_kind}:{source_id}"
+
+    def _forbidden_edge_route_proof_source(self, tribe: dict, source_kind: str, source_id: str, label: str, summary: str, source_label: str, extra: dict | None = None) -> dict | None:
+        if not source_id:
+            return None
+        return {
+            "sourceKey": self._forbidden_edge_route_proof_source_key(source_kind, source_id),
+            "sourceKind": source_kind,
+            "sourceId": source_id,
+            "label": label or "禁地路证",
+            "summary": summary or "这段来源可以公开刻写成禁地路证。",
+            "sourceLabel": source_label or "路证来源",
+            **(extra or {})
+        }
+
+    def _forbidden_edge_route_proof_sources(self, tribe: dict) -> list:
+        if not tribe:
+            return []
+        sources = []
+
+        for experience in reversed(self._active_forbidden_edge_route_experiences(tribe)):
+            if not isinstance(experience, dict):
+                continue
+            if str(experience.get("id", "")).startswith("forbidden_edge_route_proof_exp_"):
+                continue
+            source = self._forbidden_edge_route_proof_source(
+                tribe,
+                "forbidden_route_experience",
+                experience.get("id", ""),
+                experience.get("label", "禁地回撤经验"),
+                experience.get("summary", "安全回撤经验可以公开刻写成禁地路证。"),
+                "禁地回撤经验",
+                {"sourceLabels": experience.get("sourceLabels", []), "safetyBonus": experience.get("safetyBonus", 0)}
+            )
+            if source:
+                sources.append(source)
+
+        for record in reversed(tribe.get("forbidden_edge_records", []) or []):
+            if not isinstance(record, dict) or record.get("lost"):
+                continue
+            source = self._forbidden_edge_route_proof_source(
+                tribe,
+                "forbidden_edge_record",
+                record.get("id", ""),
+                record.get("label", "禁地安全回撤"),
+                f"{record.get('memberName', '成员')}完成{record.get('actionLabel', '试探')}后安全回撤，可以把掷点、支撑和旧物来源刻成路证。",
+                "安全回撤记录",
+                {"sourceLabels": record.get("supportLabels", []), "rewardParts": record.get("rewardParts", [])}
+            )
+            if source:
+                sources.append(source)
+
+        for record in reversed(tribe.get("cave_rescue_records", []) or []):
+            if not isinstance(record, dict):
+                continue
+            if record.get("sourceKind") not in {"forbidden_edge", "cave_rescue"} and "禁地" not in str(record.get("label", "")):
+                continue
+            source = self._forbidden_edge_route_proof_source(
+                tribe,
+                "forbidden_rescue_record",
+                record.get("id", ""),
+                record.get("label", "禁地营救归线"),
+                record.get("summary") or f"{record.get('memberName', '成员')}把营救线索带回营地，这条归线可以成为禁地路证。",
+                "营救完成记录",
+                {"sourceLabels": record.get("supportLabels", []), "rewardParts": record.get("rewardParts", [])}
+            )
+            if source:
+                sources.append(source)
+
+        for record in reversed(tribe.get("old_camp_records", []) or []):
+            if not isinstance(record, dict) or not record.get("collectionReady"):
+                continue
+            source = self._forbidden_edge_route_proof_source(
+                tribe,
+                "old_camp_record",
+                record.get("id", ""),
+                record.get("label", "旧营旧物"),
+                f"{record.get('memberName', '成员')}从{record.get('sourceLabel', '旧营')}带回旧物，可以给禁地回路补上可触摸的旧证。",
+                record.get("sourceLabel", "旧营旧物"),
+                {"sourceLabels": [record.get("sourceLabel", "旧营旧物")], "rewardParts": record.get("rewardParts", [])}
+            )
+            if source:
+                sources.append(source)
+
+        for item in reversed(tribe.get("collection_wall", []) or []):
+            if not isinstance(item, dict) or item.get("sourceKind") not in {"forbidden_edge", "old_camp_echo", "cave_return", "cave_rescue"}:
+                continue
+            source = self._forbidden_edge_route_proof_source(
+                tribe,
+                "collection_wall",
+                item.get("id", ""),
+                item.get("label", "收藏墙旧物"),
+                f"{item.get('curatorName', '成员')}挂上的{item.get('sourceLabel', '旧物')}可以被重新系到禁地路证旁。",
+                item.get("sourceLabel", "收藏墙"),
+                {"sourceLabels": [item.get("displayLabel", "收藏墙")], "rewardParts": item.get("rewardParts", [])}
+            )
+            if source:
+                sources.append(source)
+
+        dispute_records = self._public_dispute_witness_evidence(tribe) if hasattr(self, "_public_dispute_witness_evidence") else tribe.get("dispute_witness_records", []) or []
+        for record in reversed(dispute_records):
+            if not isinstance(record, dict):
+                continue
+            evidence_id = record.get("evidenceId") or record.get("evidenceTag") or record.get("sourceId") or record.get("id", "")
+            source = self._forbidden_edge_route_proof_source(
+                tribe,
+                "dispute_witness",
+                evidence_id,
+                record.get("lineageLabel") or record.get("label", "争端见证石"),
+                f"{record.get('sourceLabel', '公开证据')}已经被见证石固定，可以给禁地路证提供可核对的来源链。",
+                record.get("sourceLabel", "争端见证石"),
+                {
+                    "evidenceId": evidence_id,
+                    "otherTribeId": record.get("otherTribeId", ""),
+                    "otherTribeName": record.get("otherTribeName", ""),
+                    "sourceLabels": record.get("sourceChain", [])[-3:],
+                    "referenceCount": record.get("referenceCount", 0)
+                }
+            )
+            if source:
+                sources.append(source)
+
+        return sources
+
+    def _ensure_forbidden_edge_route_proofs(self, tribe: dict):
+        if not tribe:
+            return
+        completed = {
+            record.get("sourceKey")
+            for record in (tribe.get("forbidden_edge_route_proof_records", []) or [])
+            if isinstance(record, dict) and record.get("sourceKey")
+        }
+        active = [
+            proof for proof in (tribe.get("forbidden_edge_route_proofs", []) or [])
+            if isinstance(proof, dict) and proof.get("status", "active") == "active" and proof.get("sourceKey") not in completed
+        ]
+        existing = {proof.get("sourceKey") for proof in active if proof.get("sourceKey")}
+        now = datetime.now()
+        for source in self._forbidden_edge_route_proof_sources(tribe):
+            source_key = source.get("sourceKey")
+            if not source_key or source_key in existing or source_key in completed:
+                continue
+            proof = {
+                "id": f"forbidden_route_proof_{tribe.get('id')}_{int(now.timestamp() * 1000)}_{random.randint(100, 999)}",
+                "status": "active",
+                "sourceKey": source_key,
+                "sourceKind": source.get("sourceKind"),
+                "sourceId": source.get("sourceId"),
+                "label": f"{source.get('label', '禁地')}路证",
+                "summary": source.get("summary", ""),
+                "sourceLabel": source.get("sourceLabel", "路证来源"),
+                "sourceLabels": source.get("sourceLabels", []),
+                "otherTribeId": source.get("otherTribeId", ""),
+                "otherTribeName": source.get("otherTribeName", ""),
+                "evidenceId": source.get("evidenceId", ""),
+                "progress": 0,
+                "target": TRIBE_FORBIDDEN_EDGE_ROUTE_PROOF_TARGET,
+                "participants": [],
+                "createdAt": now.isoformat()
+            }
+            active.append(proof)
+            existing.add(source_key)
+        tribe["forbidden_edge_route_proofs"] = active[-TRIBE_FORBIDDEN_EDGE_ROUTE_PROOF_LIMIT:]
+
+    def _public_forbidden_edge_route_proofs(self, tribe: dict) -> list:
+        self._ensure_forbidden_edge_route_proofs(tribe)
+        return [dict(proof) for proof in (tribe.get("forbidden_edge_route_proofs", []) or []) if isinstance(proof, dict) and proof.get("status") == "active"]
+
+    def _public_forbidden_edge_route_proof_records(self, tribe: dict) -> list:
+        return [
+            record for record in (tribe.get("forbidden_edge_route_proof_records", []) or [])
+            if isinstance(record, dict)
+        ][-TRIBE_FORBIDDEN_EDGE_ROUTE_PROOF_RECORD_LIMIT:]
+
+    def _public_forbidden_edge_route_proof_actions(self) -> dict:
+        actions = {}
+        for key, action in TRIBE_FORBIDDEN_EDGE_ROUTE_PROOF_ACTIONS.items():
+            actions[key] = {
+                **action,
+                "rewardLabel": self._reward_summary_text(action.get("reward", {})) if hasattr(self, "_reward_summary_text") else ""
+            }
+        return actions
+
+    def _apply_forbidden_edge_route_proof_relation(self, tribe: dict, proof: dict, action: dict) -> list:
+        other_id = proof.get("otherTribeId")
+        other = self.tribes.get(other_id) if other_id and hasattr(self, "tribes") else None
+        if not other or other.get("id") == tribe.get("id"):
+            return []
+        relation_delta = int(action.get("relationDelta", 0) or 0)
+        trust_delta = int(action.get("tradeTrustDelta", 0) or 0)
+        if not relation_delta and not trust_delta:
+            return []
+        now_text = datetime.now().isoformat()
+        for own, target in ((tribe, other), (other, tribe)):
+            relation = own.setdefault("boundary_relations", {}).setdefault(target.get("id"), {})
+            relation["score"] = max(-9, min(9, int(relation.get("score", 0) or 0) + relation_delta))
+            relation["tradeTrust"] = max(0, min(10, int(relation.get("tradeTrust", 0) or 0) + trust_delta))
+            relation["lastAction"] = "forbidden_edge_route_proof"
+            relation["lastActionAt"] = now_text
+        parts = []
+        if relation_delta:
+            parts.append(f"双方关系+{relation_delta}")
+        if trust_delta:
+            parts.append(f"双方信任+{trust_delta}")
+        return parts
+
+    def _create_forbidden_edge_route_proof_experience(self, tribe: dict, proof: dict, record: dict) -> dict:
+        now = datetime.now()
+        source_labels = [proof.get("sourceLabel", "禁地路证")]
+        source_labels.extend(label for label in proof.get("sourceLabels", []) or [] if label)
+        experience = {
+            "id": f"forbidden_edge_route_proof_exp_{tribe.get('id')}_{int(now.timestamp() * 1000)}_{random.randint(100, 999)}",
+            "status": "active",
+            "label": "禁地路证",
+            "summary": f"{record.get('memberName', '成员')}公开刻写{proof.get('label', '禁地路证')}，下一次逗留深探可以按路证降低迷失风险。",
+            "edgeId": proof.get("sourceId"),
+            "edgeLabel": proof.get("label", "禁地路证"),
+            "safetyBonus": TRIBE_FORBIDDEN_EDGE_ROUTE_PROOF_SAFETY,
+            "sourceLabels": source_labels[-4:],
+            "createdAt": now.isoformat()
+        }
+        experiences = self._active_forbidden_edge_route_experiences(tribe)
+        tribe["forbidden_edge_route_experiences"] = [*experiences, experience][-TRIBE_FORBIDDEN_EDGE_ROUTE_EXPERIENCE_LIMIT:]
+        return experience
+
     def _public_forbidden_edge_actions(self, tribe: dict) -> dict:
         actions = {}
         for key, action in TRIBE_FORBIDDEN_EDGE_ACTIONS.items():
@@ -219,11 +445,6 @@ class GameForbiddenEdgeMixin:
             elif self._forbidden_edge_oral_map_active(tribe):
                 labels.append("口述归路图")
                 bonus += 1
-        if action_key in {"trail_probe", "companion_probe", "linger"} and hasattr(self, "_oral_map_lineage_forbidden_bonus"):
-            lineage_bonus, lineage_label = self._oral_map_lineage_forbidden_bonus(tribe)
-            if lineage_bonus and lineage_label:
-                labels.append(lineage_label)
-                bonus += lineage_bonus
         if action_key == "companion_probe" and len(tribe.get("members", {}) or {}) >= 3:
             labels.append("多人照应")
             bonus += 1
@@ -269,6 +490,102 @@ class GameForbiddenEdgeMixin:
         races = self._active_cave_races(tribe) if hasattr(self, "_active_cave_races") else []
         tribe["cave_races"] = [*races, rescue][-TRIBE_CAVE_RACE_LIMIT:]
         return rescue
+
+    async def mark_forbidden_edge_route_proof(self, player_id: str, proof_id: str, action_key: str):
+        tribe_id = self.player_tribes.get(player_id)
+        tribe = self.tribes.get(tribe_id)
+        if not tribe:
+            await self._send_tribe_error(player_id, "请先加入一个部落")
+            return
+        self._ensure_forbidden_edge_route_proofs(tribe)
+        proof = next((
+            item for item in (tribe.get("forbidden_edge_route_proofs", []) or [])
+            if isinstance(item, dict) and item.get("id") == proof_id and item.get("status") == "active"
+        ), None)
+        if not proof:
+            await self._send_tribe_error(player_id, "没有找到可刻写的禁地路证")
+            return
+        if any(item.get("memberId") == player_id for item in proof.get("participants", []) or []):
+            await self._send_tribe_error(player_id, "你已经刻写过这份禁地路证")
+            return
+        action = TRIBE_FORBIDDEN_EDGE_ROUTE_PROOF_ACTIONS.get(action_key)
+        if not action:
+            await self._send_tribe_error(player_id, "未知禁地路证刻写方式")
+            return
+
+        now = datetime.now()
+        member = tribe.get("members", {}).get(player_id, {})
+        member_name = member.get("name", self.players.get(player_id, {}).get("name", "成员"))
+        reward_parts = self._apply_forbidden_edge_reward(tribe, action.get("reward", {}))
+        relation_parts = self._apply_forbidden_edge_route_proof_relation(tribe, proof, action)
+        witness_parts = []
+        if proof.get("evidenceId") and hasattr(self, "_record_dispute_witness_reference"):
+            _, witness_parts = self._record_dispute_witness_reference(
+                tribe,
+                proof.get("evidenceId"),
+                "forbidden_edge_route_proof",
+                action.get("label", "禁地路证"),
+                proof.get("otherTribeId", "")
+            )
+        participant = {
+            "memberId": player_id,
+            "memberName": member_name,
+            "actionKey": action_key,
+            "actionLabel": action.get("label", "刻写路证"),
+            "rewardParts": reward_parts + relation_parts + witness_parts,
+            "createdAt": now.isoformat()
+        }
+        proof.setdefault("participants", []).append(participant)
+        proof["progress"] = int(proof.get("progress", 0) or 0) + 1
+        completed = proof["progress"] >= int(proof.get("target", TRIBE_FORBIDDEN_EDGE_ROUTE_PROOF_TARGET) or 1)
+        detail = f"{member_name}在{proof.get('label', '禁地路证')}上{action.get('label', '刻写路证')}，进度 {proof['progress']} / {proof.get('target', 1)}。"
+        if reward_parts or relation_parts or witness_parts:
+            detail += f" {'、'.join(reward_parts + relation_parts + witness_parts)}。"
+        record = None
+        if completed:
+            proof["status"] = "completed"
+            proof["completedAt"] = now.isoformat()
+            record = {
+                "id": f"forbidden_route_proof_record_{tribe_id}_{int(now.timestamp() * 1000)}_{random.randint(100, 999)}",
+                "sourceKey": proof.get("sourceKey"),
+                "sourceKind": proof.get("sourceKind"),
+                "sourceId": proof.get("sourceId"),
+                "label": proof.get("label", "禁地路证"),
+                "sourceLabel": proof.get("sourceLabel", "路证来源"),
+                "sourceLabels": proof.get("sourceLabels", []),
+                "otherTribeId": proof.get("otherTribeId", ""),
+                "otherTribeName": proof.get("otherTribeName", ""),
+                "evidenceId": proof.get("evidenceId", ""),
+                "memberId": player_id,
+                "memberName": member_name,
+                "actionKey": action_key,
+                "actionLabel": action.get("label", "刻写路证"),
+                "participantNames": [item.get("memberName", "成员") for item in proof.get("participants", [])],
+                "rewardParts": reward_parts + relation_parts + witness_parts,
+                "createdAt": proof["completedAt"]
+            }
+            created_experience = self._create_forbidden_edge_route_proof_experience(tribe, proof, record)
+            record["routeProofCreated"] = created_experience
+            tribe.setdefault("forbidden_edge_route_proof_records", []).append(record)
+            tribe["forbidden_edge_route_proof_records"] = tribe["forbidden_edge_route_proof_records"][-TRIBE_FORBIDDEN_EDGE_ROUTE_PROOF_RECORD_LIMIT:]
+            tribe["forbidden_edge_route_proofs"] = [
+                item for item in (tribe.get("forbidden_edge_route_proofs", []) or [])
+                if isinstance(item, dict) and item.get("status") == "active"
+            ][-TRIBE_FORBIDDEN_EDGE_ROUTE_PROOF_LIMIT:]
+            detail += f" 路证已公开，沉淀为{created_experience.get('label', '禁地路证')}，下次高风险禁地行动更不容易迷失。"
+        self._add_tribe_history(tribe, "exploration", "禁地路证", detail, player_id, {"kind": "forbidden_edge_route_proof", "proof": proof, "record": record})
+        await self._notify_tribe(tribe_id, detail)
+        if completed:
+            await self._publish_world_rumor(
+                "exploration",
+                "禁地路证公开",
+                f"{tribe.get('name', '某个部落')}把{proof.get('sourceLabel', '禁地来源')}刻成禁地路证，后来者沿这条证据回路试探高风险边缘。",
+                {"tribeId": tribe_id, "proofId": proof_id, "sourceKind": proof.get("sourceKind")}
+            )
+        await self.broadcast_tribe_state(tribe_id)
+        other_id = proof.get("otherTribeId")
+        if other_id and other_id != tribe_id and other_id in self.tribes:
+            await self.broadcast_tribe_state(other_id)
 
     async def explore_forbidden_edge(self, player_id: str, edge_id: str, action_key: str):
         tribe_id = self.player_tribes.get(player_id)

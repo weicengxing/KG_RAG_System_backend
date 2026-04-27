@@ -48,6 +48,20 @@ class GameCampDebtMixin:
                 "otherTribeId": other_id or "",
                 "otherTribeName": other_name or ""
             })
+        if hasattr(self, "_ash_ledger_sources"):
+            for source in self._ash_ledger_sources(tribe):
+                source_id = source.get("sourceId") or source.get("id")
+                if not source_id:
+                    continue
+                candidates.append({
+                    "sourceId": f"ash:{source.get('kind', 'ash')}:{source_id}",
+                    "sourceKind": source.get("kind", "ash_count_record"),
+                    "title": "灰烬明账债账",
+                    "summary": f"{source.get('sourceLabel', '灰烬清点')}已经公开记账，营地可以据此补账、豁免或转成互市口信。",
+                    "sourceLabel": source.get("label", "灰烬明账"),
+                    "otherTribeId": "",
+                    "otherTribeName": ""
+                })
         return candidates
 
     def _ensure_camp_debts(self, tribe: dict):
@@ -205,6 +219,8 @@ class GameCampDebtMixin:
                 reward_parts.append(f"战争压力-{relieved}")
         now_text = datetime.now().isoformat()
         reward_parts.extend(self._apply_camp_debt_relation(tribe, debt, action, now_text))
+        if hasattr(self, "_apply_ash_ledger_distribution_bonus"):
+            reward_parts.extend(self._apply_ash_ledger_distribution_bonus(tribe, debt.get("otherTribeId", ""), now_text))
 
         member = tribe.get("members", {}).get(player_id, {})
         debt["status"] = action.get("status", action_key)

@@ -277,14 +277,28 @@ class GameOldGrudgeMixin:
         seal["status"] = "awakened"
         seal["awakenedAt"] = datetime.now().isoformat()
         other = self.tribes.get(other_tribe_id) if hasattr(self, "tribes") else {}
+        witness_evidence = None
+        if hasattr(self, "_public_dispute_witness_evidence"):
+            for evidence in reversed(self._public_dispute_witness_evidence(tribe)):
+                if evidence.get("otherTribeId") == other_tribe_id or evidence.get("sourceId") == seal.get("sourceId"):
+                    witness_evidence = evidence
+                    break
+        witness_text = ""
+        if witness_evidence:
+            chain_text = " -> ".join(witness_evidence.get("sourceChain", [])[-3:])
+            witness_text = f" 旁边还有{witness_evidence.get('lineageLabel') or '见证石证据'}可查"
+            if chain_text:
+                witness_text += f"：{chain_text}"
+            witness_text += "。"
         task = {
             "id": f"old_grudge_wake_{seal.get('sourceId')}_{tribe.get('id')}",
             "status": "pending",
             "sourceId": seal.get("sourceId"),
+            "evidenceId": witness_evidence.get("evidenceId", "") if witness_evidence else "",
             "otherTribeId": other_tribe_id,
             "otherTribeName": (other or {}).get("name", seal.get("otherTribeName", "邻近部落")),
             "title": "旧怨苏醒",
-            "summary": f"{source_label} 让封在“{seal.get('anchorLabel', '封存地')}”的旧怨重新冒头，需要成员重新整理边界标记。",
+            "summary": f"{source_label} 让封在“{seal.get('anchorLabel', '封存地')}”的旧怨重新冒头，需要成员重新整理边界标记。{witness_text}",
             "woodCost": TRIBE_OLD_GRUDGE_WAKE_REPAIR["woodCost"],
             "foodCost": TRIBE_OLD_GRUDGE_WAKE_REPAIR["foodCost"],
             "renownReward": TRIBE_OLD_GRUDGE_WAKE_REPAIR["renown"],
@@ -323,6 +337,15 @@ class GameOldGrudgeMixin:
             "warPressureRelief": int(task.get("pressureRelief", 0) or 0),
             "relationDelta": 1
         })
+        if task.get("evidenceId") and hasattr(self, "_record_dispute_witness_reference"):
+            _, witness_bonus = self._record_dispute_witness_reference(
+                tribe,
+                task.get("evidenceId"),
+                "old_grudge_wake",
+                "旧怨苏醒",
+                other_id
+            )
+            reward_parts.extend(witness_bonus)
         task["status"] = "completed"
         task["completedAt"] = datetime.now().isoformat()
         task["completedBy"] = player_id

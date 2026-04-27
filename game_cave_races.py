@@ -306,11 +306,6 @@ class GameCaveRaceMixin:
                 add_bonus("活路标参照", {"discoveryProgress": 1})
             if self._mentorship_trail_bonus_active(tribe):
                 add_bonus("导师探路记号", {"renown": 1})
-        if hasattr(self, "_oral_map_lineage_rescue_bonus"):
-            lineage_progress, lineage_reward, lineage_label = self._oral_map_lineage_rescue_bonus(tribe)
-            if lineage_progress and lineage_label:
-                add_bonus(lineage_label, lineage_reward)
-
         return method, bonuses, min(2, len(bonuses)), reward_bonus
 
     def _apply_cave_rescue_method_cost(self, tribe: dict, method: dict) -> list:

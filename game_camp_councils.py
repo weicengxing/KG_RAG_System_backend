@@ -17,6 +17,8 @@ class GameCampCouncilMixin:
             return "shift"
         if tribe.get("tribe_law") or tribe.get("law_records") or tribe.get("law_remedies"):
             return "law"
+        if hasattr(self, "_ash_ledger_sources") and self._ash_ledger_sources(tribe):
+            return "ash"
         return random.choice(["hearth", "rumor", "shift", "boundary"])
 
     def _active_camp_council(self, tribe: dict) -> dict | None:

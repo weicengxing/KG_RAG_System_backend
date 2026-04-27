@@ -203,6 +203,8 @@ class GameCommonJudgeMixin:
         cases.extend(self._common_judge_old_grudge_cases(judge_tribe_id, recent_source_ids))
         cases.extend(self._common_judge_trial_cases(judge_tribe_id, recent_source_ids))
         cases.extend(self._common_judge_traveler_song_cases(judge_tribe_id, recent_source_ids))
+        if hasattr(self, "_dispute_witness_common_judge_cases"):
+            cases.extend(self._dispute_witness_common_judge_cases(judge_tribe_id, recent_source_ids))
         cases = [
             case for case in cases
             if case.get("sourceTribeId") != judge_tribe_id and case.get("otherTribeId") != judge_tribe_id
@@ -303,6 +305,15 @@ class GameCommonJudgeMixin:
             if int(action.get("tradeTrustDelta", 0) or 0):
                 relation["tradeTrust"] = max(0, min(10, int(relation.get("tradeTrust", 0) or 0) + int(action.get("tradeTrustDelta", 0) or 0)))
                 reward_parts.append(f"见证信任{int(action.get('tradeTrustDelta', 0) or 0):+d}")
+        if case.get("kind") == "dispute_witness" and hasattr(self, "_record_dispute_witness_reference"):
+            _, witness_bonus = self._record_dispute_witness_reference(
+                source_tribe,
+                case.get("sourceCaseId", ""),
+                "common_judge",
+                "共同裁判",
+                case.get("otherTribeId", "")
+            )
+            reward_parts.extend(witness_bonus)
 
         record = {
             "id": f"common_judge_record_{judge_tribe_id}_{int(now.timestamp() * 1000)}",

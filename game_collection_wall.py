@@ -184,6 +184,24 @@ class GameCollectionWallMixin:
             if item:
                 candidates.append(item)
 
+        if hasattr(self, "_ash_ledger_sources"):
+            for source in reversed(self._ash_ledger_sources(tribe)):
+                source_id = source.get("sourceId") or source.get("id")
+                if not source_id:
+                    continue
+                label = "灰烬账谱木牌" if source.get("kind") == "ash_ledger" else "灰烬清点木牌"
+                item = self._collection_candidate(
+                    tribe,
+                    source.get("kind", "ash_count_record"),
+                    source_id,
+                    label,
+                    source.get("summary") or "公开清点留下的灰烬明账可以挂上收藏墙。",
+                    source.get("sourceLabel", "灰烬明账"),
+                    {"rewardParts": source.get("rewardParts", []), "publicShareCount": source.get("publicShareCount", 0)}
+                )
+                if item:
+                    candidates.append(item)
+
         return candidates[:TRIBE_COLLECTION_CANDIDATE_LIMIT]
 
     def _public_collection_wall(self, tribe: dict) -> list:

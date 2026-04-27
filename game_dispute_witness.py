@@ -25,20 +25,41 @@ class GameDisputeWitnessMixin:
         return tribe["dispute_witness_stones"]
 
     def _dispute_witness_source_id(self, source_kind: str, record: dict) -> str:
-        return f"{source_kind}:{record.get('id') or record.get('sourceId') or record.get('caseId')}"
+        return f"{source_kind}:{record.get('id') or record.get('sourceId') or record.get('caseId') or record.get('theaterId')}"
+
+    def _dispute_witness_related_tribe(self, tribe: dict, record: dict) -> tuple[str, str]:
+        tribe_id = tribe.get("id")
+        source_id = record.get("sourceTribeId") or ""
+        source_name = record.get("sourceTribeName") or ""
+        other_id = record.get("otherTribeId") or ""
+        other_name = record.get("otherTribeName") or ""
+        if tribe_id == source_id and other_id:
+            return other_id, other_name
+        if tribe_id == other_id and source_id:
+            return source_id, source_name
+        if source_id and source_id != tribe_id:
+            return source_id, source_name
+        participant_ids = list(record.get("participantTribeIds", []) or [])
+        participant_names = list(record.get("participantTribeNames", []) or [])
+        for index, participant_id in enumerate(participant_ids):
+            if participant_id and participant_id != tribe_id:
+                name = participant_names[index] if index < len(participant_names) else ""
+                return participant_id, name
+        return "", ""
 
     def _dispute_witness_source_records(self, tribe: dict) -> list:
         sources = []
         for record in (tribe.get("common_judge_records", []) or [])[-TRIBE_COMMON_JUDGE_RECORD_LIMIT:]:
             if isinstance(record, dict):
+                other_id, other_name = self._dispute_witness_related_tribe(tribe, record)
                 sources.append({
                     "kind": "common_judge",
                     "record": record,
                     "label": record.get("title", "共同裁判"),
                     "sourceLabel": record.get("sourceLabel", "裁判证词"),
                     "summary": f"{record.get('judgeTribeName', '中立部落')}留下{record.get('actionLabel', '见证')}，这份裁判可以刻成公开证据。",
-                    "otherTribeId": record.get("otherTribeId") or record.get("sourceTribeId") or "",
-                    "otherTribeName": record.get("otherTribeName") or record.get("sourceTribeName") or ""
+                    "otherTribeId": other_id,
+                    "otherTribeName": other_name
                 })
         for record in (tribe.get("old_grudge_records", []) or [])[-TRIBE_OLD_GRUDGE_RECENT_LIMIT:]:
             if isinstance(record, dict):
@@ -53,12 +74,33 @@ class GameDisputeWitnessMixin:
                 })
         for record in (tribe.get("border_theater_records", []) or [])[-TRIBE_BORDER_THEATER_RECORD_LIMIT:]:
             if isinstance(record, dict):
+                other_id, other_name = self._dispute_witness_related_tribe(tribe, record)
                 sources.append({
                     "kind": "border_theater",
                     "record": record,
                     "label": record.get("label", "边境戏台"),
                     "sourceLabel": record.get("sourceLabel", "边境会场"),
                     "summary": f"{record.get('winnerName', '成员')}在边境戏台胜出，这段公开结果可以刻成见证石。",
+                    "otherTribeId": other_id,
+                    "otherTribeName": other_name
+                })
+        if hasattr(self, "_ash_ledger_sources"):
+            for source in self._ash_ledger_sources(tribe):
+                record = {
+                    "id": source.get("sourceId") or source.get("id"),
+                    "label": source.get("label", "灰烬明账"),
+                    "sourceLabel": source.get("sourceLabel", "灰烬清点记录"),
+                    "summary": source.get("summary", ""),
+                    "rewardParts": source.get("rewardParts", []),
+                    "x": ((tribe.get("camp") or {}).get("center") or {}).get("x", 0),
+                    "z": ((tribe.get("camp") or {}).get("center") or {}).get("z", 0)
+                }
+                sources.append({
+                    "kind": source.get("kind", "ash_count_record"),
+                    "record": record,
+                    "label": source.get("label", "灰烬明账"),
+                    "sourceLabel": source.get("sourceLabel", "灰烬清点记录"),
+                    "summary": f"{source.get('sourceLabel', '灰烬清点记录')}已经公开，可以刻成见证石，让后来者核对分配和损耗。",
                     "otherTribeId": "",
                     "otherTribeName": ""
                 })
@@ -93,8 +135,8 @@ class GameDisputeWitnessMixin:
                 "progress": 0,
                 "target": TRIBE_DISPUTE_WITNESS_STONE_TARGET,
                 "participants": [],
-                "x": float(record.get("x", tribe.get("center", {}).get("x", 0)) or 0),
-                "z": float(record.get("z", tribe.get("center", {}).get("z", 0)) or 0),
+                "x": float(record.get("x", ((tribe.get("camp") or {}).get("center") or {}).get("x", 0)) or 0),
+                "z": float(record.get("z", ((tribe.get("camp") or {}).get("center") or {}).get("z", 0)) or 0),
                 "createdAt": now.isoformat(),
                 "activeUntil": datetime.fromtimestamp(now.timestamp() + TRIBE_DISPUTE_WITNESS_STONE_ACTIVE_MINUTES * 60).isoformat()
             }
@@ -271,13 +313,14 @@ class GameDisputeWitnessMixin:
     def _apply_dispute_witness_relation(self, tribe: dict, stone: dict, action: dict) -> list:
         other_id = stone.get("otherTribeId")
         other = self.tribes.get(other_id) if other_id and hasattr(self, "tribes") else None
-        if not other:
+        if not other or other.get("id") == tribe.get("id"):
             return []
         for own, target in ((tribe, other), (other, tribe)):
             relation = own.setdefault("boundary_relations", {}).setdefault(target.get("id"), {})
             relation["score"] = max(-9, min(9, int(relation.get("score", 0) or 0) + int(action.get("relationDelta", 0) or 0)))
             relation["tradeTrust"] = max(0, min(10, int(relation.get("tradeTrust", 0) or 0) + int(action.get("tradeTrustDelta", 0) or 0)))
             relation["warPressure"] = max(0, int(relation.get("warPressure", 0) or 0) - int(action.get("warPressureRelief", 0) or 0))
+            relation["canDeclareWar"] = int(relation.get("warPressure", 0) or 0) >= TRIBE_SKIRMISH_WAR_PRESSURE_THRESHOLD
             relation["temperatureTone"] = action.get("tone", relation.get("temperatureTone", ""))
             relation["lastAction"] = "dispute_witness_stone"
             relation["lastActionAt"] = datetime.now().isoformat()
@@ -359,4 +402,7 @@ class GameDisputeWitnessMixin:
         )
         await self._notify_tribe(tribe_id, detail)
         await self.broadcast_tribe_state(tribe_id)
+        other_id = stone.get("otherTribeId")
+        if other_id and other_id != tribe_id and other_id in self.tribes:
+            await self.broadcast_tribe_state(other_id)
         await self._broadcast_current_map()

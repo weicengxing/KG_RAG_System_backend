@@ -1164,9 +1164,12 @@ class ConnectionManager(GameConflictMixin, GameEmergencyChoiceMixin, GameMutualA
             "ashCounts": self._public_ash_counts(tribe),
             "ashCountActions": TRIBE_ASH_COUNT_ACTIONS,
             "ashCountRecords": self._public_ash_count_records(tribe),
+            "ashLedgers": self._public_ash_ledgers(tribe),
             "ashCountConfig": {
                 "activeMinutes": TRIBE_ASH_COUNT_ACTIVE_MINUTES,
-                "pendingLimit": TRIBE_ASH_COUNT_PENDING_LIMIT
+                "pendingLimit": TRIBE_ASH_COUNT_PENDING_LIMIT,
+                "ledgerActiveMinutes": TRIBE_ASH_LEDGER_ACTIVE_MINUTES,
+                "ledgerShareTarget": TRIBE_ASH_LEDGER_PUBLIC_SHARE_TARGET
             },
             "farReplyTasks": self._public_far_reply_tasks(tribe),
             "farReplyActions": TRIBE_FAR_REPLY_ACTIONS,
@@ -1211,6 +1214,9 @@ class ConnectionManager(GameConflictMixin, GameEmergencyChoiceMixin, GameMutualA
             "forbiddenEdgeActions": self._public_forbidden_edge_actions(tribe),
             "forbiddenEdgeRecords": self._public_forbidden_edge_records(tribe),
             "forbiddenEdgeRouteExperiences": self._public_forbidden_edge_route_experiences(tribe),
+            "forbiddenEdgeRouteProofs": self._public_forbidden_edge_route_proofs(tribe),
+            "forbiddenEdgeRouteProofActions": self._public_forbidden_edge_route_proof_actions(),
+            "forbiddenEdgeRouteProofRecords": self._public_forbidden_edge_route_proof_records(tribe),
             "trailMarkers": self._public_trail_markers(tribe),
             "trailMarkerTypes": TRIBE_TRAIL_MARKER_TYPES,
             "trailMarkerActions": self._public_trail_marker_actions(),
@@ -1241,10 +1247,7 @@ class ConnectionManager(GameConflictMixin, GameEmergencyChoiceMixin, GameMutualA
                 "minRelation": TRIBE_MUTUAL_AID_MIN_RELATION,
                 "minTradeTrust": TRIBE_MUTUAL_AID_MIN_TRADE_TRUST
             },
-            "allianceSignalTargets": self._public_alliance_signal_targets(tribe),
             "allianceSignals": self._public_alliance_signals(tribe),
-            "allianceSignalActions": self._public_alliance_signal_actions(),
-            "allianceSignalRecords": self._public_alliance_signal_records(tribe),
             "allianceSignalInfluences": self._public_alliance_signal_influences(tribe),
             "allianceSignalConfig": {
                 "activeMinutes": TRIBE_ALLIANCE_SIGNAL_ACTIVE_MINUTES,
@@ -1517,6 +1520,7 @@ class ConnectionManager(GameConflictMixin, GameEmergencyChoiceMixin, GameMutualA
             "disputeWitnessActions": TRIBE_DISPUTE_WITNESS_ACTIONS,
             "disputeWitnessRecords": self._public_dispute_witness_records(tribe),
             "disputeWitnessEvidence": self._public_dispute_witness_evidence(tribe),
+            "disputeWitnessLineages": self._public_dispute_witness_lineages(tribe),
             "oldGrudgeTargets": self._public_old_grudge_targets(tribe),
             "oldGrudgeAnchors": TRIBE_OLD_GRUDGE_ANCHORS,
             "oldGrudgeSeals": self._public_old_grudge_seals(tribe),
@@ -4430,8 +4434,8 @@ async def game_websocket(
                 elif message_type == "tribe_send_alliance_signal":
                     await manager.send_alliance_signal(
                         player_id,
-                        message.get("otherTribeId", ""),
-                        message.get("locationId", ""),
+                        message.get("otherTribeId", "") or message.get("targetTribeId", ""),
+                        message.get("locationId", "") or message.get("actionKey", ""),
                         message.get("signalKey", "")
                     )
 
@@ -4746,6 +4750,13 @@ async def game_websocket(
                         message.get("actionKey", "")
                     )
 
+                elif message_type == "tribe_mark_forbidden_edge_route_proof":
+                    await manager.mark_forbidden_edge_route_proof(
+                        player_id,
+                        message.get("proofId", ""),
+                        message.get("actionKey", "")
+                    )
+
                 elif message_type == "tribe_resolve_world_event":
                     await manager.resolve_world_event(
                         player_id,
@@ -5008,13 +5019,6 @@ async def game_websocket(
                     await manager.answer_mutual_aid_alert(
                         player_id,
                         message.get("alertId", ""),
-                        message.get("actionKey", "")
-                    )
-
-                elif message_type == "tribe_send_alliance_signal":
-                    await manager.send_alliance_signal(
-                        player_id,
-                        message.get("targetTribeId", ""),
                         message.get("actionKey", "")
                     )
 
