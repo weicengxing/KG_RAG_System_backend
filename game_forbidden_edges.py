@@ -614,6 +614,10 @@ class GameForbiddenEdgeMixin:
         if int(tribe.get("tamed_beasts", 0) or 0) > 0:
             labels.append("幼兽预警")
             bonus += 1
+        if hasattr(self, "_newcomer_fate_context_support"):
+            newcomer_bonus, newcomer_labels = self._newcomer_fate_context_support(tribe, "forbidden_edge")
+            bonus += newcomer_bonus
+            labels.extend(newcomer_labels)
         return bonus, labels
 
     def _create_forbidden_edge_rescue(self, tribe: dict, edge: dict, player_id: str, member_name: str, action: dict) -> dict:
@@ -799,6 +803,7 @@ class GameForbiddenEdgeMixin:
         member = tribe.get("members", {}).get(player_id, {})
         member_name = member.get("name", self.players.get(player_id, {}).get("name", "成员"))
         support_bonus, support_labels = self._forbidden_edge_support_bonus(tribe, action_key)
+        newcomer_influence = self._consume_newcomer_fate_influence(tribe, "forbidden_edge") if hasattr(self, "_consume_newcomer_fate_influence") else None
         consumed_experience = None
         if int(action.get("safety", 0) or 0) < 1:
             consumed_experience = self._consume_forbidden_edge_route_experience(tribe, "forbidden_edge_probe")
@@ -844,6 +849,7 @@ class GameForbiddenEdgeMixin:
             "total": total,
             "supportLabels": support_labels,
             "rewardParts": reward_parts,
+            "newcomerFateInfluence": newcomer_influence,
             "routeExperienceUsed": consumed_experience,
             "collectionReady": bool(action.get("collectionReady")) and not lost,
             "createdAt": now.isoformat()
@@ -876,6 +882,8 @@ class GameForbiddenEdgeMixin:
                 detail += f" 连续安全回撤沉淀为{created_experience.get('label', '禁地回撤经验')}。"
             if record.get("collectionReady"):
                 detail += " 带回的边缘旧物可整理进收藏墙。"
+        if newcomer_influence:
+            detail += f" 引用了{newcomer_influence.get('label', '新人关键')}。"
         if oral_reference:
             detail += f" 引用了{oral_reference.get('actionLabel', '口述地图')}。"
         if oral_lineage:

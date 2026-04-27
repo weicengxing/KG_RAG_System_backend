@@ -38,6 +38,19 @@ class GameLostItemMixin:
         rng = random.Random(offset_seed)
         return base_x + rng.randint(-22, 22), base_z + rng.randint(-22, 22)
 
+    def _lost_item_source_chain(self, tribe: dict, record: dict | None, item: dict | None = None) -> list[str]:
+        chain = []
+        origin_name = (tribe or {}).get("name") or (item or {}).get("originTribeName")
+        if origin_name:
+            chain.append(origin_name)
+        source_label = (item or {}).get("sourceLabel") or ((record or {}).get("title") if record else "")
+        if source_label:
+            chain.append(source_label)
+        source_title = (item or {}).get("sourceTitle") or ((record or {}).get("detail") if record else "")
+        if source_title and source_title not in chain:
+            chain.append(str(source_title)[:36])
+        return chain[:4]
+
     def _seed_lost_item_from_record(self, tribe: dict, record: dict) -> dict | None:
         if not tribe or not isinstance(record, dict) or not record.get("id"):
             return None
@@ -65,6 +78,7 @@ class GameLostItemMixin:
             "sourceId": source_id,
             "sourceTitle": record.get("title") or profile.get("label", "旧事"),
             "sourceLabel": profile.get("label", "漂流旧物"),
+            "sourceChain": self._lost_item_source_chain(tribe, record),
             "label": profile.get("label", "漂流失物"),
             "summary": profile.get("summary") or f"{record.get('title', profile.get('label', '旧事'))}之后，有一件失物在路边漂流，等待后来者处理。",
             "originTribeId": tribe.get("id"),
@@ -106,7 +120,12 @@ class GameLostItemMixin:
         return active
 
     def _public_lost_items(self, tribe: dict) -> list[dict]:
-        return [dict(item) for item in self._refresh_lost_items(tribe)]
+        items = []
+        for item in self._refresh_lost_items(tribe):
+            public = dict(item)
+            public.setdefault("sourceChain", self._lost_item_source_chain(tribe, None, item))
+            items.append(public)
+        return items
 
     def _public_lost_item_records(self, tribe: dict) -> list[dict]:
         return [
@@ -146,6 +165,78 @@ class GameLostItemMixin:
             if changed:
                 parts.append(f"战争压力-{changed}")
         return parts
+
+    def _lost_item_relation_reward(self, actor_tribe: dict, owner_tribe: dict, action: dict) -> list[str]:
+        if not actor_tribe or not owner_tribe or actor_tribe.get("id") == owner_tribe.get("id"):
+            return []
+        parts = []
+        relation_delta = int(action.get("relationDelta", 0) or 0)
+        trust_delta = int(action.get("tradeTrustDelta", 0) or 0)
+        for own, target in ((actor_tribe, owner_tribe), (owner_tribe, actor_tribe)):
+            relation = own.setdefault("boundary_relations", {}).setdefault(target.get("id"), {})
+            if relation_delta:
+                relation["score"] = max(-9, min(9, int(relation.get("score", 0) or 0) + relation_delta))
+            if trust_delta:
+                relation["tradeTrust"] = max(0, min(10, int(relation.get("tradeTrust", 0) or 0) + trust_delta))
+            relation["lastAction"] = "lost_item_return"
+            relation["lastActionAt"] = datetime.now().isoformat()
+        if relation_delta:
+            parts.append(f"双方关系{relation_delta:+d}")
+        if trust_delta:
+            parts.append(f"双方信任+{trust_delta}")
+        return parts
+
+    def _lost_item_hide_pressure(self, actor_tribe: dict, owner_tribe: dict, item: dict, now_text: str) -> tuple[list[str], list[str]]:
+        if not actor_tribe or not owner_tribe or actor_tribe.get("id") == owner_tribe.get("id"):
+            return [], []
+        pressure = 2 if item.get("sourceKind") == "war" else 1
+        parts = []
+        wake_ids = []
+        for own, target in ((actor_tribe, owner_tribe), (owner_tribe, actor_tribe)):
+            relation = own.setdefault("boundary_relations", {}).setdefault(target.get("id"), {})
+            relation["warPressure"] = min(
+                TRIBE_SKIRMISH_WAR_PRESSURE_THRESHOLD,
+                int(relation.get("warPressure", 0) or 0) + pressure
+            )
+            relation["canDeclareWar"] = int(relation.get("warPressure", 0) or 0) >= TRIBE_SKIRMISH_WAR_PRESSURE_THRESHOLD
+            relation["lastAction"] = "lost_item_hidden_revealed"
+            relation["lastActionAt"] = now_text
+            if hasattr(self, "_wake_old_grudge_after_pressure"):
+                task = self._wake_old_grudge_after_pressure(own, target.get("id"), "私藏失物揭晓")
+                if task:
+                    wake_ids.append(task.get("id"))
+        parts.append(f"旧怨压力+{pressure}")
+        return parts, wake_ids
+
+    def _lost_item_hidden_common_judge_cases(self, judge_tribe_id: str, recent_source_ids: set) -> list[dict]:
+        cases = []
+        for actor_id, tribe in (getattr(self, "tribes", {}) or {}).items():
+            if actor_id == judge_tribe_id:
+                continue
+            for record in (tribe.get("lost_item_records", []) or [])[-TRIBE_LOST_ITEM_RECORD_LIMIT:]:
+                if not isinstance(record, dict) or record.get("actionKey") != "hide":
+                    continue
+                if record.get("actorTribeId") != actor_id:
+                    continue
+                source_case_id = record.get("id")
+                owner_id = record.get("originTribeId")
+                if not source_case_id or source_case_id in recent_source_ids or owner_id == judge_tribe_id:
+                    continue
+                cases.append({
+                    "id": self._common_judge_case_id("lost_item_hide", source_case_id, actor_id, owner_id) if hasattr(self, "_common_judge_case_id") else f"common_judge_lost_item_{source_case_id}",
+                    "kind": "lost_item_hide",
+                    "sourceCaseId": source_case_id,
+                    "sourceTribeId": actor_id,
+                    "sourceTribeName": tribe.get("name", "私藏部落"),
+                    "otherTribeId": owner_id,
+                    "otherTribeName": record.get("originTribeName", "来源部落"),
+                    "title": "私藏失物待裁",
+                    "summary": f"{record.get('actorTribeName', '部落')}私藏了来自{record.get('originTribeName', '来源部落')}的{record.get('label', '失物')}，中立部落可以决定它更像误收、贪藏还是旧怨证据。",
+                    "sourceLabel": record.get("sourceChainLabel") or record.get("sourceLabel", "失物来源链"),
+                    "activeUntil": record.get("activeUntil"),
+                    "stakes": record.get("sourceChain", [])[-3:] or [record.get("sourceLabel", "失物")]
+                })
+        return cases
 
     def _collect_lost_item(self, tribe: dict, item: dict, player_id: str, member_name: str, now_text: str) -> tuple[dict, dict]:
         collection = {
@@ -225,15 +316,7 @@ class GameLostItemMixin:
             if owner_tribe_id != actor_tribe_id:
                 actor_tribe["trade_reputation"] = int(actor_tribe.get("trade_reputation", 0) or 0) + int(action.get("tradeReputation", 0) or 0)
                 reward_parts.append(f"贸易信誉+{int(action.get('tradeReputation', 0) or 0)}")
-                relation = actor_tribe.setdefault("boundary_relations", {}).setdefault(owner_tribe_id, {})
-                relation_delta = int(action.get("relationDelta", 0) or 0)
-                trust_delta = int(action.get("tradeTrustDelta", 0) or 0)
-                if relation_delta:
-                    relation["score"] = max(-9, min(9, int(relation.get("score", 0) or 0) + relation_delta))
-                    reward_parts.append(f"关系{relation_delta:+d}")
-                if trust_delta:
-                    relation["tradeTrust"] = max(0, min(10, int(relation.get("tradeTrust", 0) or 0) + trust_delta))
-                    reward_parts.append(f"信任+{trust_delta}")
+                reward_parts.extend(self._lost_item_relation_reward(actor_tribe, owner_tribe, action))
                 if hasattr(self, "_schedule_far_reply"):
                     reply = self._schedule_far_reply(
                         actor_tribe,
@@ -255,6 +338,10 @@ class GameLostItemMixin:
             member["renown_stains"] = int(member.get("renown_stains", 0) or 0) + int(action.get("renownStain", 0) or 0)
             if int(action.get("renownStain", 0) or 0):
                 reward_parts.append(f"名声污点+{int(action.get('renownStain', 0) or 0)}")
+            pressure_parts, wake_ids = self._lost_item_hide_pressure(actor_tribe, owner_tribe, item, now_text)
+            reward_parts.extend(pressure_parts)
+            if wake_ids:
+                extra["oldGrudgeWakeIds"] = wake_ids
 
         item["status"] = "hidden" if action_key == "hide" else "resolved"
         item["resolvedAt"] = now_text
@@ -268,6 +355,8 @@ class GameLostItemMixin:
             "sourceKind": item.get("sourceKind"),
             "sourceId": item.get("sourceId"),
             "sourceLabel": item.get("sourceLabel", "漂流失物"),
+            "sourceChain": item.get("sourceChain") or self._lost_item_source_chain(owner_tribe, None, item),
+            "sourceChainLabel": " -> ".join(item.get("sourceChain") or self._lost_item_source_chain(owner_tribe, None, item)),
             "originTribeId": owner_tribe_id,
             "originTribeName": owner_tribe.get("name", "来源部落"),
             "actorTribeId": actor_tribe_id,
@@ -277,6 +366,8 @@ class GameLostItemMixin:
             "actionLabel": action.get("label", "处理"),
             "rewardParts": reward_parts,
             "collectionReady": action_key in {"collect", "dedicate", "judge"},
+            "commonJudgeReady": action_key == "hide",
+            "oldGrudgeReady": bool(extra.get("oldGrudgeWakeIds")),
             "createdAt": now_text,
             **extra
         }

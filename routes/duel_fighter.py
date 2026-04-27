@@ -103,6 +103,12 @@ MAPS = {
         "rightWall": 906,
         "sky": "#172033",
         "floor": "#6b7280",
+        "platforms": [
+            {"x": 190, "y": 330, "width": 170, "height": 16},
+            {"x": 600, "y": 330, "width": 170, "height": 16},
+            {"x": 405, "y": 270, "width": 150, "height": 16},
+        ],
+        "hazards": [],
     },
     "bamboo": {
         "id": "bamboo",
@@ -114,6 +120,14 @@ MAPS = {
         "rightWall": 918,
         "sky": "#10231f",
         "floor": "#3f7a5b",
+        "platforms": [
+            {"x": 100, "y": 360, "width": 150, "height": 14},
+            {"x": 345, "y": 300, "width": 130, "height": 14},
+            {"x": 620, "y": 345, "width": 180, "height": 14},
+        ],
+        "hazards": [
+            {"x": 470, "y": 430, "width": 90, "height": 18, "damage": 4},
+        ],
     },
     "lava": {
         "id": "lava",
@@ -125,6 +139,14 @@ MAPS = {
         "rightWall": 860,
         "sky": "#261414",
         "floor": "#7c2d12",
+        "platforms": [
+            {"x": 110, "y": 382, "width": 230, "height": 16},
+            {"x": 620, "y": 382, "width": 230, "height": 16},
+            {"x": 400, "y": 300, "width": 160, "height": 16},
+        ],
+        "hazards": [
+            {"x": 352, "y": 410, "width": 256, "height": 24, "damage": 7},
+        ],
     },
 }
 
@@ -305,6 +327,7 @@ class DuelFighterManager:
             "mapId": room["mapId"],
             "characters": CHARACTERS,
             "difficulties": AI_DIFFICULTIES,
+            "projectiles": room.get("projectiles", []),
             "players": {
                 slot: self._player_public(player)
                 for slot, player in room["players"].items()
@@ -330,6 +353,7 @@ class DuelFighterManager:
                 "updatedAt": now_ms(),
                 "winner": None,
                 "finishedReason": None,
+                "projectiles": [],
                 "players": {
                     "p1": self._new_player(user_id, username, "p1"),
                     "p2": None,
@@ -370,6 +394,7 @@ class DuelFighterManager:
                 "updatedAt": now_ms(),
                 "winner": None,
                 "finishedReason": None,
+                "projectiles": [],
                 "players": {
                     "p1": self._new_player(user_id, username, "p1"),
                     "p2": ai_player,
@@ -543,6 +568,7 @@ class DuelFighterManager:
         room["status"] = "playing"
         room["winner"] = None
         room["finishedReason"] = None
+        room["projectiles"] = []
 
     def _keep_ai_ready_locked(self, room: dict) -> None:
         for player in room["players"].values():
@@ -584,6 +610,7 @@ class DuelFighterManager:
         room["status"] = "selecting" if room["players"]["p2"] else "waiting"
         room["winner"] = None
         room["finishedReason"] = None
+        room["projectiles"] = []
         self._reset_positions_locked(room)
 
     async def run_room(self, room_id: str) -> None:
@@ -611,7 +638,9 @@ class DuelFighterManager:
                 opponent = players[1] if player is players[0] else players[0]
                 self._update_ai_input(player, opponent, dt)
         for player in players:
-            self._tick_player(player, map_data, dt)
+            opponent = players[1] if player is players[0] else players[0]
+            self._tick_player(room, player, opponent, map_data, dt)
+        self._tick_projectiles(room, players, map_data, dt)
         self._resolve_overlap(players[0], players[1])
         for player in players:
             opponent = players[1] if player is players[0] else players[0]
@@ -669,7 +698,7 @@ class DuelFighterManager:
                     action = "heavy"
                 ai["pendingAction"] = action
 
-    def _tick_player(self, player: dict, map_data: dict, dt: float) -> None:
+    def _tick_player(self, room: dict, player: dict, opponent: dict, map_data: dict, dt: float) -> None:
         character = CHARACTERS[player["characterId"]]
         player["cooldown"] = max(0, player["cooldown"] - dt)
         player["stun"] = max(0, player["stun"] - dt)
@@ -690,20 +719,40 @@ class DuelFighterManager:
                 player["vy"] = -character["jump"]
                 player["grounded"] = False
             if player["pendingAction"]:
-                self._start_attack(player, player["pendingAction"])
+                self._start_attack(room, player, opponent, map_data, player["pendingAction"])
                 player["pendingAction"] = None
+        previous_y = player["y"]
         player["vy"] += GRAVITY * dt
         player["x"] += player["vx"] * dt
         player["y"] += player["vy"] * dt
-        floor_y = map_data["groundY"] - character["height"]
-        if player["y"] >= floor_y:
-            player["y"] = floor_y
+        player["grounded"] = False
+        landing_y = map_data["groundY"] - character["height"]
+        for platform in map_data.get("platforms", []):
+            platform_top = platform["y"] - character["height"]
+            was_above = previous_y + character["height"] <= platform["y"] + 10
+            is_falling = player["vy"] >= 0
+            overlaps_x = (
+                player["x"] + character["width"] > platform["x"]
+                and player["x"] < platform["x"] + platform["width"]
+            )
+            if was_above and is_falling and overlaps_x and player["y"] >= platform_top:
+                landing_y = min(landing_y, platform_top)
+        if player["y"] >= landing_y:
+            player["y"] = landing_y
             player["vy"] = 0
             player["grounded"] = True
         player["x"] = clamp(player["x"], map_data["leftWall"], map_data["rightWall"] - character["width"])
+        for hazard in map_data.get("hazards", []):
+            if (
+                player["x"] + character["width"] > hazard["x"]
+                and player["x"] < hazard["x"] + hazard["width"]
+                and player["y"] + character["height"] >= hazard["y"]
+            ):
+                player["hp"] = max(0, player["hp"] - hazard.get("damage", 3) * dt)
+                player["energy"] = min(100, player["energy"] + 8 * dt)
         player["energy"] = clamp(player["energy"] + dt * 2.5, 0, 100)
 
-    def _start_attack(self, player: dict, attack_key: str) -> None:
+    def _start_attack(self, room: dict, player: dict, opponent: dict, map_data: dict, attack_key: str) -> None:
         character = CHARACTERS[player["characterId"]]
         attack = character["attacks"][attack_key]
         if player["cooldown"] > 0:
@@ -712,10 +761,38 @@ class DuelFighterManager:
         if player["energy"] < energy_cost:
             return
         player["energy"] -= energy_cost
+        if attack_key == "special":
+            self._apply_special(room, player, opponent, map_data)
         player["attack"] = attack_key
         player["attackTimer"] = min(0.34, attack["cooldown"])
         player["cooldown"] = attack["cooldown"]
         player["lastHitAt"] = now_ms()
+
+    def _apply_special(self, room: dict, player: dict, opponent: dict, map_data: dict) -> None:
+        character_id = player["characterId"]
+        character = CHARACTERS[character_id]
+        if character_id == "blade":
+            room.setdefault("projectiles", []).append({
+                "id": str(uuid.uuid4()),
+                "ownerSlot": player["slot"],
+                "x": player["x"] + character["width"] / 2,
+                "y": player["y"] + 42,
+                "vx": player["facing"] * 560,
+                "width": 54,
+                "height": 18,
+                "damage": 12,
+                "stun": 0.22,
+                "ttl": 0.9,
+                "color": character["color"],
+            })
+        elif character_id == "fist":
+            player["vx"] = player["facing"] * 680
+        elif character_id == "shade":
+            target_x = opponent["x"] - player["facing"] * 74
+            player["x"] = clamp(target_x, map_data["leftWall"], map_data["rightWall"] - character["width"])
+            player["y"] = min(player["y"], opponent["y"])
+        elif character_id == "guard":
+            player["vx"] = -player["facing"] * 80
 
     def _resolve_overlap(self, a: dict, b: dict) -> None:
         aw = CHARACTERS[a["characterId"]]["width"]
@@ -731,6 +808,38 @@ class DuelFighterManager:
             b["x"] += push * direction
         self._try_hit(a, b)
         self._try_hit(b, a)
+
+    def _tick_projectiles(self, room: dict, players: list, map_data: dict, dt: float) -> None:
+        remaining = []
+        for projectile in room.get("projectiles", []):
+            projectile["x"] += projectile["vx"] * dt
+            projectile["ttl"] -= dt
+            if (
+                projectile["ttl"] <= 0
+                or projectile["x"] < map_data["leftWall"] - 80
+                or projectile["x"] > map_data["rightWall"] + 80
+            ):
+                continue
+            hit = False
+            for player in players:
+                if player["slot"] == projectile["ownerSlot"]:
+                    continue
+                character = CHARACTERS[player["characterId"]]
+                if (
+                    projectile["x"] + projectile["width"] > player["x"]
+                    and projectile["x"] < player["x"] + character["width"]
+                    and projectile["y"] + projectile["height"] > player["y"]
+                    and projectile["y"] < player["y"] + character["height"]
+                ):
+                    blocked = player["blocking"] and player["energy"] >= 10
+                    player["hp"] = max(0, player["hp"] - projectile["damage"] * (0.35 if blocked else 1))
+                    player["stun"] = max(player["stun"], projectile["stun"] * (0.4 if blocked else 1))
+                    player["energy"] = max(0, player["energy"] - (10 if blocked else 0))
+                    hit = True
+                    break
+            if not hit:
+                remaining.append(projectile)
+        room["projectiles"] = remaining
 
     def _try_hit(self, attacker: dict, defender: dict) -> None:
         if not attacker["attack"] or attacker["attackTimer"] <= 0:

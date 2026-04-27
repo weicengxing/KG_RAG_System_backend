@@ -1,3 +1,4 @@
+import random
 from datetime import datetime
 
 from game_config import *
@@ -94,7 +95,154 @@ class GameCustomMixin:
             "allTraits": traits,
             "threshold": TRIBE_PERSONALITY_THRESHOLD,
             "summary": f"当前性格：{label_text}",
-            "diplomacyText": label_text
+            "diplomacyText": label_text,
+            "cultureEffects": self._public_tribe_personality_culture_effects(visible)
+        }
+
+    def _active_personality_traits(self, tribe: dict) -> list:
+        personality = self._public_tribe_personality(tribe)
+        return [trait for trait in (personality.get("traits") or []) if trait.get("active")]
+
+    def _dominant_personality_effect(self, tribe: dict) -> tuple[dict | None, dict]:
+        active = self._active_personality_traits(tribe)
+        for trait in active:
+            effect = TRIBE_PERSONALITY_CULTURE_EFFECTS.get(trait.get("key"))
+            if effect:
+                return trait, effect
+        return None, {}
+
+    def _public_tribe_personality_culture_effects(self, traits: list) -> list:
+        effects = []
+        for trait in traits or []:
+            if not trait.get("active"):
+                continue
+            effect = TRIBE_PERSONALITY_CULTURE_EFFECTS.get(trait.get("key"), {})
+            if not effect:
+                continue
+            effects.append({
+                "key": trait.get("key"),
+                "label": trait.get("label"),
+                "visitorText": effect.get("visitorText", ""),
+                "rumorText": effect.get("rumorPhrase", ""),
+                "ritualText": effect.get("ritualText", ""),
+                "boundaryText": effect.get("boundaryText", "")
+            })
+        return effects[:4]
+
+    def _apply_personality_reward_values(self, tribe: dict, reward: dict, other_tribe_id: str = "") -> list:
+        parts = []
+        storage = tribe.setdefault("storage", {"wood": 0, "stone": 0})
+        for key, label in (("wood", "木材"), ("stone", "石材")):
+            amount = int((reward or {}).get(key, 0) or 0)
+            if amount:
+                storage[key] = max(0, int(storage.get(key, 0) or 0) + amount)
+                parts.append(f"{label}{amount:+d}")
+        for key, label, tribe_key in (
+            ("food", "食物", "food"),
+            ("renown", "声望", "renown"),
+            ("tradeReputation", "贸易信誉", "trade_reputation"),
+            ("discoveryProgress", "发现", "discovery_progress")
+        ):
+            amount = int((reward or {}).get(key, 0) or 0)
+            if amount:
+                tribe[tribe_key] = int(tribe.get(tribe_key, 0) or 0) + amount
+                parts.append(f"{label}+{amount}")
+        relation_delta = int((reward or {}).get("relationDelta", 0) or 0)
+        trust_delta = int((reward or {}).get("tradeTrustDelta", 0) or 0)
+        pressure_relief = int((reward or {}).get("warPressureRelief", 0) or (reward or {}).get("pressureRelief", 0) or 0)
+        target_ids = [other_tribe_id] if other_tribe_id else list((tribe.get("boundary_relations", {}) or {}).keys())[:2]
+        for target_id in [item for item in target_ids if item]:
+            relation = tribe.setdefault("boundary_relations", {}).setdefault(target_id, {})
+            if relation_delta:
+                relation["score"] = max(-9, min(9, int(relation.get("score", 0) or 0) + relation_delta))
+            if trust_delta:
+                relation["tradeTrust"] = max(0, min(10, int(relation.get("tradeTrust", 0) or 0) + trust_delta))
+            if pressure_relief:
+                before = int(relation.get("warPressure", 0) or 0)
+                relation["warPressure"] = max(0, before - pressure_relief)
+                relation["canDeclareWar"] = int(relation.get("warPressure", 0) or 0) >= TRIBE_SKIRMISH_WAR_PRESSURE_THRESHOLD
+        if relation_delta:
+            parts.append(f"关系{relation_delta:+d}")
+        if trust_delta:
+            parts.append(f"信任+{trust_delta}")
+        if pressure_relief:
+            parts.append(f"战争压力-{pressure_relief}")
+        return parts
+
+    def _apply_personality_culture_reward(self, tribe: dict, channel: str, other_tribe_id: str = "") -> list:
+        trait, effect = self._dominant_personality_effect(tribe)
+        reward = ((effect.get("rewards") or {}).get(channel) or {}) if effect else {}
+        if not reward:
+            return []
+        parts = self._apply_personality_reward_values(tribe, reward, other_tribe_id)
+        if not parts:
+            return []
+        record = {
+            "id": f"personality_effect_{tribe.get('id')}_{int(datetime.now().timestamp() * 1000)}",
+            "traitKey": trait.get("key"),
+            "traitLabel": trait.get("label"),
+            "channel": channel,
+            "rewardParts": parts,
+            "createdAt": datetime.now().isoformat()
+        }
+        tribe.setdefault("personality_effect_records", []).append(record)
+        tribe["personality_effect_records"] = tribe["personality_effect_records"][-TRIBE_PERSONALITY_EFFECT_RECORD_LIMIT:]
+        return [f"{trait.get('label', '部落性格')}性格:{part}" for part in parts]
+
+    def _personality_weighted_visitor_key(self, tribe: dict, keys: list) -> str:
+        trait, effect = self._dominant_personality_effect(tribe)
+        weights = effect.get("visitorWeights", {}) if effect else {}
+        pool = []
+        for key in keys:
+            pool.extend([key] * max(1, int(weights.get(key, 1) or 1)))
+        return random.choice(pool or keys)
+
+    def _personality_visitor_hint(self, tribe: dict, visitor_key: str) -> str:
+        trait, effect = self._dominant_personality_effect(tribe)
+        if not trait or visitor_key not in (effect.get("visitorWeights") or {}):
+            return ""
+        return f"{trait.get('label', '部落性格')}性格牵引：{effect.get('visitorText', '')}"
+
+    def _personality_rumor_text(self, text: str, related: dict | None = None) -> tuple[str, dict]:
+        related = dict(related or {})
+        tribe_id = related.get("tribeId") or related.get("sourceTribeId") or related.get("targetTribeId")
+        tribe = self.tribes.get(tribe_id) if tribe_id and hasattr(self, "tribes") else None
+        if not tribe:
+            return text, related
+        trait, effect = self._dominant_personality_effect(tribe)
+        phrase = effect.get("rumorPhrase", "") if effect else ""
+        if not trait or not phrase:
+            return text, related
+        related["tribePersonalityTone"] = {"key": trait.get("key"), "label": trait.get("label")}
+        return f"{text} {phrase}", related
+
+    def _personality_ritual_options(self, tribe: dict, options: dict) -> dict:
+        trait, effect = self._dominant_personality_effect(tribe)
+        ritual_keys = set(effect.get("ritualKeys", []) or []) if effect else set()
+        if not trait or not ritual_keys:
+            return dict(options or {})
+        enriched = {}
+        for key, option in (options or {}).items():
+            item = dict(option)
+            if key in ritual_keys:
+                item["personalityBonus"] = {
+                    "traitKey": trait.get("key"),
+                    "traitLabel": trait.get("label"),
+                    "summary": effect.get("ritualText", "")
+                }
+            enriched[key] = item
+        return enriched
+
+    def _personality_boundary_suggestion(self, tribe: dict, base_suggestion: dict) -> dict:
+        trait, effect = self._dominant_personality_effect(tribe)
+        action_key = effect.get("boundaryAction") if effect else ""
+        if not trait or not action_key:
+            return base_suggestion
+        action = TRIBE_BOUNDARY_TEMPERATURE_ACTIONS.get(action_key, {})
+        return {
+            "actionKey": action_key,
+            "label": f"{trait.get('label')}口风：{action.get('label', base_suggestion.get('label', '整理口风'))}",
+            "effectHint": effect.get("boundaryText", base_suggestion.get("effectHint", ""))
         }
 
     def _custom_tree_state(self, tribe: dict) -> dict:

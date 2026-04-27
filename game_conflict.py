@@ -737,6 +737,33 @@ class GameConflictMixin:
             if isinstance(item, dict) and item.get("status") == "pending"
         ][-4:]
 
+    def _public_war_narrative_tasks(self, tribe: dict) -> list:
+        tasks = self._active_tribe_items(
+            tribe,
+            "war_narrative_tasks",
+            TRIBE_WAR_NARRATIVE_TASK_LIMIT,
+            status="pending",
+            mark_expired_status="expired",
+            on_expire=lambda task: self._expire_war_narrative_task(tribe, task)
+        ) if hasattr(self, "_active_tribe_items") else [
+            item for item in (tribe.get("war_narrative_tasks", []) or [])
+            if isinstance(item, dict) and item.get("status") == "pending"
+        ][-TRIBE_WAR_NARRATIVE_TASK_LIMIT:]
+        public = []
+        for task in tasks:
+            role = task.get("role", "winner")
+            public.append({
+                **task,
+                "actions": list(task.get("actions") or TRIBE_WAR_NARRATIVE_ACTIONS.get(role, []))
+            })
+        return public
+
+    def _public_war_narrative_records(self, tribe: dict) -> list:
+        return [
+            item for item in (tribe.get("war_narrative_records", []) or [])
+            if isinstance(item, dict)
+        ][-TRIBE_WAR_NARRATIVE_RECORD_LIMIT:]
+
     def _public_war_intervention_targets(self, tribe: dict) -> list:
         tribe_id = tribe.get("id")
         seen = set()
@@ -1234,6 +1261,221 @@ class GameConflictMixin:
         tasks.append(task)
         tribe["war_aftermath_tasks"] = tasks[-5:]
 
+    def _append_war_narrative_task(self, tribe: dict, task: dict):
+        if not tribe or not task:
+            return
+        tasks = [
+            item for item in (tribe.get("war_narrative_tasks", []) or [])
+            if isinstance(item, dict) and item.get("id") != task.get("id")
+        ]
+        tasks.append(task)
+        tribe["war_narrative_tasks"] = tasks[-TRIBE_WAR_NARRATIVE_TASK_LIMIT:]
+
+    def _record_war_narrative(self, tribe: dict, record: dict):
+        if not tribe or not record:
+            return
+        records = [
+            item for item in (tribe.get("war_narrative_records", []) or [])
+            if isinstance(item, dict) and item.get("id") != record.get("id")
+        ]
+        records.append(dict(record))
+        tribe["war_narrative_records"] = records[-TRIBE_WAR_NARRATIVE_RECORD_LIMIT:]
+
+    def _expire_war_narrative_task(self, tribe: dict, task: dict):
+        if not tribe or not task or task.get("disputeRecorded"):
+            return
+        now_text = datetime.now().isoformat()
+        task["disputeRecorded"] = True
+        role = task.get("role", "winner")
+        record = {
+            "id": f"war_narrative_dispute_{task.get('id')}",
+            "warId": task.get("warId"),
+            "taskId": task.get("id"),
+            "kind": "war_narrative_dispute",
+            "role": role,
+            "roleLabel": task.get("roleLabel", "叙事方"),
+            "actionKey": "disputed",
+            "actionLabel": "争议证据",
+            "tribeId": tribe.get("id"),
+            "tribeName": tribe.get("name", "部落"),
+            "winnerTribeId": task.get("winnerTribeId"),
+            "winnerTribeName": task.get("winnerTribeName", "胜方"),
+            "loserTribeId": task.get("loserTribeId"),
+            "loserTribeName": task.get("loserTribeName", "败方"),
+            "targetLabel": task.get("targetLabel", "战争旧线"),
+            "summary": f"{task.get('title', '战争叙事')}没有在期限内定稿，留下可被后续裁判、旧怨或外交继续引用的争议证据。",
+            "rewardParts": ["长期争议证据"],
+            "followupParts": ["未定稿：后续外交更容易引用这场争议"],
+            "createdAt": now_text
+        }
+        self._record_war_narrative(tribe, record)
+        if task.get("role") == "neutral":
+            for side_id in (task.get("winnerTribeId"), task.get("loserTribeId")):
+                side = self.tribes.get(side_id)
+                if side:
+                    self._record_war_narrative(side, record)
+        relation_targets = (
+            [task.get("winnerTribeId"), task.get("loserTribeId")]
+            if task.get("role") == "neutral"
+            else [task.get("loserTribeId") if tribe.get("id") == task.get("winnerTribeId") else task.get("winnerTribeId")]
+        )
+        for other_id in [item for item in relation_targets if item and item != tribe.get("id")]:
+            relation = tribe.setdefault("boundary_relations", {}).setdefault(other_id, {})
+            relation["warPressure"] = min(
+                TRIBE_SKIRMISH_WAR_PRESSURE_THRESHOLD,
+                int(relation.get("warPressure", 0) or 0) + TRIBE_WAR_NARRATIVE_DISPUTE_PRESSURE
+            )
+            relation["canDeclareWar"] = int(relation.get("warPressure", 0) or 0) >= TRIBE_SKIRMISH_WAR_PRESSURE_THRESHOLD
+            relation["lastAction"] = "war_narrative_disputed"
+            relation["lastActionAt"] = now_text
+
+    def _create_war_narrative_tasks(self, winner_id: str, loser_id: str, war: dict, now_text: str):
+        winner = self.tribes.get(winner_id)
+        loser = self.tribes.get(loser_id)
+        if not winner or not loser:
+            return
+        active_until = datetime.fromtimestamp(
+            datetime.now().timestamp() + TRIBE_WAR_NARRATIVE_ACTIVE_MINUTES * 60
+        ).isoformat()
+        target_label = war.get("targetLabel", "战争旧线")
+        goal = war.get("goal") if isinstance(war.get("goal"), dict) else {}
+        base = {
+            "status": "pending",
+            "warId": war.get("id"),
+            "targetLabel": target_label,
+            "goalLabel": goal.get("label", "正式战争"),
+            "winnerTribeId": winner_id,
+            "winnerTribeName": winner.get("name", "胜方"),
+            "loserTribeId": loser_id,
+            "loserTribeName": loser.get("name", "败方"),
+            "createdAt": now_text,
+            "activeUntil": active_until
+        }
+        self._append_war_narrative_task(winner, {
+            **base,
+            "id": f"war_narrative_{war.get('id')}_{winner_id}_winner",
+            "role": "winner",
+            "roleLabel": "胜方",
+            "title": "战争叙事：写战功",
+            "summary": f"整理与 {loser.get('name', '败方')} 围绕{target_label}的胜利战功，让后来者知道这场胜利如何取得。",
+            "actions": list(TRIBE_WAR_NARRATIVE_ACTIONS.get("winner", []))
+        })
+        self._append_war_narrative_task(loser, {
+            **base,
+            "id": f"war_narrative_{war.get('id')}_{loser_id}_loser",
+            "role": "loser",
+            "roleLabel": "败方",
+            "title": "战争叙事：写苦难",
+            "summary": f"记录与 {winner.get('name', '胜方')} 一战后的损失、撤退和复兴线索，把苦难留成可被承认的来源。",
+            "actions": list(TRIBE_WAR_NARRATIVE_ACTIONS.get("loser", []))
+        })
+        neutrals = [
+            tribe for tribe in self.tribes.values()
+            if isinstance(tribe, dict) and tribe.get("id") not in {winner_id, loser_id}
+        ][:TRIBE_WAR_NARRATIVE_NEUTRAL_LIMIT]
+        for neutral in neutrals:
+            self._append_war_narrative_task(neutral, {
+                **base,
+                "id": f"war_narrative_{war.get('id')}_{neutral.get('id')}_neutral",
+                "role": "neutral",
+                "roleLabel": "中立方",
+                "title": "战争叙事：中立定稿",
+                "summary": f"为 {winner.get('name', '胜方')} 与 {loser.get('name', '败方')} 的战争说法定稿，压住只讲一边的叙事。",
+                "actions": list(TRIBE_WAR_NARRATIVE_ACTIONS.get("neutral", []))
+            })
+
+    def _relieve_war_narrative_fatigue(self, tribe: dict, amount: int) -> int:
+        if not tribe or amount <= 0:
+            return 0
+        relieved = 0
+        for member_id in (tribe.get("members", {}) or {}).keys():
+            player = self.players.get(member_id)
+            if not player:
+                continue
+            before = int(player.get("conflict_fatigue", 0) or 0)
+            if before <= 0:
+                continue
+            player["conflict_fatigue"] = max(0, before - amount)
+            relieved += 1
+        return relieved
+
+    def _apply_war_narrative_repair_bonus(self, tribe: dict, war_id: str) -> int:
+        if not tribe or not war_id:
+            return 0
+        changed = 0
+        for task in tribe.get("war_repair_tasks", []) or []:
+            if not isinstance(task, dict) or task.get("warId") != war_id or task.get("status") != "pending":
+                continue
+            if task.get("narrativeSettled"):
+                continue
+            relief = TRIBE_WAR_NARRATIVE_REPAIR_COST_RELIEF
+            task["woodCost"] = max(0, int(task.get("woodCost", 0) or 0) - relief)
+            task["stoneCost"] = max(0, int(task.get("stoneCost", 0) or 0) - relief)
+            task["renownReward"] = int(task.get("renownReward", TRIBE_WAR_REPAIR_RENOWN) or 0) + TRIBE_WAR_NARRATIVE_REPAIR_RENOWN_BONUS
+            task["narrativeSettled"] = True
+            task["narrativeBonusLabel"] = f"战争叙事定稿：修复成本-{relief}，声望+{TRIBE_WAR_NARRATIVE_REPAIR_RENOWN_BONUS}"
+            changed += 1
+        return changed
+
+    def _apply_war_narrative_settlement_effects(self, record: dict, task: dict, actor_name: str) -> list:
+        if not record or not task or record.get("role") != "neutral":
+            return []
+        winner_id = task.get("winnerTribeId")
+        loser_id = task.get("loserTribeId")
+        winner = self.tribes.get(winner_id)
+        loser = self.tribes.get(loser_id)
+        if not winner or not loser:
+            return []
+        followups = []
+        war_id = task.get("warId", "")
+        if not any(
+            isinstance(item, dict)
+            and item.get("warId") == war_id
+            and item.get("kind") == "settled_reparation"
+            for item in winner.get("war_narrative_records", []) or []
+        ):
+            paid_food = min(
+                TRIBE_WAR_NARRATIVE_SETTLED_REPARATION_FOOD,
+                max(0, int(loser.get("food", 0) or 0))
+            )
+            if paid_food:
+                loser["food"] = int(loser.get("food", 0) or 0) - paid_food
+                winner["food"] = int(winner.get("food", 0) or 0) + paid_food
+                followups.append(f"定稿赔付：{task.get('loserTribeName', '败方')}向{task.get('winnerTribeName', '胜方')}补交食物{paid_food}")
+                marker = {
+                    **record,
+                    "id": f"war_narrative_reparation_{war_id}",
+                    "kind": "settled_reparation",
+                    "actionLabel": "定稿赔付",
+                    "summary": f"中立定稿后，{task.get('loserTribeName', '败方')}补交食物{paid_food}，战争赔偿有了可引用说法。",
+                    "rewardParts": [f"食物流向胜方+{paid_food}"],
+                    "followupParts": []
+                }
+                self._record_war_narrative(winner, marker)
+                self._record_war_narrative(loser, marker)
+        repair_changed = 0
+        for side in (winner, loser):
+            repair_changed += self._apply_war_narrative_repair_bonus(side, war_id)
+        if repair_changed:
+            followups.append(f"战后修复任务受定稿影响：{repair_changed}条修复成本下降且声望提高")
+        if hasattr(self, "_record_map_tile_trace"):
+            player = self.players.get(record.get("completedBy", ""), {})
+            x = float(player.get("x", 0) or 0)
+            z = float(player.get("z", 0) or 0)
+            for side in (winner, loser):
+                self._record_map_tile_trace(
+                    side,
+                    "old_battlefield",
+                    x,
+                    z,
+                    f"war_narrative:{war_id}:{side.get('id')}",
+                    actor_name,
+                    label=f"{task.get('targetLabel', '战争旧线')}定稿旧战场",
+                    summary=f"{task.get('winnerTribeName', '胜方')}与{task.get('loserTribeName', '败方')}的战争叙事已被中立方定稿，这片旧战场的形态更容易被后来者整理。"
+                )
+            followups.append("旧战场形态已写入活地图痕迹")
+        return followups
+
     def _record_war_ally_memory(self, tribe: dict, record: dict):
         if not tribe:
             return
@@ -1592,6 +1834,7 @@ class GameConflictMixin:
         fatigue_count = self._apply_formal_war_fatigue(war, winner_id, loser_id, now_text)
         self._create_war_revival_task(loser_id, winner_id, war, now_text)
         self._create_war_diplomacy_tasks(tribe_id, other_tribe_id, war, now_text, "resolved")
+        self._create_war_narrative_tasks(winner_id, loser_id, war, now_text)
         history_fact_opened = False
         if hasattr(self, "_open_war_history_fact_claim"):
             history_fact_opened = bool(self._open_war_history_fact_claim(war, winner, loser, "formal_war"))
@@ -1604,7 +1847,8 @@ class GameConflictMixin:
             target = self.tribes.get(target_id)
             if target:
                 if hasattr(self, "_create_celebration_echo"):
-                    self._create_celebration_echo(target, "war", goal.get("label", "正式战争"), player_id, war_id)
+                    war_goal = war.get("goal") if isinstance(war.get("goal"), dict) else {}
+                    self._create_celebration_echo(target, "war", war_goal.get("label", "正式战争"), player_id, war_id)
                 self._add_tribe_history(target, "governance", "正式战争结算", detail, player_id, {"kind": "formal_war", "warId": war_id, "winnerTribeId": winner_id})
                 await self._notify_tribe(target_id, detail)
                 await self.broadcast_tribe_state(target_id)
@@ -1943,6 +2187,143 @@ class GameConflictMixin:
             self._add_tribe_history(other_tribe, "governance", "同源神话争夺", other_detail, player_id, {"kind": "shared_myth_claim", "sourceId": myth_source_id, "otherTribeId": tribe_id})
             await self._notify_tribe(other_tribe_id, other_detail)
             await self.broadcast_tribe_state(other_tribe_id)
+        await self._broadcast_current_map()
+
+    async def submit_war_narrative(self, player_id: str, task_id: str, action_key: str):
+        tribe_id = self.player_tribes.get(player_id)
+        tribe = self.tribes.get(tribe_id)
+        if not tribe:
+            await self._send_tribe_error(player_id, "请先加入一个部落")
+            return
+        tasks = self._active_tribe_items(
+            tribe,
+            "war_narrative_tasks",
+            TRIBE_WAR_NARRATIVE_TASK_LIMIT,
+            status="pending",
+            mark_expired_status="expired",
+            on_expire=lambda expired: self._expire_war_narrative_task(tribe, expired)
+        ) if hasattr(self, "_active_tribe_items") else [
+            item for item in (tribe.get("war_narrative_tasks", []) or [])
+            if isinstance(item, dict) and item.get("status") == "pending"
+        ]
+        task = next((item for item in tasks if item.get("id") == task_id), None)
+        if not task:
+            await self._send_tribe_error(player_id, "没有找到可处理的战争叙事任务")
+            return
+        role = task.get("role", "winner")
+        actions = list(task.get("actions") or TRIBE_WAR_NARRATIVE_ACTIONS.get(role, []))
+        action = next((item for item in actions if isinstance(item, dict) and item.get("key") == action_key), None)
+        if not action:
+            await self._send_tribe_error(player_id, "这条战争叙事不能这样定稿")
+            return
+
+        now_text = datetime.now().isoformat()
+        member = tribe.get("members", {}).get(player_id, {})
+        member_name = member.get("name") or self.players.get(player_id, {}).get("name", "成员")
+        renown_reward = int(action.get("renownReward", 0) or 0)
+        food_reward = int(action.get("foodReward", 0) or 0)
+        trade_reward = int(action.get("tradeReward", 0) or 0)
+        pressure_relief = int(action.get("pressureRelief", 0) or 0)
+        relation_delta = int(action.get("relationDelta", 0) or 0)
+        fatigue_relief = int(action.get("fatigueRelief", 0) or 0)
+
+        tribe["renown"] = int(tribe.get("renown", 0) or 0) + renown_reward
+        tribe["food"] = int(tribe.get("food", 0) or 0) + food_reward
+        tribe["trade_reputation"] = int(tribe.get("trade_reputation", 0) or 0) + trade_reward
+        fatigue_count = self._relieve_war_narrative_fatigue(tribe, fatigue_relief)
+
+        winner_id = task.get("winnerTribeId")
+        loser_id = task.get("loserTribeId")
+        opposite_id = loser_id if tribe_id == winner_id else winner_id if tribe_id == loser_id else ""
+        if pressure_relief and opposite_id:
+            relation = tribe.setdefault("boundary_relations", {}).setdefault(opposite_id, {})
+            relation["warPressure"] = max(0, int(relation.get("warPressure", 0) or 0) - pressure_relief)
+            relation["canDeclareWar"] = int(relation.get("warPressure", 0) or 0) >= TRIBE_SKIRMISH_WAR_PRESSURE_THRESHOLD
+            relation["lastAction"] = "war_narrative_pressure_relief"
+            relation["lastActionAt"] = now_text
+        if relation_delta:
+            relation_targets = [winner_id, loser_id] if role == "neutral" else [opposite_id]
+            for target_id in [item for item in relation_targets if item and item != tribe_id]:
+                relation = tribe.setdefault("boundary_relations", {}).setdefault(target_id, {})
+                relation["score"] = min(9, int(relation.get("score", 0) or 0) + relation_delta)
+                relation["tradeTrust"] = min(10, int(relation.get("tradeTrust", 0) or 0) + max(0, trade_reward))
+                relation["lastAction"] = "war_narrative"
+                relation["lastActionAt"] = now_text
+                target = self.tribes.get(target_id)
+                if target:
+                    back = target.setdefault("boundary_relations", {}).setdefault(tribe_id, {})
+                    back["score"] = min(9, int(back.get("score", 0) or 0) + relation_delta)
+                    back["tradeTrust"] = min(10, int(back.get("tradeTrust", 0) or 0) + max(0, trade_reward))
+                    back["lastAction"] = "war_narrative"
+                    back["lastActionAt"] = now_text
+
+        task["status"] = "completed"
+        task["completedBy"] = player_id
+        task["completedByName"] = member_name
+        task["completedAt"] = now_text
+        task["actionKey"] = action_key
+        task["actionLabel"] = action.get("label", "定稿")
+        reward_parts = []
+        if renown_reward:
+            reward_parts.append(f"声望+{renown_reward}")
+        if food_reward:
+            reward_parts.append(f"食物+{food_reward}")
+        if trade_reward:
+            reward_parts.append(f"贸易信誉+{trade_reward}")
+        if pressure_relief:
+            reward_parts.append(f"战争压力-{pressure_relief}")
+        if relation_delta:
+            reward_parts.append(f"关系+{relation_delta}")
+        if fatigue_count:
+            reward_parts.append(f"缓解{fatigue_count}名成员战疲")
+        record = {
+            "id": f"war_narrative_record_{task_id}_{int(datetime.now().timestamp() * 1000)}",
+            "warId": task.get("warId"),
+            "taskId": task_id,
+            "role": role,
+            "roleLabel": task.get("roleLabel", "叙事方"),
+            "actionKey": action_key,
+            "actionLabel": action.get("label", "定稿"),
+            "tribeId": tribe_id,
+            "tribeName": tribe.get("name", "部落"),
+            "completedBy": player_id,
+            "memberName": member_name,
+            "winnerTribeId": winner_id,
+            "winnerTribeName": task.get("winnerTribeName", "胜方"),
+            "loserTribeId": loser_id,
+            "loserTribeName": task.get("loserTribeName", "败方"),
+            "targetLabel": task.get("targetLabel", "战争旧线"),
+            "summary": action.get("summary", task.get("summary", "")),
+            "rewardParts": reward_parts,
+            "createdAt": now_text
+        }
+        followup_parts = self._apply_war_narrative_settlement_effects(record, task, member_name)
+        if followup_parts:
+            record["followupParts"] = followup_parts
+        self._record_war_narrative(tribe, record)
+        affected_ids = {tribe_id}
+        if role == "neutral":
+            for target_id in (winner_id, loser_id):
+                target = self.tribes.get(target_id)
+                if target:
+                    self._record_war_narrative(target, record)
+                    affected_ids.add(target_id)
+        detail = f"{member_name} 为{task.get('winnerTribeName', '胜方')}与{task.get('loserTribeName', '败方')}的战争叙事选择“{action.get('label', '定稿')}”：{'、'.join(reward_parts) or '留下可引用说法'}。"
+        self._add_tribe_history(tribe, "governance", "战争叙事", detail, player_id, {"kind": "war_narrative", "record": record})
+        if role == "neutral":
+            for target_id in (winner_id, loser_id):
+                target = self.tribes.get(target_id)
+                if target and target_id != tribe_id:
+                    self._add_tribe_history(target, "governance", "战争叙事定稿", detail, player_id, {"kind": "war_narrative", "record": record})
+        await self._publish_world_rumor(
+            "governance",
+            "战争叙事",
+            f"{tribe.get('name', '部落')}为一场围绕{task.get('targetLabel', '旧战线')}的战争留下“{action.get('label', '定稿')}”说法。",
+            {"tribeId": tribe_id, "warId": task.get("warId"), "role": role, "actionKey": action_key}
+        )
+        for target_id in affected_ids:
+            await self._notify_tribe(target_id, detail)
+            await self.broadcast_tribe_state(target_id)
         await self._broadcast_current_map()
 
     async def complete_war_ally_task(self, player_id: str, task_id: str, action: str = ""):

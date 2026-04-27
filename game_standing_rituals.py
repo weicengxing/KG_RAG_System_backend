@@ -44,6 +44,12 @@ class GameStandingRitualMixin:
             "activeUntil": ritual.get("activeUntil")
         }
 
+    def _standing_ritual_options_for_tribe(self, tribe: dict) -> dict:
+        options = {key: dict(value) for key, value in TRIBE_STANDING_RITUAL_OPTIONS.items()}
+        if hasattr(self, "_personality_ritual_options"):
+            return self._personality_ritual_options(tribe, options)
+        return options
+
     def _standing_ritual_landmark_kind(self, tribe_id: str | None, landmark: dict) -> str | None:
         landmark_type = landmark.get("type")
         label = str(landmark.get("label", ""))
@@ -309,7 +315,7 @@ class GameStandingRitualMixin:
         if self._active_standing_ritual(tribe):
             await self._send_tribe_error(player_id, "当前已经有站位仪式正在进行")
             return
-        config = TRIBE_STANDING_RITUAL_OPTIONS.get(ritual_key)
+        config = self._standing_ritual_options_for_tribe(tribe).get(ritual_key)
         if not config:
             await self._send_tribe_error(player_id, "未知站位仪式")
             return
@@ -455,6 +461,8 @@ class GameStandingRitualMixin:
             reward_parts.extend(self._apply_standing_ritual_reward(tribe, config.get("fullReward", {})))
         if puzzle_result:
             reward_parts.extend(self._apply_standing_ritual_reward(tribe, (ritual.get("puzzle") or {}).get("reward", {})))
+        if hasattr(self, "_apply_personality_culture_reward"):
+            reward_parts.extend(self._apply_personality_culture_reward(tribe, "ritual"))
         ritual["status"] = "completed"
         ritual["completedAt"] = datetime.now().isoformat()
         ritual["completedBy"] = player_id

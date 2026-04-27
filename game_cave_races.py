@@ -22,9 +22,16 @@ class GameCaveRaceMixin:
 
     def _public_cave_races(self, tribe: dict) -> list:
         public = []
+        tribe_id = tribe.get("id")
         for race in self._active_cave_races(tribe):
             rescue = race.get("rescue") or {}
             rescue_methods = self._public_cave_rescue_methods(tribe) if race.get("status") == "rescue" else []
+            route_marks = [item for item in (race.get("routeMarks", []) or []) if isinstance(item, dict)]
+            cooperations = [item for item in (race.get("cooperations", []) or []) if isinstance(item, dict)]
+            race_open = race.get("status", "active") in {"active", "claimed"}
+            has_own_mark = any(item.get("tribeId") == tribe_id for item in route_marks)
+            has_other_mark = any(item.get("tribeId") and item.get("tribeId") != tribe_id for item in route_marks)
+            has_own_coop = any(item.get("tribeId") == tribe_id for item in cooperations)
             public.append({
                 "id": race.get("id"),
                 "type": "cave_rescue_clue" if race.get("status") == "rescue" else "rare_cave_race",
@@ -43,8 +50,13 @@ class GameCaveRaceMixin:
                 "rewardParts": self._cave_race_reward_parts(TRIBE_CAVE_RACE_FIRST_REWARD),
                 "rescue": rescue if rescue else None,
                 "rescueMethods": rescue_methods,
+                "routeKey": race.get("routeKey", ""),
+                "routeMarks": route_marks[-TRIBE_CAVE_RACE_RESCUE_RECORD_LIMIT:],
+                "cooperations": cooperations[-TRIBE_CAVE_RACE_RESCUE_RECORD_LIMIT:],
                 "canClaim": race.get("status") == "active" and not race.get("firstExplorerTribeId"),
-                "canRescue": race.get("status") == "rescue" and rescue.get("status") == "missing"
+                "canRescue": race.get("status") == "rescue" and rescue.get("status") == "missing",
+                "canLeaveMarker": race_open and not has_own_mark,
+                "canCooperate": race_open and has_other_mark and not has_own_coop
             })
         return public
 
@@ -412,6 +424,9 @@ class GameCaveRaceMixin:
             "label": f"{cave_label}稀有岔洞",
             "summary": "洞内风声短暂改道，多部落都能争取首探；失败只会留下失踪线索，可逐步营救。",
             "caveLabel": cave_label,
+            "routeKey": route_key,
+            "routeMarks": [],
+            "cooperations": [],
             "sourceTribeId": tribe.get("id"),
             "sourceTribeName": tribe.get("name", "部落"),
             "x": max(-490, min(490, x)),
@@ -435,6 +450,12 @@ class GameCaveRaceMixin:
         for tribe_id in list(self.tribes.keys()):
             await self.broadcast_tribe_state(tribe_id)
 
+    def _sync_cave_race_shared_fields(self, race_id: str, patch: dict):
+        for target in self.tribes.values():
+            for race in target.get("cave_races", []) or []:
+                if isinstance(race, dict) and race.get("id") == race_id:
+                    race.update(patch)
+
     def _sync_cave_race_first_result(self, race_id: str, tribe: dict, member_name: str):
         for target in self.tribes.values():
             for race in target.get("cave_races", []) or []:
@@ -446,6 +467,96 @@ class GameCaveRaceMixin:
                 race["firstExploredAt"] = datetime.now().isoformat()
                 if race.get("status") == "active":
                     race["status"] = "claimed"
+
+    async def resolve_cave_race_route_action(self, player_id: str, race_id: str, action_key: str):
+        tribe_id = self.player_tribes.get(player_id)
+        tribe = self.tribes.get(tribe_id)
+        if not tribe:
+            await self._send_tribe_error(player_id, "请先加入一个部落")
+            return
+        race = next((item for item in self._active_cave_races(tribe) if item.get("id") == race_id), None)
+        if not race:
+            await self._send_tribe_error(player_id, "这条洞穴竞速路线已经关闭")
+            return
+        if race.get("status", "active") not in {"active", "claimed"}:
+            await self._send_tribe_error(player_id, "这条路线正在营救或已经结束")
+            return
+        action = TRIBE_CAVE_RACE_ACTIONS.get(action_key)
+        if action_key not in {"leave_marker", "cooperate"} or not action:
+            await self._send_tribe_error(player_id, "未知洞穴竞速动作")
+            return
+        member = tribe.get("members", {}).get(player_id, {})
+        member_name = member.get("name") or self._get_player_name(player_id)
+        now = datetime.now()
+        now_text = now.isoformat()
+        route_marks = [dict(item) for item in (race.get("routeMarks", []) or []) if isinstance(item, dict)]
+        cooperations = [dict(item) for item in (race.get("cooperations", []) or []) if isinstance(item, dict)]
+
+        if action_key == "leave_marker":
+            if any(item.get("tribeId") == tribe_id for item in route_marks):
+                await self._send_tribe_error(player_id, "本部落已经在这条竞速路线留下路标")
+                return
+            reward_parts = self._apply_cave_race_reward(tribe, TRIBE_CAVE_RACE_MARK_REWARD)
+            mark = {
+                "id": f"cave_race_mark_{tribe_id}_{int(now.timestamp() * 1000)}_{random.randint(100, 999)}",
+                "tribeId": tribe_id,
+                "tribeName": tribe.get("name", "部落"),
+                "memberName": member_name,
+                "actionLabel": action.get("label", "留竞速路标"),
+                "summary": f"{member_name}在{race.get('caveLabel', '洞穴')}岔路留下可被别队读懂的石痕和火灰记号。",
+                "createdAt": now_text
+            }
+            route_marks.append(mark)
+            route_marks = route_marks[-TRIBE_CAVE_RACE_RESCUE_RECORD_LIMIT:]
+            self._sync_cave_race_shared_fields(race_id, {"routeMarks": route_marks})
+            detail = f"{member_name}在{race.get('label', '稀有洞穴')}留下竞速路标：{'、'.join(reward_parts) or '路线已公开'}。"
+            self._add_tribe_history(tribe, "cave", "洞穴竞速路标", detail, player_id, {"kind": "cave_race_marker", "raceId": race_id, "mark": mark, "rewardParts": reward_parts})
+            await self._publish_world_rumor("cave", "洞穴竞速路标", f"{tribe.get('name', '部落')}在{race.get('caveLabel', '洞穴')}短时岔洞留下竞速路标，后来者可以借读。", {"raceId": race_id, "tribeId": tribe_id})
+            await self._notify_tribe(tribe_id, detail)
+            await self._broadcast_all_cave_race_states()
+            return
+
+        if any(item.get("tribeId") == tribe_id for item in cooperations):
+            await self._send_tribe_error(player_id, "本部落已经借过这条路线上的路标")
+            return
+        partner_mark = next((item for item in route_marks if item.get("tribeId") and item.get("tribeId") != tribe_id), None)
+        if not partner_mark:
+            await self._send_tribe_error(player_id, "需要先有其他部落留下的路标")
+            return
+        reward_parts = self._apply_cave_race_reward(tribe, TRIBE_CAVE_RACE_COOP_REWARD)
+        partner_id = partner_mark.get("tribeId")
+        partner_tribe = self.tribes.get(partner_id)
+        relation = tribe.setdefault("boundary_relations", {}).setdefault(partner_id, {})
+        relation["tradeTrust"] = min(10, int(relation.get("tradeTrust", 0) or 0) + 1)
+        relation["lastAction"] = "cave_race_cooperate"
+        relation["lastActionAt"] = now_text
+        if partner_tribe:
+            reverse = partner_tribe.setdefault("boundary_relations", {}).setdefault(tribe_id, {})
+            reverse["tradeTrust"] = min(10, int(reverse.get("tradeTrust", 0) or 0) + 1)
+            reverse["lastAction"] = "cave_race_cooperate"
+            reverse["lastActionAt"] = now_text
+        reward_parts.append("信任+1")
+        cooperation = {
+            "id": f"cave_race_coop_{tribe_id}_{int(now.timestamp() * 1000)}_{random.randint(100, 999)}",
+            "tribeId": tribe_id,
+            "tribeName": tribe.get("name", "部落"),
+            "memberName": member_name,
+            "partnerTribeId": partner_id,
+            "partnerTribeName": partner_mark.get("tribeName", "其他部落"),
+            "routeMarkId": partner_mark.get("id"),
+            "summary": f"{member_name}借读{partner_mark.get('tribeName', '其他部落')}的路标，双方临时确认同一条洞穴路线。",
+            "createdAt": now_text
+        }
+        cooperations.append(cooperation)
+        cooperations = cooperations[-TRIBE_CAVE_RACE_RESCUE_RECORD_LIMIT:]
+        self._sync_cave_race_shared_fields(race_id, {"cooperations": cooperations})
+        detail = f"{member_name}沿{partner_mark.get('tribeName', '其他部落')}的竞速路标临时合作：{'、'.join(reward_parts)}。"
+        self._add_tribe_history(tribe, "cave", "洞穴竞速合作", detail, player_id, {"kind": "cave_race_cooperate", "raceId": race_id, "cooperation": cooperation, "rewardParts": reward_parts})
+        if partner_tribe:
+            self._add_tribe_history(partner_tribe, "cave", "洞穴竞速合作回响", f"{tribe.get('name', '部落')}借读本部落路标穿过{race.get('caveLabel', '洞穴')}岔洞，双方信任+1。", player_id, {"kind": "cave_race_cooperate_echo", "raceId": race_id, "cooperation": cooperation})
+        await self._publish_world_rumor("cave", "洞穴竞速临时合作", f"{tribe.get('name', '部落')}沿{partner_mark.get('tribeName', '其他部落')}在{race.get('caveLabel', '洞穴')}留下的路标完成一次临时合作。", {"raceId": race_id, "tribeId": tribe_id, "partnerTribeId": partner_id})
+        await self._notify_tribe(tribe_id, detail)
+        await self._broadcast_all_cave_race_states()
 
     async def claim_cave_race_first_explore(self, player_id: str, race_id: str):
         tribe_id = self.player_tribes.get(player_id)
@@ -562,6 +673,13 @@ class GameCaveRaceMixin:
             if oral_bonus:
                 progress_bonus += oral_bonus
                 bonuses.extend({"label": label} for label in oral_labels)
+        route_proof_bonus = 0
+        route_proof_labels = []
+        if hasattr(self, "_forbidden_edge_route_proof_context_support"):
+            route_proof_bonus, route_proof_labels, _, _ = self._forbidden_edge_route_proof_context_support(tribe, "cave_rescue")
+            if route_proof_bonus:
+                progress_bonus += route_proof_bonus
+                bonuses.extend({"label": label} for label in route_proof_labels)
 
         member = tribe.get("members", {}).get(player_id, {})
         member_name = member.get("name") or self._get_player_name(player_id)
@@ -569,6 +687,16 @@ class GameCaveRaceMixin:
         oral_lineage = None
         if hasattr(self, "_record_oral_map_context_reference"):
             oral_reference, oral_lineage = self._record_oral_map_context_reference(tribe, "cave_rescue", race.get("label", "洞穴营救"), member_name, method.get("label", "营救"))
+        route_proof_reference = None
+        route_proof_guardian = None
+        if route_proof_bonus and hasattr(self, "_record_forbidden_edge_route_proof_reference"):
+            route_proof_reference, route_proof_guardian = self._record_forbidden_edge_route_proof_reference(
+                tribe,
+                "cave_rescue",
+                race.get("label", "洞穴营救"),
+                member_name,
+                method.get("label", "营救")
+            )
         paid_parts = self._apply_cave_rescue_method_cost(tribe, method)
         rescue.setdefault("helperIds", []).append(player_id)
         rescue.setdefault("helperNames", []).append(member_name)
@@ -581,6 +709,8 @@ class GameCaveRaceMixin:
             "progress": step_progress,
             "bonusLabels": [item.get("label") for item in bonuses],
             "paidParts": paid_parts,
+            "routeProofReference": route_proof_reference,
+            "routeProofGuardian": route_proof_guardian,
             "createdAt": datetime.now().isoformat()
         })
         target = max(1, int(rescue.get("target", TRIBE_CAVE_RACE_RESCUE_TARGET) or TRIBE_CAVE_RACE_RESCUE_TARGET))
@@ -589,7 +719,11 @@ class GameCaveRaceMixin:
             detail = f"{member_name}用{method.get('label', '营救方式')}推进{race.get('label', '稀有洞穴')}营救{bonus_text}，进度 {rescue['progress']} / {target}。"
             if oral_lineage:
                 detail += f" 形成{oral_lineage.get('label', '路线讲述谱系')}。"
-            self._add_tribe_history(tribe, "cave", "推进洞穴营救", detail, player_id, {"kind": "cave_rescue_step", "raceId": race_id, "progress": rescue["progress"], "target": target, "methodKey": method.get("key"), "bonuses": bonuses, "oralMapReference": oral_reference, "oralMapLineage": oral_lineage})
+            if route_proof_reference:
+                detail += f" 引用了{route_proof_reference.get('label', '禁地路证')}。"
+            if route_proof_guardian:
+                detail += f" {route_proof_guardian.get('memberName', member_name)}获得短时“路证守护者”称号。"
+            self._add_tribe_history(tribe, "cave", "推进洞穴营救", detail, player_id, {"kind": "cave_rescue_step", "raceId": race_id, "progress": rescue["progress"], "target": target, "methodKey": method.get("key"), "bonuses": bonuses, "oralMapReference": oral_reference, "oralMapLineage": oral_lineage, "routeProofReference": route_proof_reference, "routeProofGuardian": route_proof_guardian})
             await self._notify_tribe(tribe_id, detail)
             await self.broadcast_tribe_state(tribe_id)
             return
@@ -638,7 +772,11 @@ class GameCaveRaceMixin:
             detail += f" 营救复盘引用了{oral_reference.get('actionLabel', '口述地图')}。"
         if oral_lineage:
             detail += f" 形成{oral_lineage.get('label', '路线讲述谱系')}。"
-        self._add_tribe_history(tribe, "cave", "完成洞穴营救", detail, player_id, {"kind": "cave_rescue_complete", "raceId": race_id, "rewardParts": reward_parts, "memoryId": memory.get("id") if memory else "", "methodKey": method.get("key"), "record": record, "returnMark": return_mark, "oralMapReference": oral_reference, "oralMapLineage": oral_lineage})
+        if route_proof_reference:
+            detail += f" 营救路线引用了{route_proof_reference.get('label', '禁地路证')}。"
+        if route_proof_guardian:
+            detail += f" {route_proof_guardian.get('memberName', member_name)}获得短时“路证守护者”称号。"
+        self._add_tribe_history(tribe, "cave", "完成洞穴营救", detail, player_id, {"kind": "cave_rescue_complete", "raceId": race_id, "rewardParts": reward_parts, "memoryId": memory.get("id") if memory else "", "methodKey": method.get("key"), "record": record, "returnMark": return_mark, "oralMapReference": oral_reference, "oralMapLineage": oral_lineage, "routeProofReference": route_proof_reference, "routeProofGuardian": route_proof_guardian})
         await self._publish_world_rumor("cave", "洞穴营救完成", f"{tribe.get('name', '部落')}循着短时岔洞的失踪线索救回了队友。", {"raceId": race_id, "tribeId": tribe_id})
         await self._notify_tribe(tribe_id, detail)
         await self.broadcast_tribe_state(tribe_id)

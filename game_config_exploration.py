@@ -15,6 +15,8 @@ TRIBE_CAVE_RACE_FIRST_TARGET = 5
 TRIBE_CAVE_RACE_RESCUE_TARGET = 3
 TRIBE_CAVE_RACE_FIRST_REWARD = {"renown": 8, "discoveryProgress": 2, "tradeReputation": 1}
 TRIBE_CAVE_RACE_RESCUE_REWARD = {"renown": 4, "discoveryProgress": 1}
+TRIBE_CAVE_RACE_MARK_REWARD = {"renown": 1, "discoveryProgress": 1}
+TRIBE_CAVE_RACE_COOP_REWARD = {"renown": 2, "discoveryProgress": 1, "tradeReputation": 1}
 TRIBE_CAVE_RACE_RESCUE_RECORD_LIMIT = 6
 TRIBE_CAVE_RETURN_MARK_ACTIVE_MINUTES = 22
 TRIBE_CAVE_RETURN_MARK_LIMIT = 5
@@ -120,6 +122,18 @@ TRIBE_CAVE_RACE_ACTIONS = {
         "key": "rescue",
         "label": "循线营救",
         "summary": "沿失踪线索逐步找回队友，完成后获得发现、声望或活地图记忆。"
+    },
+    "leave_marker": {
+        "key": "leave_marker",
+        "label": "留竞速路标",
+        "summary": "在同一洞穴路线留下本部落记号，其他部落可据此临时合作。",
+        "animation": "gather"
+    },
+    "cooperate": {
+        "key": "cooperate",
+        "label": "借标合作",
+        "summary": "沿其他部落留下的路标互认路线，换取发现、声望和短时信任。",
+        "animation": "ritual"
     }
 }
 TRIBE_FOOD_SAFE_BASE = 24
@@ -144,6 +158,9 @@ MIGRATION_SEASON_HERD_WEIGHT = 4
 TRIBE_MIGRATION_PLAN_ACTIVE_MINUTES = 16
 TRIBE_MIGRATION_PLAN_PROGRESS_TARGET = 3
 TRIBE_MIGRATION_PLAN_HISTORY_LIMIT = 5
+TRIBE_MIGRATION_ENCOUNTER_ACTIVE_MINUTES = 18
+TRIBE_MIGRATION_ENCOUNTER_LIMIT = 6
+TRIBE_MIGRATION_ENCOUNTER_RECORD_LIMIT = 8
 TRIBE_MIGRATION_PLAN_OPTIONS = {
     "hold_camp": {
         "label": "守旧营",
@@ -165,6 +182,45 @@ TRIBE_MIGRATION_PLAN_OPTIONS = {
         "siteLabel": "迁徙车队路线",
         "siteType": "migration_caravan",
         "reward": {"food": 4, "tradeReputation": 1, "discoveryProgress": 1, "renown": 5}
+    }
+}
+TRIBE_MIGRATION_ENCOUNTER_ACTIONS = {
+    "escort": {
+        "label": "护送车队",
+        "summary": "派人护送对方迁徙车队穿过边界、旧路或危险路段。",
+        "foodCost": 1,
+        "responderReward": {"renown": 2, "tradeReputation": 1},
+        "sourceReward": {"food": 2, "renown": 1},
+        "relationDelta": 2,
+        "tradeTrustDelta": 1,
+        "tone": "warm"
+    },
+    "shelter": {
+        "label": "收留歇脚",
+        "summary": "给车队留一处短时夜火，交换补给、口信和安稳名声。",
+        "foodCost": 2,
+        "responderReward": {"renown": 2},
+        "sourceReward": {"food": 3, "wood": 2},
+        "relationDelta": 1,
+        "tradeTrustDelta": 1,
+        "tone": "shelter"
+    },
+    "toll": {
+        "label": "拦路收费",
+        "summary": "在边路索要过路补给，立刻获利但留下紧张口风。",
+        "responderReward": {"wood": 3, "stone": 1, "renown": 1},
+        "sourceReward": {"discoveryProgress": 1},
+        "relationDelta": -2,
+        "warPressureDelta": 1,
+        "tone": "tense"
+    },
+    "rumor": {
+        "label": "传播路闻",
+        "summary": "不直接介入车队，只把他们经过的消息传给商队和边市。",
+        "responderReward": {"tradeReputation": 2},
+        "sourceReward": {"renown": 1},
+        "relationDelta": -1,
+        "tone": "rumor"
     }
 }
 WORLD_EVENT_DURATION_MINUTES = 7
@@ -268,6 +324,7 @@ TRIBE_MAP_TILE_TRACE_ACTIONS = {
     }
 }
 TRIBE_PUBLIC_SECRET_ACTIVE_MINUTES = 45
+TRIBE_PUBLIC_SECRET_REVEAL_DELAY_MINUTES = 12
 TRIBE_PUBLIC_SECRET_LIMIT = 6
 TRIBE_PUBLIC_SECRET_RECORD_LIMIT = 8
 TRIBE_PUBLIC_SECRET_SOURCES = {
@@ -322,6 +379,42 @@ TRIBE_PUBLIC_SECRET_ACTIONS = {
         "reward": {"discoveryProgress": 1, "renown": 1},
         "storyReady": True,
         "rumorTone": "讲述者保管"
+    }
+}
+TRIBE_PUBLIC_SECRET_REVEAL_OUTCOMES = {
+    "reveal": {
+        "label": "公开坐实",
+        "summary": "秘密被公开后逐渐坐实，族人更容易把它转成可靠传闻。",
+        "reward": {"renown": 1, "tradeReputation": 1},
+        "rumorTone": "可信",
+        "truthState": "true",
+        "followupLabel": "传闻真假"
+    },
+    "hold": {
+        "label": "暂存发酵",
+        "summary": "被暂存的秘密没有立刻爆开，而是沉成一条需要再辨认的旧线索。",
+        "reward": {"discoveryProgress": 1},
+        "rumorTone": "含混",
+        "truthState": "uncertain",
+        "followupLabel": "传闻真假"
+    },
+    "judge": {
+        "label": "证据链成形",
+        "summary": "交给裁判的秘密形成更清楚的证据链，后续中立见证会更有分量。",
+        "reward": {"tradeReputation": 1},
+        "rumorTone": "待裁",
+        "truthState": "uncertain",
+        "evidenceChain": True,
+        "followupLabel": "共同裁判"
+    },
+    "storyteller": {
+        "label": "讲述伏笔",
+        "summary": "讲述者保管的秘密变成后续故事伏笔，可继续牵引口述地图或神话解释。",
+        "reward": {"renown": 1, "discoveryProgress": 1},
+        "rumorTone": "伏笔",
+        "truthState": "uncertain",
+        "storyHook": True,
+        "followupLabel": "讲述伏笔"
     }
 }
 TRIBE_TRAIL_MARKER_ACTIVE_MINUTES = 45

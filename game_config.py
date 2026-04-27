@@ -124,6 +124,99 @@ TRIBE_PERSONALITY_TRAITS = {
         "customKey": "oathbound"
     }
 }
+TRIBE_PERSONALITY_EFFECT_RECORD_LIMIT = 8
+TRIBE_PERSONALITY_CULTURE_EFFECTS = {
+    "hearthkeeper": {
+        "visitorWeights": {"lost_clan": 3, "craft_keeper": 2},
+        "visitorText": "更容易吸引愿意围火停步的流浪氏族和手艺守者。",
+        "rumorPhrase": "守火口风把消息讲成营地共同照看的事。",
+        "ritualKeys": ["totem", "council"],
+        "ritualText": "图腾环站和议场席位会额外沉淀声望。",
+        "boundaryAction": "warm_words",
+        "boundaryText": "边界口风偏向温热互助。",
+        "rewards": {
+            "visitor": {"renown": 1},
+            "guest": {"food": 1},
+            "ritual": {"renown": 1},
+            "boundary": {"relationDelta": 1}
+        }
+    },
+    "trailwise": {
+        "visitorWeights": {"omen_speaker": 3, "craft_keeper": 1},
+        "visitorText": "更容易吸引讲预兆、旧图和修路手艺的人。",
+        "rumorPhrase": "逐路口风会把传闻接到旧路、洞口和地图记忆上。",
+        "ritualKeys": ["cave", "starwatch"],
+        "ritualText": "洞口列队和星下观测会额外推进发现。",
+        "boundaryAction": "clear_suspicion",
+        "boundaryText": "边界口风偏向先辨路、再澄清误会。",
+        "rewards": {
+            "visitor": {"discoveryProgress": 1},
+            "guest": {"discoveryProgress": 1},
+            "ritual": {"discoveryProgress": 1},
+            "boundary": {"warPressureRelief": 1}
+        }
+    },
+    "merchant": {
+        "visitorWeights": {"curio_trader": 4, "lost_clan": 1},
+        "visitorText": "更容易吸引贝壳行商和愿意交换口碑的旅队。",
+        "rumorPhrase": "重商口风会把这条消息讲成可被互市接住的来往。",
+        "ritualKeys": ["market", "council"],
+        "ritualText": "边市迎客和议场席位会额外提高贸易信誉。",
+        "boundaryAction": "warm_words",
+        "boundaryText": "边界口风偏向趁热互市。",
+        "rewards": {
+            "visitor": {"tradeReputation": 1},
+            "guest": {"tradeReputation": 1},
+            "ritual": {"tradeReputation": 1},
+            "boundary": {"tradeTrustDelta": 1}
+        }
+    },
+    "warlike": {
+        "visitorWeights": {"lost_clan": 2, "craft_keeper": 2},
+        "visitorText": "更容易吸引带纠纷、护送和守备手艺的来客。",
+        "rumorPhrase": "好战口风让消息带上守边、威望和可被挑战的分量。",
+        "ritualKeys": ["council", "totem"],
+        "ritualText": "议场席位和图腾环站会额外压低边界压力。",
+        "boundaryAction": "awe_watch",
+        "boundaryText": "边界口风偏向敬畏守望。",
+        "rewards": {
+            "visitor": {"renown": 1},
+            "guest": {"renown": 1},
+            "ritual": {"warPressureRelief": 1},
+            "boundary": {"warPressureRelief": 1}
+        }
+    },
+    "songkeeper": {
+        "visitorWeights": {"omen_speaker": 4, "curio_trader": 1},
+        "visitorText": "更容易吸引愿意讲旧歌、预兆和远方曲调的人。",
+        "rumorPhrase": "信旧歌口风会把消息唱成可继续采信的短句。",
+        "ritualKeys": ["starwatch", "totem"],
+        "ritualText": "星下观测和图腾环站会额外留下声望。",
+        "boundaryAction": "warm_words",
+        "boundaryText": "边界口风偏向用旧歌把误会唱软。",
+        "rewards": {
+            "visitor": {"renown": 1},
+            "guest": {"renown": 1},
+            "ritual": {"renown": 1},
+            "boundary": {"relationDelta": 1}
+        }
+    },
+    "evidence": {
+        "visitorWeights": {"lost_clan": 3, "omen_speaker": 2},
+        "visitorText": "更容易吸引愿意留下证词、纠纷和预兆来源的来客。",
+        "rumorPhrase": "敬证据口风会把消息挂上来源链和见证人。",
+        "ritualKeys": ["council", "cave"],
+        "ritualText": "议场席位和洞口列队会额外留下可查证的声望。",
+        "boundaryAction": "clear_suspicion",
+        "boundaryText": "边界口风偏向先摆证据、再降猜疑。",
+        "rewards": {
+            "visitor": {"renown": 1},
+            "guest": {"tradeReputation": 1},
+            "ritual": {"renown": 1},
+            "boundary": {"warPressureRelief": 1}
+        }
+    }
+}
 TRIBE_LAW_ACTIVE_MINUTES = 20
 TRIBE_LAW_RECORD_LIMIT = 5
 TRIBE_LAW_REMEDY_LIMIT = 5
@@ -550,6 +643,19 @@ PLAYER_IDENTITY_OPTIONS = {
         "requiresHistory": 1
     }
 }
+TRIBE_MASK_PERFORMANCE_ACTIVE_MINUTES = 16
+TRIBE_MASK_PERFORMANCE_LIMIT = 4
+TRIBE_MASK_PERFORMANCE_RECORD_LIMIT = 8
+TRIBE_MASK_PERFORMANCE_RADIUS = 18
+TRIBE_MASK_PERFORMANCE_TARGET = 3
+TRIBE_MASK_PERFORMANCE_COOLDOWN_SECONDS = 180
+TRIBE_MASK_PERFORMANCE_RESPONSE_RENOWN = 1
+TRIBE_MASK_PERFORMANCE_TYPES = {
+    "fire_dancer": {"label": "火舞者表演", "summary": "在营火旁起舞，让附近成员用拍手、守拍或呼号接住节奏。", "customKey": "hearth", "reward": {"renown": 2, "food": 1}, "animation": "cheer"},
+    "pathfinder": {"label": "寻路者表演", "summary": "把脚步、路标和方向唱成一段可跟随的短路仪式。", "customKey": "tidal", "reward": {"discoveryProgress": 2, "renown": 1}, "animation": "guard"},
+    "mason": {"label": "石匠表演", "summary": "用敲击石器的节奏展示修整手艺，旁人接拍后更像公开传艺。", "customKey": "oathbound", "reward": {"wood": 1, "stone": 1, "renown": 1}, "animation": "gather"},
+    "storyteller": {"label": "讲述者表演", "summary": "把一段旧事讲成可轮流续接的公开场景。", "customKey": "hearth", "reward": {"renown": 2, "tradeReputation": 1}, "animation": "ritual"}
+}
 PLAYER_CONFLICT_ACTIONS = {
     "intimidate": {"label": "威慑", "summary": "靠近对方发出警告，提升个人声望并轻微影响部落关系。", "renown": 1, "fatigue": 1, "relationDelta": -1, "personalRelationDelta": -1},
     "challenge": {"label": "挑战", "summary": "进行一次短促的近身冲突，胜负只造成疲劳和击退，不造成死亡。", "renown": 2, "fatigue": 2, "relationDelta": -2, "personalRelationDelta": -2, "knockback": 2.4},
@@ -619,6 +725,46 @@ TRIBE_WAR_AFTERMATH_FOOD_REWARD = 6
 TRIBE_WAR_AFTERMATH_TRADE_REWARD = 2
 TRIBE_WAR_AFTERMATH_PRESSURE_RELIEF = 1
 TRIBE_WAR_AFTERMATH_RENOWN = 3
+TRIBE_WAR_NARRATIVE_ACTIVE_MINUTES = 45
+TRIBE_WAR_NARRATIVE_TASK_LIMIT = 6
+TRIBE_WAR_NARRATIVE_RECORD_LIMIT = 8
+TRIBE_WAR_NARRATIVE_NEUTRAL_LIMIT = 2
+TRIBE_WAR_NARRATIVE_SETTLED_REPARATION_FOOD = 3
+TRIBE_WAR_NARRATIVE_REPAIR_COST_RELIEF = 1
+TRIBE_WAR_NARRATIVE_REPAIR_RENOWN_BONUS = 1
+TRIBE_WAR_NARRATIVE_DISPUTE_PRESSURE = 1
+TRIBE_WAR_NARRATIVE_ACTIONS = {
+    "winner": [
+        {
+            "key": "glory",
+            "label": "写战功",
+            "summary": "把胜方的推进、援助和目标收益整理成可传述的战功。",
+            "renownReward": 3,
+            "tradeReward": 1,
+            "pressureRelief": 1
+        }
+    ],
+    "loser": [
+        {
+            "key": "suffering",
+            "label": "写苦难",
+            "summary": "把败方的损失、撤退和复兴线索写成族人能承认的苦难。",
+            "renownReward": 2,
+            "fatigueRelief": 1,
+            "foodReward": 3
+        }
+    ],
+    "neutral": [
+        {
+            "key": "finalize",
+            "label": "定稿",
+            "summary": "由中立部落把双方说法压成一段可被引用的战争叙事。",
+            "renownReward": 2,
+            "tradeReward": 2,
+            "relationDelta": 1
+        }
+    ]
+}
 TRIBE_WAR_GOALS = {
     "resource_site": {
         "label": "粮草争夺",
@@ -1959,6 +2105,60 @@ TRIBE_NEWCOMER_KEY_MOMENTS = [
         "stone": 1
     }
 ]
+TRIBE_NEWCOMER_FATE_ACTIVE_MINUTES = 32
+TRIBE_NEWCOMER_FATE_LIMIT = 4
+TRIBE_NEWCOMER_FATE_RECORD_LIMIT = 8
+TRIBE_NEWCOMER_FATE_INFLUENCE_MINUTES = 36
+TRIBE_NEWCOMER_FATE_INFLUENCE_LIMIT = 5
+TRIBE_NEWCOMER_FATE_CONTEXTS = {
+    "first_find": {
+        "title": "新人认出旧痕",
+        "summary": "新人把不起眼的石痕认成旧路标，老成员可以相信、忽视或保护这段判断。",
+        "stakes": "会改变下一次雾区探路、禁地试探或外交接待。"
+    },
+    "child_omen": {
+        "title": "童言预兆",
+        "summary": "新人把路上的风声讲成预兆，老成员的态度会决定这句预兆往哪里落。",
+        "stakes": "会改变下一次探索、禁地或外交事件的口风。"
+    },
+    "lost_shortcut": {
+        "title": "误入捷径",
+        "summary": "新人误入一条近路，老成员可以把它当线索、当笑谈或当需要护送的危险路。",
+        "stakes": "会改变下一次探路、禁地回撤或商队路线。"
+    }
+}
+TRIBE_NEWCOMER_FATE_ACTIONS = {
+    "believe": {
+        "label": "相信新人",
+        "summary": "把新人的小发现当作真线索，下一次探索会获得额外辨路支撑。",
+        "reward": {"discoveryProgress": 1},
+        "influenceContext": "exploration",
+        "contextLabel": "探索",
+        "supportLabel": "新人线索",
+        "supportBonus": 1,
+        "influenceSummary": "下一次雾区探路会引用新人留下的线索。"
+    },
+    "ignore": {
+        "label": "暂时忽视",
+        "summary": "没有立刻采信，但这段笑谈会在下一次外交接待里变成可解释的营地故事。",
+        "reward": {"food": 1},
+        "influenceContext": "diplomacy",
+        "contextLabel": "外交",
+        "supportLabel": "被忽视的新人预兆",
+        "supportBonus": 1,
+        "influenceSummary": "下一次商队或外交事件会把这段预兆当作营地口风重新解释。"
+    },
+    "protect": {
+        "label": "保护新人",
+        "summary": "派老成员护住新人和线索，下一次禁地试探获得额外安全支撑。",
+        "reward": {"renown": 1},
+        "influenceContext": "forbidden_edge",
+        "contextLabel": "禁地",
+        "supportLabel": "护新人的回路",
+        "supportBonus": 1,
+        "influenceSummary": "下一次禁地边缘试探会引用老成员护送新人留下的回路。"
+    }
+}
 TRIBE_ORAL_EPIC_RENOWN_BONUS = 7
 TRIBE_ORAL_EPIC_MIN_HISTORY = 3
 TRIBE_ORAL_CHAIN_LINE_TARGET = 3

@@ -172,6 +172,19 @@ class GameOralMapMixin:
                 memory
             ))
 
+        for record in reversed(tribe.get("forbidden_edge_route_proof_records", []) or []):
+            if not isinstance(record, dict):
+                continue
+            source_id = f"forbidden_route_proof_record:{record.get('id')}"
+            add_source(self._oral_map_source(
+                "forbidden_route_proof_record",
+                source_id,
+                record.get("label", "禁地路证"),
+                f"{record.get('sourceLabel', '路证来源')}已经刻成公开路证，可以继续讲成雾区、禁地或导师课程能引用的路线。",
+                "禁地路证",
+                record
+            ))
+
         return sources[:TRIBE_ORAL_MAP_SOURCE_LIMIT]
 
     def _public_oral_map_sources(self, tribe: dict) -> list:
@@ -488,6 +501,18 @@ class GameOralMapMixin:
         member = tribe.get("members", {}).get(player_id, {})
         member_name = member.get("name") or self._get_player_name(player_id)
         reward_parts = self._apply_oral_map_reward(tribe, action.get("reward", {}))
+        route_proof_reference = None
+        route_proof_guardian = None
+        if source.get("kind") == "forbidden_route_proof_record" and hasattr(self, "_record_forbidden_edge_route_proof_reference"):
+            route_proof_reference, route_proof_guardian = self._record_forbidden_edge_route_proof_reference(
+                tribe,
+                "oral_map",
+                action.get("label", "口述地图"),
+                member_name,
+                source.get("label", "禁地路证")
+            )
+            if route_proof_reference:
+                reward_parts.append("路证来源链")
         route_bonus = None
         influence = None
         puzzle_fragment = None
@@ -519,6 +544,8 @@ class GameOralMapMixin:
             "riddleInfluence": influence,
             "puzzleFragmentCreated": bool(puzzle_fragment),
             "puzzleAlreadyRecorded": puzzle_already_recorded,
+            "routeProofReference": route_proof_reference,
+            "routeProofGuardian": route_proof_guardian,
             "createdAt": now.isoformat()
         }
         tribe.setdefault("oral_map_records", []).append(record)
@@ -532,6 +559,10 @@ class GameOralMapMixin:
             detail += f" 收获：{'、'.join(reward_parts)}。"
         if lineage:
             detail += f" 形成了{lineage.get('label', '路线讲述谱系')}。"
+        if route_proof_reference:
+            detail += f" 引用了{route_proof_reference.get('label', '禁地路证')}来源链。"
+        if route_proof_guardian:
+            detail += f" {route_proof_guardian.get('memberName', member_name)}获得短时“路证守护者”称号。"
         self._add_tribe_history(tribe, "cave", "归路口述地图", detail, player_id, {"kind": "oral_map", "record": record})
         await self._publish_world_rumor(
             "cave",

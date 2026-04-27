@@ -163,6 +163,10 @@ class GameGuestStayMixin:
         ).isoformat()
 
         reward_parts = self._apply_guest_stay_reward(host_tribe, source_member, action)
+        personality_parts = []
+        if hasattr(self, "_apply_personality_culture_reward"):
+            personality_parts = self._apply_personality_culture_reward(host_tribe, "guest", source_tribe_id or "")
+            reward_parts.extend(personality_parts)
         self._apply_guest_stay_relation(source_tribe, host_tribe, action, now_text)
         if source_tribe and int(action.get("guestRenown", 0) or 0):
             source_tribe["renown"] = int(source_tribe.get("renown", 0) or 0) + int(action.get("guestRenown", 0) or 0)
@@ -181,6 +185,7 @@ class GameGuestStayMixin:
             "hostTribeId": target_tribe_id,
             "hostTribeName": host_tribe.get("name", "部落营地"),
             "rewardParts": reward_parts,
+            "personalityHint": "、".join(personality_parts),
             "activeUntil": active_until,
             "createdAt": now_text
         }

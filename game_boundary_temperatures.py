@@ -110,13 +110,19 @@ class GameBoundaryTemperatureMixin:
                 continue
             other = self.tribes.get(other_id) if hasattr(self, "tribes") else None
             temp = self._boundary_temperature_label(relation)
+            suggestion = self._boundary_temperature_suggestion(temp["key"])
+            personality_hint = ""
+            if hasattr(self, "_personality_boundary_suggestion"):
+                suggestion = self._personality_boundary_suggestion(tribe, suggestion)
+                personality_hint = suggestion.get("effectHint", "")
             items.append({
                 "otherTribeId": other_id,
                 "otherTribeName": (other or {}).get("name", relation.get("otherTribeName", "邻近部落")),
                 "temperatureKey": temp["key"],
                 "temperatureLabel": temp["label"],
                 "summary": temp["summary"],
-                "suggestedAction": self._boundary_temperature_suggestion(temp["key"]),
+                "suggestedAction": suggestion,
+                "personalityHint": personality_hint,
                 "score": int(relation.get("score", 0) or 0),
                 "tradeTrust": int(relation.get("tradeTrust", 0) or 0),
                 "warPressure": int(relation.get("warPressure", 0) or 0),
@@ -186,6 +192,8 @@ class GameBoundaryTemperatureMixin:
         member_name = member.get("name", "成员")
         now_text = datetime.now().isoformat()
         reward_parts = self._apply_boundary_temperature_reward(tribe, relation, action)
+        if hasattr(self, "_apply_personality_culture_reward"):
+            reward_parts.extend(self._apply_personality_culture_reward(tribe, "boundary", other_tribe_id))
         relation["lastTemperatureAction"] = action_key
         relation["lastAction"] = f"boundary_temperature_{action_key}"
         relation["lastActionAt"] = now_text

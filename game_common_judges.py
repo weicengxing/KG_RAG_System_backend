@@ -235,6 +235,8 @@ class GameCommonJudgeMixin:
             cases.extend(self._dispute_witness_common_judge_cases(judge_tribe_id, recent_source_ids))
         if hasattr(self, "_public_secret_common_judge_cases"):
             cases.extend(self._public_secret_common_judge_cases(judge_tribe_id, recent_source_ids))
+        if hasattr(self, "_lost_item_hidden_common_judge_cases"):
+            cases.extend(self._lost_item_hidden_common_judge_cases(judge_tribe_id, recent_source_ids))
         cases = [
             case for case in cases
             if case.get("sourceTribeId") != judge_tribe_id and case.get("otherTribeId") != judge_tribe_id
@@ -393,6 +395,13 @@ class GameCommonJudgeMixin:
                     evidence["judgedByName"] = judge_tribe.get("name", "中立部落")
                     evidence["judgedAt"] = now.isoformat()
                     evidence["judgeActionLabel"] = action.get("label", "共同裁判")
+                    break
+        if case.get("kind") == "lost_item_hide":
+            for lost_record in source_tribe.get("lost_item_records", []) or []:
+                if isinstance(lost_record, dict) and lost_record.get("id") == case.get("sourceCaseId"):
+                    lost_record["judgedByName"] = judge_tribe.get("name", "中立部落")
+                    lost_record["judgedAt"] = now.isoformat()
+                    lost_record["judgeActionLabel"] = action.get("label", "共同裁判")
                     break
 
         target_text = case.get("sourceTribeName", "邻近部落")

@@ -108,9 +108,14 @@ class GameVisitorMixin:
         return float(camp_center.get("x", 0) or 0), float(camp_center.get("z", 0) or 0)
 
     def _build_nomad_visitor(self, tribe: dict, now: datetime) -> dict:
-        key, config = random.choice(list(TRIBE_NOMAD_VISITOR_LIBRARY.items()))
+        visitor_keys = list(TRIBE_NOMAD_VISITOR_LIBRARY.keys())
+        if hasattr(self, "_personality_weighted_visitor_key"):
+            key = self._personality_weighted_visitor_key(tribe, visitor_keys)
+        else:
+            key = random.choice(visitor_keys)
+        config = TRIBE_NOMAD_VISITOR_LIBRARY.get(key, {})
         x, z = self._nomad_visitor_edge_position(tribe)
-        return {
+        visitor = {
             "id": f"nomad_visitor_{tribe.get('id')}_{int(now.timestamp() * 1000)}_{random.randint(100, 999)}",
             "status": "pending",
             "type": "nomad_visitor",
@@ -125,6 +130,11 @@ class GameVisitorMixin:
             "createdAt": now.isoformat(),
             "activeUntil": datetime.fromtimestamp(now.timestamp() + TRIBE_NOMAD_VISITOR_ACTIVE_MINUTES * 60).isoformat()
         }
+        if hasattr(self, "_personality_visitor_hint"):
+            hint = self._personality_visitor_hint(tribe, key)
+            if hint:
+                visitor["personalityHint"] = hint
+        return visitor
 
     async def _maybe_spawn_nomad_visitors(self) -> int:
         spawned = 0
@@ -135,6 +145,8 @@ class GameVisitorMixin:
             if self._active_nomad_visitors(tribe):
                 continue
             chance = TRIBE_NOMAD_VISITOR_CHANCE + min(0.18, max(0, int(tribe.get("trade_reputation", 0) or 0)) * 0.02)
+            if hasattr(self, "_dominant_personality_effect") and self._dominant_personality_effect(tribe)[0]:
+                chance += 0.04
             if hasattr(self, "_traveler_song_visitor_bonus"):
                 chance += self._traveler_song_visitor_bonus(tribe)
             if self._weather_rng.random() > chance:
@@ -235,6 +247,8 @@ class GameVisitorMixin:
             await self._send_tribe_error(player_id, f"接待来访者需要公共食物{food_cost}")
             return
         reward_parts = self._apply_nomad_visitor_reward(tribe, action)
+        if hasattr(self, "_apply_personality_culture_reward"):
+            reward_parts.extend(self._apply_personality_culture_reward(tribe, "visitor"))
         now_text = datetime.now().isoformat()
         visitor["status"] = "resolved"
         visitor["resolvedAt"] = now_text
@@ -339,6 +353,8 @@ class GameVisitorMixin:
             return
 
         reward_parts = self._apply_nomad_visitor_reward(tribe, action)
+        if hasattr(self, "_apply_personality_culture_reward"):
+            reward_parts.extend(self._apply_personality_culture_reward(tribe, "visitor"))
         now_text = datetime.now().isoformat()
         member = tribe.get("members", {}).get(player_id, {})
         effect["status"] = "resolved"

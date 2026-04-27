@@ -30,6 +30,7 @@ class GamePublicSecretMixin:
         ]
 
     def _public_secret_records(self, tribe: dict) -> list:
+        self._refresh_public_secret_reveals(tribe)
         return [
             item for item in (tribe.get("public_secret_records", []) or [])
             if isinstance(item, dict)
@@ -79,7 +80,135 @@ class GamePublicSecretMixin:
         if discovery:
             tribe["discovery_progress"] = int(tribe.get("discovery_progress", 0) or 0) + discovery
             parts.append(f"发现进度+{discovery}")
+        trade = int(reward.get("tradeReputation", 0) or 0)
+        if trade:
+            tribe["trade_reputation"] = int(tribe.get("trade_reputation", 0) or 0) + trade
+            parts.append(f"贸易信誉+{trade}")
         return parts
+
+    def _public_secret_reveal_ready_at(self, now: datetime) -> str:
+        return datetime.fromtimestamp(now.timestamp() + TRIBE_PUBLIC_SECRET_REVEAL_DELAY_MINUTES * 60).isoformat()
+
+    def _append_public_secret_world_rumor(self, tribe: dict, record: dict, outcome: dict):
+        if not hasattr(self, "world_rumors") or not hasattr(self, "_build_world_rumor"):
+            return
+        if record.get("revealRumorId"):
+            return
+        rumor = self._build_world_rumor(
+            "public_secret_reveal",
+            "公共秘密揭晓",
+            f"{tribe.get('name', '某个部落')}早先处理的“{record.get('title', '未揭晓秘密')}”逐渐变成{outcome.get('label', '揭晓')}的说法。",
+            {
+                "tribeId": tribe.get("id"),
+                "recordId": record.get("id"),
+                "secretId": record.get("secretId"),
+                "actionKey": record.get("actionKey"),
+                "tone": outcome.get("rumorTone", "")
+            }
+        )
+        self.world_rumors.append(rumor)
+        self.world_rumors = self.world_rumors[-WORLD_RUMOR_LIMIT:]
+        record["revealRumorId"] = rumor.get("id")
+
+    def _create_public_secret_followup(self, tribe: dict, record: dict, outcome: dict, now: datetime) -> dict | None:
+        if not outcome.get("followupLabel"):
+            return None
+        if record.get("followupTask"):
+            return record.get("followupTask")
+        task = {
+            "id": f"public_secret_followup_{record.get('id')}_{int(now.timestamp() * 1000)}",
+            "status": "active",
+            "truthState": outcome.get("truthState", "uncertain"),
+            "sourceId": f"public_secret:{record.get('id')}",
+            "sourceKind": "public_secret_reveal",
+            "sourceLabel": outcome.get("followupLabel", "公共秘密后续"),
+            "title": f"{record.get('title', '未揭晓秘密')}后续",
+            "summary": outcome.get("summary", "秘密揭晓后留下了新的传闻后续。"),
+            "toneLabel": outcome.get("rumorTone", "含混"),
+            "riskLabel": "来自公共秘密揭晓",
+            "createdAt": now.isoformat(),
+            "activeUntil": datetime.fromtimestamp(now.timestamp() + TRIBE_RUMOR_TRUTH_ACTIVE_MINUTES * 60).isoformat()
+        }
+        if outcome.get("followupLabel") == "传闻真假":
+            active = self._active_rumor_truth_tasks(tribe) if hasattr(self, "_active_rumor_truth_tasks") else []
+            if not any(item.get("sourceId") == task["sourceId"] for item in active):
+                tribe["rumor_truth_tasks"] = [*active, task][-TRIBE_RUMOR_TRUTH_LIMIT:]
+        record["followupTask"] = {
+            "id": task.get("id"),
+            "label": outcome.get("followupLabel", "后续任务"),
+            "title": task.get("title"),
+            "summary": task.get("summary")
+        }
+        return record["followupTask"]
+
+    def _apply_public_secret_judge_relations(self, tribe: dict, record: dict) -> list:
+        parts = []
+        for judge_record in tribe.get("common_judge_records", []) or []:
+            if not isinstance(judge_record, dict) or judge_record.get("sourceCaseId") != record.get("id"):
+                continue
+            judge_id = judge_record.get("judgeTribeId")
+            if not judge_id or judge_id == tribe.get("id"):
+                continue
+            relation = tribe.setdefault("boundary_relations", {}).setdefault(judge_id, {})
+            relation["tradeTrust"] = min(10, int(relation.get("tradeTrust", 0) or 0) + 1)
+            relation["lastAction"] = "public_secret_reveal_judged"
+            relation["lastActionAt"] = datetime.now().isoformat()
+            parts.append(f"{judge_record.get('judgeTribeName', '中立部落')}信任+1")
+            break
+        return parts
+
+    def _refresh_public_secret_reveals(self, tribe: dict):
+        if not tribe:
+            return
+        now = datetime.now()
+        changed = False
+        for record in tribe.get("public_secret_records", []) or []:
+            if not isinstance(record, dict) or record.get("revealStatus") == "revealed":
+                continue
+            ready_at = record.get("revealReadyAt")
+            if not ready_at:
+                continue
+            try:
+                if datetime.fromisoformat(ready_at) > now:
+                    continue
+            except (TypeError, ValueError):
+                continue
+            outcome = TRIBE_PUBLIC_SECRET_REVEAL_OUTCOMES.get(record.get("actionKey"), {})
+            reward_parts = self._apply_public_secret_reward(tribe, outcome.get("reward") or {})
+            if outcome.get("evidenceChain"):
+                record["evidenceChainReady"] = True
+                reward_parts.extend(self._apply_public_secret_judge_relations(tribe, record))
+            if outcome.get("storyHook"):
+                record["storyHookReady"] = True
+                if hasattr(self, "_record_oral_map_context_reference"):
+                    oral_reference, oral_lineage = self._record_oral_map_context_reference(
+                        tribe,
+                        "rumor_truth",
+                        record.get("title", "公共秘密揭晓"),
+                        record.get("memberName", "讲述者"),
+                        "公共秘密揭晓"
+                    )
+                    if oral_reference:
+                        record["oralMapReference"] = oral_reference
+                    if oral_lineage:
+                        record["oralMapLineage"] = oral_lineage
+            followup = self._create_public_secret_followup(tribe, record, outcome, now)
+            record["revealStatus"] = "revealed"
+            record["revealedAt"] = now.isoformat()
+            record["revealLabel"] = outcome.get("label", "秘密揭晓")
+            record["revealSummary"] = outcome.get("summary", "秘密的后续说法逐渐浮出水面。")
+            record["revealTone"] = outcome.get("rumorTone", "")
+            record["revealRewardParts"] = reward_parts
+            if followup:
+                record["followupLabel"] = followup.get("label")
+            detail = f"“{record.get('title', '未揭晓秘密')}”后续揭晓为{record['revealLabel']}。"
+            if reward_parts:
+                detail += f" {'、'.join(reward_parts)}。"
+            self._add_tribe_history(tribe, "world_event", "公共秘密揭晓", detail, "", {"kind": "public_secret_reveal", "record": record})
+            self._append_public_secret_world_rumor(tribe, record, outcome)
+            changed = True
+        if changed and hasattr(self, "_save_tribe_state"):
+            self._save_tribe_state()
 
     def _maybe_create_public_secret(self, tribe: dict, source_key: str, source_label: str, summary: str, x: float, z: float, source_id: str, actor_name: str = "") -> dict | None:
         if not tribe or source_key not in TRIBE_PUBLIC_SECRET_SOURCES:
@@ -148,6 +277,8 @@ class GamePublicSecretMixin:
             "rewardParts": reward_parts,
             "judgeReady": bool(action.get("judgeReady")),
             "storyReady": bool(action.get("storyReady")),
+            "revealStatus": "pending",
+            "revealReadyAt": self._public_secret_reveal_ready_at(now),
             "createdAt": now.isoformat()
         }
         secret["status"] = "handled"

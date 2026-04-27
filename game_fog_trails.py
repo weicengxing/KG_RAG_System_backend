@@ -136,6 +136,9 @@ class GameFogTrailMixin:
         if hasattr(self, "_forbidden_edge_route_proof_context_support"):
             _, route_labels, _, _ = self._forbidden_edge_route_proof_context_support(tribe, "fog_trail")
             labels.extend(route_labels)
+        if hasattr(self, "_newcomer_fate_context_support"):
+            _, newcomer_labels = self._newcomer_fate_context_support(tribe, "exploration")
+            labels.extend(newcomer_labels)
         if tribe.get("world_riddle_records"):
             labels.append("谜语旧读")
         return labels[-4:]
@@ -189,6 +192,11 @@ class GameFogTrailMixin:
         if wood_cost:
             reward_parts.insert(0, f"木材-{wood_cost}")
         support_labels = self._fog_trail_support_labels(tribe, action_key)
+        newcomer_influence = self._consume_newcomer_fate_influence(tribe, "exploration") if hasattr(self, "_consume_newcomer_fate_influence") else None
+        if newcomer_influence:
+            bonus = max(1, int(newcomer_influence.get("bonus", 1) or 1))
+            tribe["discovery_progress"] = int(tribe.get("discovery_progress", 0) or 0) + bonus
+            reward_parts.append(f"{newcomer_influence.get('label', '新人关键')}发现+{bonus}")
         route_proof_reference = None
         route_proof_guardian = None
         if hasattr(self, "_record_forbidden_edge_route_proof_reference"):
@@ -241,6 +249,7 @@ class GameFogTrailMixin:
             "actionLabel": action.get("label", "雾区探路"),
             "supportLabels": support_labels,
             "rewardParts": reward_parts,
+            "newcomerFateInfluence": newcomer_influence,
             "mapMemoryId": memory.get("id") if memory else "",
             "routeProofReference": route_proof_reference,
             "routeProofGuardian": route_proof_guardian,
@@ -269,6 +278,8 @@ class GameFogTrailMixin:
             detail += f" 同时引用{route_proof_reference.get('label', '禁地路证')}辨清雾路。"
         if route_proof_guardian:
             detail += f" {route_proof_guardian.get('memberName', member_name)}获得短时“路证守护者”称号。"
+        if newcomer_influence:
+            detail += f" 新人的线索被用来辨清雾路。"
         self._add_tribe_history(tribe, "exploration", "雾区探路", detail, player_id, {"kind": "fog_trail", "record": record, "trail": trail})
         await self._notify_tribe(tribe_id, detail)
         await self._publish_world_rumor(

@@ -208,12 +208,27 @@ class GameMentorshipMixin:
             )
             if oral_reference:
                 reward_parts.append(f"引用{oral_reference.get('actionLabel', '口述地图')}")
+        route_proof_reference = None
+        route_proof_guardian = None
+        if session.get("focusKey") in {"trail", "cave", "gather"} and hasattr(self, "_record_forbidden_edge_route_proof_reference"):
+            route_proof_reference, route_proof_guardian = self._record_forbidden_edge_route_proof_reference(
+                tribe,
+                "mentorship",
+                session.get("focusLabel", "传承导师"),
+                member.get("name", session.get("mentorName", "导师")),
+                "导师结课"
+            )
+            if route_proof_reference:
+                tribe["discovery_progress"] = int(tribe.get("discovery_progress", 0) or 0) + 1
+                reward_parts.append("路证课程+1")
         session["status"] = "completed"
         session["completedAt"] = datetime.now().isoformat()
         session["completedBy"] = player_id
         session["rewardParts"] = reward_parts
         session["oralMapReference"] = oral_reference
         session["oralMapLineage"] = oral_lineage
+        session["routeProofReference"] = route_proof_reference
+        session["routeProofGuardian"] = route_proof_guardian
         tribe.setdefault("mentorship_history", []).append(session)
         tribe["mentorship_history"] = tribe["mentorship_history"][-TRIBE_MENTORSHIP_HISTORY_LIMIT:]
 
@@ -221,6 +236,10 @@ class GameMentorshipMixin:
         detail = f"{member.get('name', session.get('mentorName', '导师'))} 收束“{session.get('focusLabel', '传承课')}”，{student_names}完成拜师。{'、'.join(reward_parts) or '师徒故事写入部落历史'}。"
         if oral_reference and oral_reference.get("narratorTitle"):
             detail += f" {oral_reference['narratorTitle'].get('memberName', '成员')}获得短时“讲路师”称号。"
+        if route_proof_reference:
+            detail += f" 课程引用{route_proof_reference.get('label', '禁地路证')}来源链。"
+        if route_proof_guardian:
+            detail += f" {route_proof_guardian.get('memberName', '成员')}获得短时“路证守护者”称号。"
         old_song_adoption = None
         if hasattr(self, "_schedule_old_song_adoption"):
             old_song_adoption = self._schedule_old_song_adoption(
