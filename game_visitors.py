@@ -135,8 +135,12 @@ class GameVisitorMixin:
             if self._active_nomad_visitors(tribe):
                 continue
             chance = TRIBE_NOMAD_VISITOR_CHANCE + min(0.18, max(0, int(tribe.get("trade_reputation", 0) or 0)) * 0.02)
+            if hasattr(self, "_traveler_song_visitor_bonus"):
+                chance += self._traveler_song_visitor_bonus(tribe)
             if self._weather_rng.random() > chance:
                 continue
+            if hasattr(self, "_mark_traveler_song_visitor_hint_used"):
+                self._mark_traveler_song_visitor_hint_used(tribe, "下一次来访")
             visitor = self._build_nomad_visitor(tribe, now)
             tribe.setdefault("nomad_visitors", []).append(visitor)
             tribe["nomad_visitors"] = tribe["nomad_visitors"][-TRIBE_NOMAD_VISITOR_LIMIT:]
@@ -258,6 +262,15 @@ class GameVisitorMixin:
         }
         tribe.setdefault("nomad_visitor_aftereffects", []).append(aftereffect)
         tribe["nomad_visitor_aftereffects"] = tribe["nomad_visitor_aftereffects"][-TRIBE_NOMAD_VISITOR_AFTEREFFECT_LIMIT:]
+        song = None
+        if hasattr(self, "_schedule_traveler_song"):
+            song = self._schedule_traveler_song(
+                tribe,
+                "visitor",
+                visitor.get("id", visitor_id),
+                visitor.get("label", "神秘旅人"),
+                f"{visitor.get('label', '旅人')}离开后，营地里开始流传关于{action.get('afterLabel', '口信')}的短歌。"
+            )
         if hasattr(self, "_schedule_far_reply"):
             self._schedule_far_reply(
                 tribe,
@@ -281,7 +294,9 @@ class GameVisitorMixin:
             )
             reward_parts.append("开启神话解释权")
         detail = f"{member.get('name', '成员')} 对{visitor.get('label', '神秘旅人')}选择“{action.get('label', '接待')}”：{'、'.join(reward_parts) or '留下口信'}。"
-        self._add_tribe_history(tribe, "trade", "接待边缘来访者", detail, player_id, {"kind": "nomad_visitor", "visitor": visitor, "actionKey": action_key, "aftereffect": aftereffect})
+        if song:
+            detail += f" 营地里出现了“{song.get('label', '旅人谣曲')}”。"
+        self._add_tribe_history(tribe, "trade", "接待边缘来访者", detail, player_id, {"kind": "nomad_visitor", "visitor": visitor, "actionKey": action_key, "aftereffect": aftereffect, "travelerSong": song})
         await self._publish_world_rumor(
             "trade",
             "边缘来访者",

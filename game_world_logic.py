@@ -469,6 +469,10 @@ class GameWorldLogicMixin:
                 decorations.extend(self._active_map_memories(tribe))
             if hasattr(self, "_active_world_riddles"):
                 decorations.extend(self._active_world_riddles(tribe))
+            if hasattr(self, "_active_trial_grounds"):
+                decorations.extend(self._active_trial_grounds(tribe))
+            if hasattr(self, "_active_forbidden_edges"):
+                decorations.extend(self._active_forbidden_edges(tribe))
             if hasattr(self, "_active_cave_races"):
                 for race in self._active_cave_races(tribe):
                     race_marker = dict(race)
@@ -819,6 +823,23 @@ class GameWorldLogicMixin:
                     "claimedAt": site.get("createdAt"),
                     "activeUntil": site.get("activeUntil")
                 })
+            if hasattr(self, "_active_border_theaters"):
+                for theater in self._active_border_theaters(tribe):
+                    landmarks.append({
+                        "id": theater.get("id"),
+                        "tribeId": tribe_id,
+                        "label": theater.get("label", "边境戏台"),
+                        "x": theater.get("x", 0),
+                        "z": theater.get("z", 0),
+                        "type": "border_theater",
+                        "summary": theater.get("summary"),
+                        "sourceLabel": theater.get("sourceLabel"),
+                        "score": int(theater.get("score", 0) or 0),
+                        "target": int(theater.get("target", TRIBE_BORDER_THEATER_TARGET) or TRIBE_BORDER_THEATER_TARGET),
+                        "participantCount": len(theater.get("participants", []) or []),
+                        "claimedAt": theater.get("createdAt"),
+                        "activeUntil": theater.get("activeUntil")
+                    })
             for remnant in self._active_world_event_remnants(tribe):
                 landmarks.append({
                     "id": remnant.get("id"),
@@ -903,6 +924,35 @@ class GameWorldLogicMixin:
                         "claimedAt": riddle.get("createdAt"),
                         "activeUntil": riddle.get("activeUntil")
                     })
+            if hasattr(self, "_active_trial_grounds"):
+                for trial in self._active_trial_grounds(tribe):
+                    landmarks.append({
+                        "id": trial.get("id"),
+                        "tribeId": tribe_id,
+                        "label": trial.get("label", "营地试炼场"),
+                        "x": trial.get("x", 0),
+                        "z": trial.get("z", 0),
+                        "type": "trial_ground",
+                        "summary": trial.get("summary"),
+                        "participantCount": len(trial.get("participants", []) or []),
+                        "claimedAt": trial.get("createdAt"),
+                        "activeUntil": trial.get("activeUntil")
+                    })
+            if hasattr(self, "_active_forbidden_edges"):
+                for edge in self._active_forbidden_edges(tribe):
+                    landmarks.append({
+                        "id": edge.get("id"),
+                        "tribeId": tribe_id,
+                        "label": edge.get("label", "禁地边缘"),
+                        "x": edge.get("x", 0),
+                        "z": edge.get("z", 0),
+                        "type": "forbidden_edge",
+                        "summary": edge.get("summary"),
+                        "participantCount": len(edge.get("participants", []) or []),
+                        "lastOutcome": edge.get("lastOutcome"),
+                        "claimedAt": edge.get("createdAt"),
+                        "activeUntil": edge.get("activeUntil")
+                    })
             if hasattr(self, "_active_old_camp_echoes"):
                 for echo in self._active_old_camp_echoes(tribe):
                     landmarks.append({
@@ -936,8 +986,29 @@ class GameWorldLogicMixin:
                         "missingMemberName": rescue.get("missingMemberName"),
                         "progress": int(rescue.get("progress", 0) or 0),
                         "target": int(rescue.get("target", 0) or 0),
+                        "methodLabels": [
+                            step.get("methodLabel", "营救")
+                            for step in (rescue.get("steps", []) or [])[-3:]
+                            if isinstance(step, dict)
+                        ],
                         "claimedAt": race.get("createdAt"),
                         "activeUntil": race.get("activeUntil")
+                    })
+            if hasattr(self, "_active_cave_return_marks"):
+                for mark in self._active_cave_return_marks(tribe):
+                    landmarks.append({
+                        "id": mark.get("id"),
+                        "tribeId": tribe_id,
+                        "label": mark.get("label", "洞穴归路标记"),
+                        "x": mark.get("x", 0),
+                        "z": mark.get("z", 0),
+                        "type": "cave_return_mark",
+                        "summary": mark.get("summary"),
+                        "caveLabel": mark.get("caveLabel"),
+                        "methodLabel": mark.get("methodLabel"),
+                        "progress": int(mark.get("progress", 0) or 0),
+                        "target": int(mark.get("target", 0) or 0),
+                        "activeUntil": mark.get("activeUntil")
                     })
             if hasattr(self, "_active_trail_markers"):
                 for marker in self._active_trail_markers(tribe):
@@ -1153,6 +1224,8 @@ class GameWorldLogicMixin:
                 event_pool.extend([herd_event] * max(0, MIGRATION_SEASON_HERD_WEIGHT - 1))
         if hasattr(self, "_apply_dream_omen_world_event_bias"):
             event_pool = self._apply_dream_omen_world_event_bias(event_pool)
+        if hasattr(self, "_apply_ancestor_question_world_event_bias"):
+            event_pool = self._apply_ancestor_question_world_event_bias(event_pool)
         event = self._weather_rng.choice(event_pool)
         region = self._weather_rng.choice(WORLD_REGIONS)
         return self._build_world_event(event, region)

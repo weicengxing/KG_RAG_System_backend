@@ -76,6 +76,10 @@ class GameRumorTruthMixin:
         return self._active_rumor_truth_hints(tribe)
 
     def _rumor_truth_source(self, tribe: dict) -> dict | None:
+        if hasattr(self, "_traveler_song_tune_sources"):
+            song_sources = self._traveler_song_tune_sources(tribe)
+            if song_sources:
+                return song_sources[-1]
         if self.world_rumors:
             rumor = self.world_rumors[-1]
             return {

@@ -1661,6 +1661,9 @@ class GameConflictMixin:
         old_relation["score"] = max(-9, int(old_relation.get("score", 0) or 0) - 3)
         old_relation["lastAction"] = "formal_war_betrayed"
         old_relation["lastActionAt"] = now_text
+        if hasattr(self, "_wake_old_grudge_after_pressure"):
+            self._wake_old_grudge_after_pressure(supporter, old_side_id, "战争背刺")
+            self._wake_old_grudge_after_pressure(old_side, supporter.get("id"), "战争背刺")
         betrayal_record = {
             "id": f"war_betrayal_{war_id}_{supporter.get('id')}_{old_side_id}_{int(datetime.now().timestamp() * 1000)}",
             "kind": "betrayal",
@@ -2291,6 +2294,8 @@ class GameConflictMixin:
         now_text = datetime.now().isoformat()
         relation["lastAction"] = f"formal_war_ally_{kind}"
         relation["lastActionAt"] = now_text
+        if war_pressure and hasattr(self, "_wake_old_grudge_after_pressure"):
+            self._wake_old_grudge_after_pressure(tribe, other_tribe_id, task.get("title", "战盟追责"))
         task["status"] = "completed"
         task["completedBy"] = player_id
         task["completedAt"] = now_text

@@ -200,11 +200,23 @@ class GameFarReturnMixin:
         }
         tribe.setdefault("far_reply_records", []).append(record)
         tribe["far_reply_records"] = tribe["far_reply_records"][-TRIBE_FAR_REPLY_RECENT_LIMIT:]
+        song = None
+        if hasattr(self, "_schedule_traveler_song"):
+            song = self._schedule_traveler_song(
+                tribe,
+                "far_reply",
+                reply_id,
+                task.get("outcomeLabel", "远方回信"),
+                f"{task.get('sourceLabel', '远方')}的回信被火边的人唱成短句，可能改变下一次传闻口风。",
+                task.get("otherTribeId", "")
+            )
+            if song:
+                reward_parts.append("旅人谣曲+1")
         detail = (
             f"{member_name} 回应了“{task.get('outcomeLabel', '远方回信')}”，"
             f"选择“{action.get('label', '回应')}”：{'、'.join(reward_parts) or '远方口信被记入营地'}。"
         )
-        self._add_tribe_history(tribe, "trade", "远方回信", detail, player_id, {"kind": "far_reply", "record": record, "task": task})
+        self._add_tribe_history(tribe, "trade", "远方回信", detail, player_id, {"kind": "far_reply", "record": record, "task": task, "travelerSong": song})
         await self._publish_world_rumor(
             "trade",
             "远方回信",

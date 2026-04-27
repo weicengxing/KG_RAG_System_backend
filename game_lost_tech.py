@@ -59,15 +59,15 @@ class GameLostTechMixin:
         return True
 
     def _public_lost_tech_sources(self, tribe: dict) -> list:
-        return [
-            {
+        return {
+            key: {
                 "key": key,
                 "label": source.get("label", key),
                 "summary": source.get("summary", ""),
                 "available": self._lost_tech_source_available(tribe, key)
             }
             for key, source in TRIBE_LOST_TECH_SOURCES.items()
-        ]
+        }
 
     def _public_lost_tech_state(self, tribe: dict) -> dict:
         fragments = self._lost_tech_fragments(tribe)

@@ -123,6 +123,51 @@ class GameCollectionWallMixin:
             if item:
                 candidates.append(item)
 
+        for record in reversed(tribe.get("forbidden_edge_records", []) or []):
+            if not isinstance(record, dict) or not record.get("collectionReady"):
+                continue
+            item = self._collection_candidate(
+                tribe,
+                "forbidden_edge",
+                record.get("id", ""),
+                record.get("label", "禁地边缘旧物"),
+                f"{record.get('memberName', '成员')} 用{record.get('actionLabel', '试探')}从禁地边缘带回旧物，仍带着高风险边缘的痕迹。",
+                "禁地边缘",
+                {"rewardParts": record.get("rewardParts", []), "memberName": record.get("memberName", "")}
+            )
+            if item:
+                candidates.append(item)
+
+        for record in reversed(tribe.get("cave_rescue_records", []) or []):
+            if not isinstance(record, dict) or not record.get("collectionReady"):
+                continue
+            item = self._collection_candidate(
+                tribe,
+                "cave_rescue",
+                record.get("id", ""),
+                record.get("label", "洞穴营救旧物"),
+                record.get("summary") or f"{record.get('methodLabel', '营救方式')}后留下的洞口旧物可以挂上收藏墙。",
+                "洞穴营救",
+                {"rewardParts": record.get("rewardParts", []), "memberName": record.get("memberName", ""), "methodLabel": record.get("methodLabel", "")}
+            )
+            if item:
+                candidates.append(item)
+
+        for record in reversed(tribe.get("cave_return_records", []) or []):
+            if not isinstance(record, dict) or not record.get("collectionReady"):
+                continue
+            item = self._collection_candidate(
+                tribe,
+                "cave_return",
+                record.get("id", ""),
+                record.get("label", "洞穴归路刻痕"),
+                record.get("summary") or "整理后的洞穴归路刻痕可以挂上收藏墙。",
+                "洞穴归路",
+                {"rewardParts": record.get("rewardParts", []), "helperNames": record.get("helperNames", [])}
+            )
+            if item:
+                candidates.append(item)
+
         for echo_item in reversed(tribe.get("echo_items", []) or []):
             if not isinstance(echo_item, dict) or len(echo_item.get("memories", []) or []) < 2:
                 continue

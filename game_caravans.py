@@ -140,8 +140,20 @@ class GameCaravanMixin:
             reward_bits.append(f"信任+{trust_delta}")
         if pact_created:
             reward_bits.append(f"互市约定{TRIBE_MARKET_PACT_MINUTES}分钟")
+        song = None
+        if hasattr(self, "_schedule_traveler_song"):
+            song = self._schedule_traveler_song(
+                tribe,
+                "caravan",
+                route_id,
+                route.get("label", "游牧商队"),
+                f"游牧商队带着{route.get('focusLabel', '中立货物')}离开后，边市旁留下可传唱的短句。",
+                other_tribe_id
+            )
+        if song:
+            reward_bits.append("旅人谣曲+1")
         detail = f"{member.get('name', '成员')} 对游牧商队选择“{action.get('label', '商队行动')}”：{'、'.join(reward_bits) or '商队记住了这处边市'}。"
-        self._add_tribe_history(tribe, "trade", "游牧商队", detail, player_id, {"kind": "nomad_caravan", "routeId": route_id, "actionKey": action_key, "marketPact": pact_created})
+        self._add_tribe_history(tribe, "trade", "游牧商队", detail, player_id, {"kind": "nomad_caravan", "routeId": route_id, "actionKey": action_key, "marketPact": pact_created, "travelerSong": song})
         if pact_created and other_tribe:
             other_detail = f"{tribe.get('name', '部落')} 借游牧商队停靠，与本部落续上新的互市约定。"
             self._add_tribe_history(other_tribe, "trade", "商队互市约定", other_detail, player_id, {"kind": "nomad_caravan_pact", "otherTribeId": tribe_id})
