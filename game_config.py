@@ -12,11 +12,58 @@ PLAYER_CONFLICT_COOLDOWN_SECONDS = 45
 PLAYER_CONFLICT_FATIGUE_MAX = 6
 PLAYER_CONFLICT_FATIGUE_DECAY_SECONDS = 180
 PLAYER_CONFLICT_GUARD_SECONDS = 60
+PLAYER_CONFLICT_GUARD_RADIUS = 6
+PLAYER_CONFLICT_SPARRING_RENOWN = 1
+PLAYER_CONFLICT_INSPIRE_MIN_RENOWN = 5
+PLAYER_CONFLICT_INSPIRE_SECONDS = 180
+PLAYER_CONFLICT_INSPIRE_CONTRIBUTION = 1
+PLAYER_RENOWN_TITLES = [
+    {"min": 12, "title": "守边名手", "summary": "在守边和集结中更容易带动同伴。", "guardRadiusBonus": 3, "sparTrainingBonus": 1, "fatigueRecoveryBonusSeconds": 90, "skirmishContributionBonus": 1},
+    {"min": 7, "title": "营火勇名", "summary": "附近成员愿意听从他的短促号令。", "guardRadiusBonus": 2, "sparTrainingBonus": 1, "fatigueRecoveryBonusSeconds": 60, "skirmishContributionBonus": 1},
+    {"min": 3, "title": "初露锋芒", "summary": "个人冲突记录开始被部落记住。", "guardRadiusBonus": 1, "sparTrainingBonus": 0, "fatigueRecoveryBonusSeconds": 30, "skirmishContributionBonus": 0},
+    {"min": 0, "title": "无名成员", "summary": "还没有稳定的个人名声。", "guardRadiusBonus": 0, "sparTrainingBonus": 0, "fatigueRecoveryBonusSeconds": 0, "skirmishContributionBonus": 0}
+]
+PLAYER_IDENTITY_MIN_RENOWN = 3
+PLAYER_IDENTITY_ACTION_COOLDOWN_SECONDS = 300
+PLAYER_IDENTITY_OPTIONS = {
+    "fire_dancer": {
+        "label": "火舞者",
+        "actionLabel": "火舞鼓舞",
+        "summary": "用火舞提振营地气势，带来少量部落声望和个人声望。",
+        "renown": 2,
+        "personalRenown": 1
+    },
+    "pathfinder": {
+        "label": "寻路者",
+        "actionLabel": "标记捷径",
+        "summary": "记录一条短路，让探索线索更快汇入部落记忆。",
+        "discoveryProgress": 1,
+        "renown": 1
+    },
+    "mason": {
+        "label": "石匠",
+        "actionLabel": "整修石器",
+        "summary": "整理石木工具，略微降低一个战后修复或复兴任务的消耗。",
+        "wood": 2,
+        "stone": 2,
+        "taskDiscount": 1,
+        "renown": 1
+    },
+    "storyteller": {
+        "label": "讲述者",
+        "actionLabel": "复述旧事",
+        "summary": "把最近的部落历史讲给营火旁的人听，强化历史回放奖励。",
+        "renown": 3,
+        "personalRenown": 1,
+        "requiresHistory": 1
+    }
+}
 PLAYER_CONFLICT_ACTIONS = {
     "intimidate": {"label": "威慑", "summary": "靠近对方发出警告，提升个人声望并轻微影响部落关系。", "renown": 1, "fatigue": 1, "relationDelta": -1},
     "challenge": {"label": "挑战", "summary": "进行一次短促的近身冲突，胜负只造成疲劳和击退，不造成死亡。", "renown": 2, "fatigue": 2, "relationDelta": -2, "knockback": 2.4},
-    "spar": {"label": "切磋", "summary": "同部落成员之间的练习冲突，只留下少量疲劳和个人声望。", "renown": 1, "fatigue": 1, "sameTribeOnly": True, "relationDelta": 0, "knockback": 1.0},
-    "guard": {"label": "守势", "summary": "对靠近的目标摆出防备姿态，短时间内降低下一次个人冲突造成的疲劳。", "guard": True}
+    "spar": {"label": "切磋", "summary": "同部落成员之间的练习冲突，只留下少量疲劳和个人声望。", "renown": 1, "fatigue": 1, "sameTribeOnly": True, "relationDelta": 0, "knockback": 1.0, "trainingRenown": PLAYER_CONFLICT_SPARRING_RENOWN},
+    "inspire": {"label": "鼓舞", "summary": "高个人声望成员可鼓舞附近同部落成员，使其下一次小规模集结贡献提高。", "sameTribeOnly": True, "inspire": True},
+    "guard": {"label": "守势", "summary": "对靠近的目标摆出防备姿态，短时间内降低下一次个人冲突造成的疲劳，也能保护附近同部落成员。", "guard": True}
 }
 TRIBE_SKIRMISH_ACTIVE_MINUTES = 8
 TRIBE_SKIRMISH_SCORE_TARGET = 4
@@ -146,6 +193,13 @@ TRIBE_BOUNDARY_OUTCOME_LIMIT = 4
 TRIBE_BOUNDARY_PRESSURE_MINUTES = 12
 TRIBE_BOUNDARY_TRUCE_MINUTES = 10
 TRIBE_BOUNDARY_HOSTILE_FOOD_COST = 2
+TRIBE_BOUNDARY_FOLLOWUP_LIMIT = 6
+TRIBE_BOUNDARY_PRESSURE_AFTERMATH_RENOWN = 3
+TRIBE_BOUNDARY_PRESSURE_AFTERMATH_WOOD_COST = 2
+TRIBE_BOUNDARY_TRUCE_TALK_FOOD_REWARD = 5
+TRIBE_BOUNDARY_TRUCE_TALK_TRADE_REWARD = 1
+TRIBE_BOUNDARY_HOSTILE_WEAR_FOOD_LOSS = 2
+TRIBE_BOUNDARY_HOSTILE_WEAR_WOOD_LOSS = 2
 TRIBE_OATH_TASK_STREAK_TARGET = 3
 TRIBE_SCOUT_FOOD_COST = 4
 TRIBE_SCOUT_EVENT_COUNT = 2
@@ -164,6 +218,81 @@ TRIBE_CONTROLLED_SITE_PATROL_COOLDOWN_SECONDS = 240
 TRIBE_CONTROLLED_SITE_PATROL_EXTEND_MINUTES = 5
 TRIBE_CONTROLLED_SITE_RELAY_COOLDOWN_SECONDS = 300
 TRIBE_CONTROLLED_SITE_RELAY_EXTEND_MINUTES = 4
+TRIBE_TRADE_ROUTE_SITE_LIMIT = 3
+TRIBE_TRADE_ROUTE_SITE_ACTIVE_MINUTES = 18
+TRIBE_TRADE_ROUTE_SITE_COLLECT_COOLDOWN_SECONDS = 360
+TRIBE_TRADE_ROUTE_MARKET_COLLECTS = 3
+TRIBE_TRADE_ROUTE_MARKET_MINUTES = 10
+TRIBE_TRADE_ROUTE_MARKET_RENOWN = 2
+TRIBE_TRADE_ROUTE_MARKET_TRADE = 2
+TRIBE_TRADE_ROUTE_MARKET_FOOD = 3
+TRIBE_MARKET_PACT_MINUTES = 30
+TRIBE_MARKET_PACT_LIMIT = 5
+TRIBE_MARKET_PACT_CHANCE_BASE = 0.55
+TRIBE_MARKET_PACT_TRUST_BONUS = 0.03
+TRIBE_MARKET_PACT_RELATION_BONUS = 0.02
+TRIBE_MARKET_PACT_TRADE_DISCOUNT = 1
+TRIBE_MARKET_PACT_TRADE_REPUTATION_BONUS = 1
+TRIBE_MARKET_PACT_JOINT_WATCH_TRADE_TRUST = 1
+TRIBE_MARKET_PACT_CONTEST_RELIEF = 1
+TRIBE_DIPLOMACY_COUNCIL_SIGNAL_TARGET = 2
+TRIBE_DIPLOMACY_COUNCIL_MINUTES = 18
+TRIBE_DIPLOMACY_COUNCIL_LIMIT = 3
+TRIBE_DIPLOMACY_COUNCIL_ACTIONS = {
+    "peace": {
+        "label": "停战议和",
+        "summary": "把多条停争与互市信号摆到同一处火圈里，公开压低战争压力。",
+        "foodCost": 3,
+        "renown": 4,
+        "relationDelta": 2,
+        "tradeTrustDelta": 1,
+        "warPressureRelief": 2
+    },
+    "shared_cave": {
+        "label": "共享洞口",
+        "summary": "约定共同记录洞口与遗迹线索，各方获得发现进度并提升信任。",
+        "foodCost": 2,
+        "renown": 3,
+        "discoveryProgress": 1,
+        "tradeTrustDelta": 2
+    },
+    "seal_market": {
+        "label": "封锁边市",
+        "summary": "公开收拢边市信物，暂停不稳定互市，换取声望与边界降温。",
+        "foodCost": 1,
+        "renown": 5,
+        "tradeReputation": 1,
+        "relationDelta": -1,
+        "tradeTrustDelta": -1,
+        "warPressureRelief": 1,
+        "closeMarketPacts": True
+    }
+}
+PLAYER_NEWCOMER_KEY_RENOWN_MAX = 2
+TRIBE_NEWCOMER_KEY_CONTRIBUTION_MAX = 5
+TRIBE_NEWCOMER_KEY_MIN_DONATION = 2
+TRIBE_NEWCOMER_KEY_RENOWN = 1
+TRIBE_NEWCOMER_KEY_MOMENTS = [
+    {
+        "key": "first_find",
+        "label": "第一发现",
+        "summary": "新人把不起眼的石痕认成旧路标，部落发现进度上升。",
+        "discoveryProgress": 1
+    },
+    {
+        "key": "child_omen",
+        "label": "童言预兆",
+        "summary": "新人把路上的风声讲给营火旁的人听，部落声望上升。",
+        "renown": 2
+    },
+    {
+        "key": "lost_shortcut",
+        "label": "误入捷径",
+        "summary": "新人误打误撞走到一条近路，顺手带回额外木石。",
+        "wood": 1,
+        "stone": 1
+    }
+]
 TRIBE_ORAL_EPIC_RENOWN_BONUS = 7
 TRIBE_ORAL_EPIC_MIN_HISTORY = 3
 TRIBE_OATH_RENOWN_BONUS = 5
@@ -172,6 +301,65 @@ TRIBE_SCOUT_SITE_REWARDS = {
     "region_mountain": {"stone": 12, "renown": 2, "label": "山脚石料点"},
     "region_coast": {"food": 12, "renown": 2, "label": "潮岸食物点"},
     "region_ruin": {"discoveryProgress": 2, "renown": 3, "label": "旧迹线索点"}
+}
+TRIBE_REGION_BUILDING_BONUSES = {
+    "region_forest": {
+        "buildingKey": "woodland_rack",
+        "label": "林地晾架",
+        "secure": {"wood": 4},
+        "yield": {"wood": 2},
+        "summary": "林地侦察点确认和控制点收取额外带回木材。"
+    },
+    "region_mountain": {
+        "buildingKey": "quarry_pit",
+        "label": "山地采石坑",
+        "secure": {"stone": 4},
+        "yield": {"stone": 2},
+        "summary": "山地侦察点确认和控制点收取额外带回石块。"
+    },
+    "region_coast": {
+        "buildingKey": "fish_drying_rack",
+        "label": "潮岸晒鱼架",
+        "secure": {"food": 4},
+        "yield": {"food": 2},
+        "summary": "海岸侦察点确认和控制点收取额外带回食物。"
+    },
+    "region_ruin": {
+        "buildingKey": "memory_stone",
+        "label": "旧石记忆碑",
+        "secure": {"discoveryProgress": 1, "renown": 2},
+        "yield": {"discoveryProgress": 1},
+        "summary": "遗迹侦察点确认额外获得声望和发现进度，控制点收取额外推进发现。"
+    }
+}
+TRIBE_REGION_EVENT_BONUSES = {
+    "woodland_rack": {
+        "label": "林地晾架",
+        "summary": "长期敌意损耗少掉1点木材，处理风暴/兽群世界事件时额外带回1点木材。",
+        "hostileWearWoodRelief": 1,
+        "worldEventKeys": ["storm", "herd"],
+        "worldEventReward": {"wood": 1}
+    },
+    "quarry_pit": {
+        "label": "山地采石坑",
+        "summary": "战后修复少消耗1点石块，处理风暴世界事件时额外带回1点石块。",
+        "warRepairStoneDiscount": 1,
+        "worldEventKeys": ["storm"],
+        "worldEventReward": {"stone": 1}
+    },
+    "fish_drying_rack": {
+        "label": "潮岸晒鱼架",
+        "summary": "停争谈判额外回收2点食物，处理兽群世界事件时额外带回2点食物。",
+        "truceTalkFoodBonus": 2,
+        "worldEventKeys": ["herd"],
+        "worldEventReward": {"food": 2}
+    },
+    "memory_stone": {
+        "label": "旧石记忆碑",
+        "summary": "遗迹线索和稀有遗迹额外推进发现，并让遗迹余波更值得追。",
+        "worldEventKeys": ["ruin_clue", "rare_ruin"],
+        "worldEventReward": {"discoveryProgress": 1, "renown": 2}
+    }
 }
 TRIBE_OATHS = {
     "hearth": {"label": "守火誓约", "summary": "优先保护食物、营火和新成员。"},
@@ -259,6 +447,83 @@ TRIBE_HERD_ACTIONS = {
     "hunt": {"label": "追猎", "foodMultiplier": 1.45, "renownBonus": 0, "summary": "追猎兽群换取更多食物。"},
     "tame": {"label": "驯养", "foodMultiplier": 0.85, "renownBonus": 2, "tamedBeasts": 1, "summary": "尝试驯养幼兽，留下长期记录。"}
 }
+WORLD_EVENT_ACTIONS = {
+    "herd": {
+        **TRIBE_HERD_ACTIONS,
+        "coast_dry_fish": {
+            "label": "潮岸晒鱼",
+            "summary": "用潮岸晒鱼架快速处理兽群留下的肉获，食物和贸易信誉更高。",
+            "requires": {"building": "fish_drying_rack", "regionTypes": ["region_coast"]},
+            "reward": {"food": 8, "tradeReputation": 1},
+            "remnant": {
+                "key": "drying_yard",
+                "label": "晒鱼场余迹",
+                "summary": "潮风里还留着可整理的鱼干和盐草。",
+                "reward": {"food": 5, "tradeReputation": 1, "renown": 1}
+            },
+            "detail": "潮岸晒鱼架把兽群肉获变成了更耐放的边市食物。"
+        }
+    },
+    "storm": {
+        "forest_firebreak": {
+            "label": "林地救火",
+            "summary": "用林地晾架和防火空地保护护火木材，减少暴雨前后的木材损耗。",
+            "requires": {"building": "woodland_rack", "regionTypes": ["region_forest"]},
+            "reward": {"wood": 8, "renown": 2},
+            "remnant": {
+                "key": "firebreak",
+                "label": "防火带余迹",
+                "summary": "清出的防火带边缘还能收拢焦枝和干木。",
+                "reward": {"wood": 6, "renown": 1}
+            },
+            "detail": "林地晾架和清出的防火空地保住了一批护火木材。"
+        },
+        "mountain_channel": {
+            "label": "山地引渠",
+            "summary": "借山地采石坑引开水流，暴雨后带回更多石材。",
+            "requires": {"building": "quarry_pit", "regionTypes": ["region_mountain"]},
+            "reward": {"stone": 5, "renown": 2},
+            "remnant": {
+                "key": "water_channel",
+                "label": "引水沟余迹",
+                "summary": "浅沟里露出被水洗净的石片和少量山泉食材。",
+                "reward": {"stone": 5, "food": 3, "renown": 1}
+            },
+            "detail": "山地采石坑把雨水引入浅沟，冲出了更多可用石料。"
+        }
+    },
+    "ruin_clue": {
+        "ruin_rubbing": {
+            "label": "遗迹拓印",
+            "summary": "用旧石记忆碑校对刻痕拓片，更快拼合稀有遗迹线索。",
+            "requires": {"building": "memory_stone", "regionTypes": ["region_ruin"]},
+            "reward": {"discoveryProgress": 2, "renown": 3},
+            "ruinClueChainBonus": 1,
+            "remnant": {
+                "key": "rubbing_shard",
+                "label": "拓印石片",
+                "summary": "石片上还有未整理的刻痕，可补入部落发现记录。",
+                "reward": {"stone": 3, "discoveryProgress": 1, "renown": 2}
+            },
+            "detail": "旧石记忆碑帮助族人拓印刻痕，线索之间的关系清楚了许多。"
+        }
+    },
+    "rare_ruin": {
+        "ruin_rubbing": {
+            "label": "遗迹拓印",
+            "summary": "用旧石记忆碑完整拓下稀有遗迹片段，获得更多发现和声望。",
+            "requires": {"building": "memory_stone", "regionTypes": ["region_ruin"]},
+            "reward": {"discoveryProgress": 2, "renown": 6},
+            "remnant": {
+                "key": "rare_rubbing_shard",
+                "label": "稀有拓片余迹",
+                "summary": "显现后的石面仍残留可再次拓下的古老纹路。",
+                "reward": {"stone": 5, "discoveryProgress": 1, "renown": 4}
+            },
+            "detail": "旧石记忆碑让稀有遗迹的片段被完整拓下，成为部落可反复讲述的记忆。"
+        }
+    }
+}
 TRIBE_CAVE_FOOD_COST = 6
 TRIBE_CAVE_LOW_FOOD_FINDS_MULTIPLIER = 0.5
 TRIBE_CAVE_ROUTE_PLANS = {
@@ -288,6 +553,8 @@ MIGRATION_SEASON_HERD_WEIGHT = 4
 WORLD_EVENT_DURATION_MINUTES = 7
 WORLD_EVENT_RARE_RUIN_DURATION_MINUTES = 10
 WORLD_EVENT_RUIN_CHAIN_THRESHOLD = 3
+WORLD_EVENT_REMNANT_ACTIVE_MINUTES = 8
+WORLD_EVENT_REMNANT_LIMIT = 6
 SEASON_OBJECTIVE_DURATION_MINUTES = 12
 SEASON_CHAIN_TARGET = 3
 SEASON_CELEBRATION_RENOWN_BONUS = 14
@@ -335,6 +602,10 @@ TRIBE_CAMP_BUILDING_LAYOUT = [
     {"key": "hut_b", "type": "tribe_hut", "dx": 6.2, "dz": 4.5, "size": 0.95, "wood": 35, "stone": 15, "label": "棚屋二"},
     {"key": "fence_ring", "type": "tribe_fence", "dx": 0.0, "dz": 8.2, "size": 1.0, "wood": 48, "stone": 12, "label": "营地围栏"},
     {"key": "road_marker", "type": "tribe_road", "dx": 0.0, "dz": -9.2, "size": 1.0, "wood": 24, "stone": 18, "label": "营地道路"},
+    {"key": "woodland_rack", "type": "tribe_storage", "dx": -8.2, "dz": -5.4, "size": 0.75, "wood": 34, "stone": 10, "label": "林地晾架", "summary": "林地侦察和控制点额外产出木材。"},
+    {"key": "quarry_pit", "type": "tribe_workbench", "dx": 8.0, "dz": -5.0, "size": 0.75, "wood": 28, "stone": 26, "label": "山地采石坑", "summary": "山地侦察和控制点额外产出石块。"},
+    {"key": "fish_drying_rack", "type": "tribe_hut", "dx": -8.6, "dz": 7.0, "size": 0.72, "wood": 32, "stone": 12, "label": "潮岸晒鱼架", "summary": "海岸侦察和控制点额外产出食物。"},
+    {"key": "memory_stone", "type": "tribe_totem", "dx": 8.5, "dz": 7.2, "size": 0.72, "wood": 24, "stone": 34, "label": "旧石记忆碑", "summary": "遗迹侦察和控制点额外推进发现。"},
 ]
 TRIBE_TARGET_LIBRARY = [
     {

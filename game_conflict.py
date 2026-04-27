@@ -385,6 +385,9 @@ class GameConflictMixin:
                 "ownScore": int(scores.get(tribe_id, 0) or 0),
                 "otherScore": int(scores.get(conflict.get("otherTribeId"), 0) or 0),
                 "scoreTarget": int(conflict.get("scoreTarget", TRIBE_SKIRMISH_SCORE_TARGET) or TRIBE_SKIRMISH_SCORE_TARGET),
+                "warGoalKind": conflict.get("warGoalKind"),
+                "echoLabel": conflict.get("echoLabel"),
+                "echoContributionBonus": int(conflict.get("echoContributionBonus", 0) or 0),
                 "participants": list(conflict.get("participants", {}).values())[-8:],
                 "activeUntil": conflict.get("activeUntil"),
                 "createdAt": conflict.get("createdAt")
@@ -520,6 +523,24 @@ class GameConflictMixin:
             summary = f"围绕 {site_label} 的短时争夺已经开始，成员可报名参战。"
             own_target_id = outcome.get("siteId")
             other_target_id = outcome.get("otherSiteId") or outcome.get("contestSiteId")
+        elif outcome.get("kind") == "war_goal_echo":
+            echo_target_kind = outcome.get("targetKind") or "boundary_flag"
+            if echo_target_kind == "cave_entrance":
+                own_target = self._small_conflict_cave_target(tribe, other_tribe, outcome)
+                other_target = self._small_conflict_cave_target(other_tribe, tribe, outcome) if own_target else None
+            else:
+                own_target = self._small_conflict_boundary_target(tribe, other_tribe, outcome)
+                other_target = self._small_conflict_boundary_target(other_tribe, tribe, outcome)
+            if not own_target:
+                await self._send_tribe_error(player_id, "需要靠近可争夺的边境目标，才能引燃战争余震")
+                return
+            target_kind = echo_target_kind
+            title = outcome.get("echoLabel") or outcome.get("title") or "战争余波集结"
+            site_label = own_target.get("label") or outcome.get("title", "战争余波")
+            summary = outcome.get("summary") or f"{site_label} 的战后余波升级为短时集结。"
+            own_target_id = own_target.get("id")
+            other_target_id = (other_target or own_target).get("id")
+            outcome["targetId"] = own_target_id
         else:
             own_target = self._small_conflict_boundary_target(tribe, other_tribe, outcome)
             other_target = self._small_conflict_boundary_target(other_tribe, tribe, outcome)
@@ -555,7 +576,10 @@ class GameConflictMixin:
             "siteLabel": site_label,
             "title": title,
             "summary": summary,
-            "scoreTarget": TRIBE_SKIRMISH_SCORE_TARGET,
+            "scoreTarget": max(3, TRIBE_SKIRMISH_SCORE_TARGET - 1) if outcome.get("kind") == "war_goal_echo" else TRIBE_SKIRMISH_SCORE_TARGET,
+            "warGoalKind": outcome.get("warGoalKind"),
+            "echoLabel": outcome.get("echoLabel"),
+            "echoContributionBonus": int(outcome.get("echoContributionBonus", 0) or 0),
             "scores": {tribe_id: 0, other_tribe_id: 0},
             "participants": {},
             "createdBy": player_id,
@@ -628,21 +652,36 @@ class GameConflictMixin:
             return
         member = tribe.get("members", {}).get(player_id, {})
         fatigue = self._active_player_fatigue(player)
-        contribution = max(1, 3 - fatigue) + min(2, int(player.get("personal_renown", 0) or 0) // 3)
+        echo_bonus = int(local_conflict.get("echoContributionBonus", 0) or 0)
+        inspiration = self._active_personal_inspiration(player)
+        inspiration_bonus = int(inspiration.get("contributionBonus", 0) or 0) if inspiration else 0
+        title_bonus = self._personal_title_bonus(player, "skirmishContributionBonus")
+        contribution = max(1, 3 - fatigue) + min(2, int(player.get("personal_renown", 0) or 0) // 3) + echo_bonus + inspiration_bonus + title_bonus
         participant = {
             "playerId": player_id,
             "playerName": member.get("name") or player.get("name", "成员"),
             "tribeId": tribe_id,
             "contribution": contribution,
+            "inspirationBonus": inspiration_bonus,
+            "inspirationSourceName": inspiration.get("sourceName") if inspiration else "",
+            "renownTitleBonus": title_bonus,
+            "renownTitle": self._personal_renown_title(int(player.get("personal_renown", 0) or 0)).get("title"),
             "joinedAt": datetime.now().isoformat()
         }
+        if inspiration_bonus:
+            player.pop("personal_inspiration", None)
         for item in (conflict, other_conflict):
             if item:
                 item.setdefault("participants", {})[player_id] = participant
                 scores = item.setdefault("scores", {})
                 scores[tribe_id] = int(scores.get(tribe_id, 0) or 0) + contribution
 
-        await self._notify_tribe(tribe_id, f"{participant['playerName']} 加入了 {conflict.get('title', '小规模冲突')}，贡献 +{contribution}。")
+        bonus_text = f"（战争余震+{echo_bonus}）" if echo_bonus else ""
+        inspire_text = f"（{participant['inspirationSourceName']}鼓舞+{inspiration_bonus}）" if inspiration_bonus else ""
+        title_text = f"（{participant['renownTitle']}+{title_bonus}）" if title_bonus else ""
+        await self._notify_tribe(tribe_id, f"{participant['playerName']} 加入了 {conflict.get('title', '小规模冲突')}，贡献 +{contribution}{bonus_text}{inspire_text}{title_text}。")
+        if inspiration_bonus:
+            await self.send_personal_conflict_status(player_id)
         score_target = int(conflict.get("scoreTarget", TRIBE_SKIRMISH_SCORE_TARGET) or TRIBE_SKIRMISH_SCORE_TARGET)
         if int(conflict.get("scores", {}).get(tribe_id, 0) or 0) >= score_target:
             await self.resolve_small_conflict(player_id, conflict_id)
@@ -792,6 +831,82 @@ class GameConflictMixin:
         goal = dict(TRIBE_WAR_GOALS.get(target_kind) or TRIBE_WAR_GOALS.get("border_front", {}))
         goal["kind"] = target_kind if target_kind in TRIBE_WAR_GOALS else "border_front"
         return goal
+
+    def _war_goal_skirmish_echo_profile(self, war: dict) -> dict:
+        goal = war.get("goal") if isinstance(war.get("goal"), dict) else {}
+        kind = goal.get("kind") or "border_front"
+        profiles = {
+            "resource_site": {
+                "title": "粮草余震",
+                "targetKind": "resource_site",
+                "label": "粮草余波集结",
+                "summary": "上一场粮草战争留下了补给线争执，新的小规模冲突更容易围绕粮草和搬运展开。",
+                "bonus": 1
+            },
+            "boundary_flag": {
+                "title": "边旗余震",
+                "targetKind": "boundary_flag",
+                "label": "边旗余波集结",
+                "summary": "上一场边旗战争让旗帜附近仍有敌意标记，新的小规模冲突更容易围绕边旗声望展开。",
+                "bonus": 1
+            },
+            "boundary_road": {
+                "title": "通路余震",
+                "targetKind": "boundary_road",
+                "label": "通路余波集结",
+                "summary": "上一场通路战争让道路通行权继续摇摆，新的小规模冲突更容易围绕贸易通路展开。",
+                "bonus": 1
+            },
+            "cave_entrance": {
+                "title": "洞口余震",
+                "targetKind": "cave_entrance",
+                "label": "洞口余波集结",
+                "summary": "上一场洞口战争让远征权仍有争议，新的小规模冲突更容易围绕洞口巡守展开。",
+                "bonus": 1
+            },
+            "border_front": {
+                "title": "战线余震",
+                "targetKind": "boundary_flag",
+                "label": "边境余波集结",
+                "summary": "上一场边境战争没有完全熄灭，新的小规模冲突更容易沿旧战线复燃。",
+                "bonus": 1
+            }
+        }
+        profile = dict(profiles.get(kind) or profiles["border_front"])
+        profile["warGoalKind"] = kind
+        profile["goalLabel"] = goal.get("label") or TRIBE_WAR_GOALS.get(kind, {}).get("label", "战争目标")
+        return profile
+
+    def _create_war_goal_echo_outcomes(self, tribe_id: str, other_tribe_id: str, war: dict, now_text: str):
+        profile = self._war_goal_skirmish_echo_profile(war)
+        for source_id, target_id in ((tribe_id, other_tribe_id), (other_tribe_id, tribe_id)):
+            source = self.tribes.get(source_id)
+            target = self.tribes.get(target_id)
+            if not source:
+                continue
+            outcome = {
+                "id": f"war_echo_{war.get('id')}_{source_id}",
+                "status": "pending",
+                "kind": "war_goal_echo",
+                "state": "hostile",
+                "otherTribeId": target_id,
+                "otherTribeName": target.get("name", "其他部落") if target else "其他部落",
+                "title": profile.get("title", "战争余震"),
+                "summary": profile.get("summary", "上一场正式战争留下了新的边境争执，可升级为小规模集结。"),
+                "targetKind": profile.get("targetKind", "boundary_flag"),
+                "warGoalKind": profile.get("warGoalKind"),
+                "goalLabel": profile.get("goalLabel"),
+                "echoLabel": profile.get("label"),
+                "echoContributionBonus": int(profile.get("bonus", 0) or 0),
+                "warId": war.get("id"),
+                "createdAt": now_text
+            }
+            outcomes = [
+                item for item in (source.get("boundary_outcomes", []) or [])
+                if not (isinstance(item, dict) and item.get("id") == outcome["id"])
+            ]
+            outcomes.append(outcome)
+            source["boundary_outcomes"] = outcomes[-TRIBE_BOUNDARY_OUTCOME_LIMIT:]
 
     def _apply_formal_war_goal_reward(self, winner: dict, goal: dict) -> list:
         if not winner or not goal:
@@ -1030,7 +1145,60 @@ class GameConflictMixin:
         await self.broadcast_tribe_state(war.get("tribeId"))
         await self.broadcast_tribe_state(war.get("otherTribeId"))
 
+    def _war_goal_followup_profile(self, source: dict) -> dict:
+        goal = source.get("goal") if isinstance(source.get("goal"), dict) else {}
+        kind = goal.get("kind") or source.get("warGoalKind") or "border_front"
+        profiles = {
+            "resource_site": {
+                "label": "粮草战后",
+                "repairWoodDelta": -1,
+                "repairRenownDelta": 1,
+                "granaryFoodBonus": 4,
+                "marketFoodBonus": 3,
+                "summary": "粮草目标让战后任务更偏向补粮与后勤。"
+            },
+            "boundary_flag": {
+                "label": "边旗战后",
+                "repairRenownDelta": 2,
+                "oathRenownBonus": 2,
+                "watchPressureRelief": 1,
+                "summary": "边旗目标让战后任务更偏向声望与守边。"
+            },
+            "boundary_road": {
+                "label": "通路战后",
+                "repairStoneDelta": 1,
+                "repairRenownDelta": 1,
+                "granaryTradeBonus": 1,
+                "marketTradeBonus": 1,
+                "summary": "通路目标让战后任务更偏向道路修复与贸易。"
+            },
+            "cave_entrance": {
+                "label": "洞口战后",
+                "repairStoneDelta": 2,
+                "repairRenownDelta": 1,
+                "oathRenownBonus": 1,
+                "revivalDiscoveryBonus": 2,
+                "aftermathDiscoveryBonus": 1,
+                "summary": "洞口目标让战后任务更偏向远征权和发现进度。"
+            },
+            "border_front": {
+                "label": "边境战后",
+                "repairRenownDelta": 1,
+                "watchPressureRelief": 1,
+                "summary": "边境目标让战后任务更偏向稳住关系和压力。"
+            }
+        }
+        profile = dict(profiles.get(kind) or profiles["border_front"])
+        profile["kind"] = kind
+        profile["goalLabel"] = goal.get("label") or profile["label"]
+        return profile
+
     def _create_war_repair_tasks(self, tribe_id: str, other_tribe_id: str, war: dict, now_text: str):
+        goal_profile = self._war_goal_followup_profile(war)
+        wood_cost = max(0, TRIBE_WAR_REPAIR_WOOD_COST + int(goal_profile.get("repairWoodDelta", 0) or 0))
+        stone_cost = max(0, TRIBE_WAR_REPAIR_STONE_COST + int(goal_profile.get("repairStoneDelta", 0) or 0))
+        renown_reward = max(0, TRIBE_WAR_REPAIR_RENOWN + int(goal_profile.get("repairRenownDelta", 0) or 0))
+        goal_profile = self._war_goal_followup_profile(war)
         for source_id, target_id in ((tribe_id, other_tribe_id), (other_tribe_id, tribe_id)):
             source = self.tribes.get(source_id)
             target = self.tribes.get(target_id)
@@ -1043,9 +1211,11 @@ class GameConflictMixin:
                 "otherTribeName": target.get("name", "其他部落") if target else "其他部落",
                 "title": "战后修复",
                 "summary": f"修补与 {target.get('name', '其他部落') if target else '其他部落'} 冲突后受损的边境设施与通路。",
-                "woodCost": TRIBE_WAR_REPAIR_WOOD_COST,
-                "stoneCost": TRIBE_WAR_REPAIR_STONE_COST,
-                "renownReward": TRIBE_WAR_REPAIR_RENOWN,
+                "woodCost": wood_cost,
+                "stoneCost": stone_cost,
+                "renownReward": renown_reward,
+                "warGoalKind": goal_profile.get("kind"),
+                "goalEffectLabel": goal_profile.get("summary"),
                 "warId": war.get("id"),
                 "createdAt": now_text
             }
@@ -1081,6 +1251,7 @@ class GameConflictMixin:
         winner = self.tribes.get(winner_id)
         if not loser:
             return
+        goal_profile = self._war_goal_followup_profile(war)
         task = {
             "id": f"war_revival_{war.get('id')}_{loser_id}",
             "status": "pending",
@@ -1092,6 +1263,9 @@ class GameConflictMixin:
             "woodCost": TRIBE_WAR_REVIVAL_WOOD_COST,
             "renownReward": TRIBE_WAR_REVIVAL_RENOWN,
             "fatigueRelief": TRIBE_WAR_REVIVAL_FATIGUE_RELIEF,
+            "warGoalKind": goal_profile.get("kind"),
+            "goalEffectLabel": goal_profile.get("summary"),
+            "discoveryReward": int(goal_profile.get("revivalDiscoveryBonus", 0) or 0),
             "warId": war.get("id"),
             "createdAt": now_text
         }
@@ -1112,24 +1286,31 @@ class GameConflictMixin:
         other_tribe_id = task.get("otherTribeId")
         other_name = task.get("otherTribeName", "其他部落")
         branch_group = f"revival_branch_{task.get('warId')}_{tribe.get('id')}"
+        goal_profile = self._war_goal_followup_profile(task)
         has_storage = self._tribe_has_building_type(tribe, "tribe_storage")
         has_road = self._tribe_has_building_type(tribe, "tribe_road")
         has_fence = self._tribe_has_building_type(tribe, "tribe_fence")
         has_flag = bool(tribe.get("territory_flags"))
-        granary_food = TRIBE_WAR_REVIVAL_BRANCH_FOOD_REWARD + (TRIBE_WAR_REVIVAL_STORAGE_FOOD_BONUS if has_storage else 0)
-        granary_trade = TRIBE_WAR_REVIVAL_BRANCH_TRADE_REWARD + (TRIBE_WAR_REVIVAL_ROAD_TRADE_BONUS if has_road else 0)
-        oath_renown = TRIBE_WAR_REVIVAL_BRANCH_OATH_RENOWN + (TRIBE_WAR_REVIVAL_FLAG_RENOWN_BONUS if has_flag else 0)
+        granary_food = TRIBE_WAR_REVIVAL_BRANCH_FOOD_REWARD + (TRIBE_WAR_REVIVAL_STORAGE_FOOD_BONUS if has_storage else 0) + int(goal_profile.get("granaryFoodBonus", 0) or 0)
+        granary_trade = TRIBE_WAR_REVIVAL_BRANCH_TRADE_REWARD + (TRIBE_WAR_REVIVAL_ROAD_TRADE_BONUS if has_road else 0) + int(goal_profile.get("granaryTradeBonus", 0) or 0)
+        oath_renown = TRIBE_WAR_REVIVAL_BRANCH_OATH_RENOWN + (TRIBE_WAR_REVIVAL_FLAG_RENOWN_BONUS if has_flag else 0) + int(goal_profile.get("oathRenownBonus", 0) or 0)
         oath_relief = 1 + (TRIBE_WAR_REVIVAL_FENCE_FATIGUE_BONUS if has_fence else 0)
         granary_bonus = []
         if has_storage:
             granary_bonus.append(f"仓库食物+{TRIBE_WAR_REVIVAL_STORAGE_FOOD_BONUS}")
         if has_road:
             granary_bonus.append(f"道路贸易+{TRIBE_WAR_REVIVAL_ROAD_TRADE_BONUS}")
+        if int(goal_profile.get("granaryFoodBonus", 0) or 0):
+            granary_bonus.append(f"{goal_profile.get('goalLabel')}食物+{goal_profile.get('granaryFoodBonus')}")
+        if int(goal_profile.get("granaryTradeBonus", 0) or 0):
+            granary_bonus.append(f"{goal_profile.get('goalLabel')}贸易+{goal_profile.get('granaryTradeBonus')}")
         oath_bonus = []
         if has_flag:
             oath_bonus.append(f"旗帜声望+{TRIBE_WAR_REVIVAL_FLAG_RENOWN_BONUS}")
         if has_fence:
             oath_bonus.append(f"围栏战疲缓解+{TRIBE_WAR_REVIVAL_FENCE_FATIGUE_BONUS}")
+        if int(goal_profile.get("oathRenownBonus", 0) or 0):
+            oath_bonus.append(f"{goal_profile.get('goalLabel')}声望+{goal_profile.get('oathRenownBonus')}")
         branches = [
             {
                 "id": f"{branch_group}_granary",
@@ -1176,6 +1357,97 @@ class GameConflictMixin:
         existing.extend(branches)
         tribe["war_revival_tasks"] = existing[-6:]
 
+    def _create_war_revival_branch_tasks(self, tribe: dict, task: dict, now_text: str):
+        other_tribe_id = task.get("otherTribeId")
+        other_name = task.get("otherTribeName", "其他部落")
+        branch_group = f"revival_branch_{task.get('warId')}_{tribe.get('id')}"
+        goal_profile = self._war_goal_followup_profile(task)
+        has_storage = self._tribe_has_building_type(tribe, "tribe_storage")
+        has_road = self._tribe_has_building_type(tribe, "tribe_road")
+        has_fence = self._tribe_has_building_type(tribe, "tribe_fence")
+        has_flag = bool(tribe.get("territory_flags"))
+        granary_food = (
+            TRIBE_WAR_REVIVAL_BRANCH_FOOD_REWARD
+            + (TRIBE_WAR_REVIVAL_STORAGE_FOOD_BONUS if has_storage else 0)
+            + int(goal_profile.get("granaryFoodBonus", 0) or 0)
+        )
+        granary_trade = (
+            TRIBE_WAR_REVIVAL_BRANCH_TRADE_REWARD
+            + (TRIBE_WAR_REVIVAL_ROAD_TRADE_BONUS if has_road else 0)
+            + int(goal_profile.get("granaryTradeBonus", 0) or 0)
+        )
+        oath_renown = (
+            TRIBE_WAR_REVIVAL_BRANCH_OATH_RENOWN
+            + (TRIBE_WAR_REVIVAL_FLAG_RENOWN_BONUS if has_flag else 0)
+            + int(goal_profile.get("oathRenownBonus", 0) or 0)
+        )
+        oath_relief = 1 + (TRIBE_WAR_REVIVAL_FENCE_FATIGUE_BONUS if has_fence else 0)
+        granary_bonus = []
+        if has_storage:
+            granary_bonus.append(f"仓库食物+{TRIBE_WAR_REVIVAL_STORAGE_FOOD_BONUS}")
+        if has_road:
+            granary_bonus.append(f"道路贸易+{TRIBE_WAR_REVIVAL_ROAD_TRADE_BONUS}")
+        if int(goal_profile.get("granaryFoodBonus", 0) or 0):
+            granary_bonus.append(f"{goal_profile.get('goalLabel')}食物+{goal_profile.get('granaryFoodBonus')}")
+        if int(goal_profile.get("granaryTradeBonus", 0) or 0):
+            granary_bonus.append(f"{goal_profile.get('goalLabel')}贸易+{goal_profile.get('granaryTradeBonus')}")
+        oath_bonus = []
+        if has_flag:
+            oath_bonus.append(f"旗帜声望+{TRIBE_WAR_REVIVAL_FLAG_RENOWN_BONUS}")
+        if has_fence:
+            oath_bonus.append(f"围栏战疲缓解+{TRIBE_WAR_REVIVAL_FENCE_FATIGUE_BONUS}")
+        if int(goal_profile.get("oathRenownBonus", 0) or 0):
+            oath_bonus.append(f"{goal_profile.get('goalLabel')}声望+{goal_profile.get('oathRenownBonus')}")
+        branches = [
+            {
+                "id": f"{branch_group}_granary",
+                "status": "pending",
+                "branchKind": "granary",
+                "branchGroup": branch_group,
+                "otherTribeId": other_tribe_id,
+                "otherTribeName": other_name,
+                "title": "粮仓复兴",
+                "summary": f"把与 {other_name} 战后散乱的粮线重新收拢，优先恢复食物和贸易信誉。",
+                "foodCost": 0,
+                "woodCost": TRIBE_WAR_REVIVAL_WOOD_COST,
+                "renownReward": 1,
+                "fatigueRelief": 0,
+                "foodReward": granary_food,
+                "tradeReward": granary_trade,
+                "buildingBonusLabel": "、".join(granary_bonus),
+                "warGoalKind": goal_profile.get("kind"),
+                "goalEffectLabel": goal_profile.get("summary"),
+                "warId": task.get("warId"),
+                "createdAt": now_text
+            },
+            {
+                "id": f"{branch_group}_oath",
+                "status": "pending",
+                "branchKind": "oath",
+                "branchGroup": branch_group,
+                "otherTribeId": other_tribe_id,
+                "otherTribeName": other_name,
+                "title": "重立战誓",
+                "summary": f"召集族人重述与 {other_name} 一战的教训，优先恢复声望并保留反击意志。",
+                "foodCost": TRIBE_WAR_REVIVAL_FOOD_COST // 2,
+                "woodCost": 0,
+                "renownReward": oath_renown,
+                "fatigueRelief": oath_relief,
+                "warPressure": TRIBE_WAR_REVIVAL_BRANCH_PRESSURE,
+                "buildingBonusLabel": "、".join(oath_bonus),
+                "warGoalKind": goal_profile.get("kind"),
+                "goalEffectLabel": goal_profile.get("summary"),
+                "warId": task.get("warId"),
+                "createdAt": now_text
+            }
+        ]
+        existing = [
+            item for item in (tribe.get("war_revival_tasks", []) or [])
+            if not (isinstance(item, dict) and item.get("branchGroup") == branch_group)
+        ]
+        existing.extend(branches)
+        tribe["war_revival_tasks"] = existing[-6:]
+
     def _create_war_diplomacy_tasks(self, tribe_id: str, other_tribe_id: str, war: dict, now_text: str, mode: str = "truce", mediator_id: str = ""):
         mode_labels = {
             "resolved": "战后停战",
@@ -1199,6 +1471,9 @@ class GameConflictMixin:
                 "foodCost": TRIBE_WAR_DIPLOMACY_FOOD_COST,
                 "renownReward": TRIBE_WAR_DIPLOMACY_RENOWN,
                 "grievanceRenown": TRIBE_WAR_GRIEVANCE_RENOWN,
+                "goal": war.get("goal") or {},
+                "warGoalKind": goal_profile.get("kind"),
+                "goalEffectLabel": goal_profile.get("summary"),
                 "warId": war.get("id"),
                 "mediatorTribeId": mediator_id,
                 "createdAt": now_text
@@ -1215,6 +1490,7 @@ class GameConflictMixin:
             return
         other = self.tribes.get(other_tribe_id)
         other_name = diplomacy_task.get("otherTribeName") or (other.get("name", "其他部落") if other else "其他部落")
+        goal_profile = self._war_goal_followup_profile(diplomacy_task)
         if action == "honor":
             task = {
                 "id": f"war_aftermath_{diplomacy_task.get('id')}_{tribe.get('id')}_market",
@@ -1225,9 +1501,11 @@ class GameConflictMixin:
                 "title": "边市回暖",
                 "summary": f"履行与 {other_name} 的停战约定后，族人可以整理边市信物，把战后的谨慎转成贸易往来。",
                 "foodCost": TRIBE_WAR_AFTERMATH_FOOD_COST,
-                "foodReward": TRIBE_WAR_AFTERMATH_FOOD_REWARD,
-                "tradeReward": TRIBE_WAR_AFTERMATH_TRADE_REWARD,
+                "foodReward": TRIBE_WAR_AFTERMATH_FOOD_REWARD + int(goal_profile.get("marketFoodBonus", 0) or 0),
+                "tradeReward": TRIBE_WAR_AFTERMATH_TRADE_REWARD + int(goal_profile.get("marketTradeBonus", 0) or 0),
                 "renownReward": TRIBE_WAR_AFTERMATH_RENOWN,
+                "warGoalKind": goal_profile.get("kind"),
+                "goalEffectLabel": goal_profile.get("summary"),
                 "warId": diplomacy_task.get("warId"),
                 "diplomacyId": diplomacy_task.get("id"),
                 "createdAt": now_text
@@ -1242,8 +1520,11 @@ class GameConflictMixin:
                 "title": "战后警戒",
                 "summary": f"追责 {other_name} 的停战余恨后，族人可以重整边境守望，减少旧怨继续滚成新战事。",
                 "foodCost": 0,
-                "pressureRelief": TRIBE_WAR_AFTERMATH_PRESSURE_RELIEF,
+                "pressureRelief": TRIBE_WAR_AFTERMATH_PRESSURE_RELIEF + int(goal_profile.get("watchPressureRelief", 0) or 0),
                 "renownReward": TRIBE_WAR_AFTERMATH_RENOWN,
+                "discoveryReward": int(goal_profile.get("aftermathDiscoveryBonus", 0) or 0),
+                "warGoalKind": goal_profile.get("kind"),
+                "goalEffectLabel": goal_profile.get("summary"),
                 "warId": diplomacy_task.get("warId"),
                 "diplomacyId": diplomacy_task.get("id"),
                 "createdAt": now_text
@@ -1594,6 +1875,7 @@ class GameConflictMixin:
                 progress["lastAction"] = "formal_war_resolved"
                 progress["lastActionAt"] = now_text
         self._create_war_repair_tasks(tribe_id, other_tribe_id, war, now_text)
+        self._create_war_goal_echo_outcomes(tribe_id, other_tribe_id, war, now_text)
         fatigue_count = self._apply_formal_war_fatigue(war, winner_id, loser_id, now_text)
         self._create_war_revival_task(loser_id, winner_id, war, now_text)
         self._create_war_diplomacy_tasks(tribe_id, other_tribe_id, war, now_text, "resolved")
@@ -1645,6 +1927,7 @@ class GameConflictMixin:
                 progress["lastAction"] = "formal_war_truce"
                 progress["lastActionAt"] = now_text
         self._create_war_repair_tasks(tribe_id, other_tribe_id, war, now_text)
+        self._create_war_goal_echo_outcomes(tribe_id, other_tribe_id, war, now_text)
         self._create_war_diplomacy_tasks(tribe_id, other_tribe_id, war, now_text, "truce")
         detail = f"{member.get('name', '成员')} 代表 {tribe.get('name', '部落')} 提出停战谈判，消耗食物{TRIBE_WAR_TRUCE_FOOD_COST}，双方转入战后修复。"
         for target_id in {tribe_id, other_tribe_id}:
@@ -1670,6 +1953,9 @@ class GameConflictMixin:
         storage = tribe.setdefault("storage", {"wood": 0, "stone": 0})
         wood_cost = int(task.get("woodCost", TRIBE_WAR_REPAIR_WOOD_COST) or 0)
         stone_cost = int(task.get("stoneCost", TRIBE_WAR_REPAIR_STONE_COST) or 0)
+        stone_discount = self._region_event_bonus_value(tribe, "warRepairStoneDiscount")
+        if stone_discount:
+            stone_cost = max(0, stone_cost - stone_discount)
         if int(storage.get("wood", 0) or 0) < wood_cost or int(storage.get("stone", 0) or 0) < stone_cost:
             await self._send_tribe_error(player_id, "战后修复需要公共木材和石块")
             return
@@ -1686,8 +1972,15 @@ class GameConflictMixin:
             progress["lastAction"] = "formal_war_repaired"
             progress["lastActionAt"] = task["completedAt"]
         member = tribe.get("members", {}).get(player_id, {})
+        bonus_labels = [
+            item.get("label")
+            for item in self._active_region_event_bonus_summaries(tribe)
+            if item.get("label")
+        ]
         detail = f"{member.get('name', '成员')} 完成战后修复，消耗木材{wood_cost}、石块{stone_cost}，部落声望+{task.get('renownReward', TRIBE_WAR_REPAIR_RENOWN)}。"
-        self._add_tribe_history(tribe, "governance", "战后修复", detail, player_id, {"kind": "war_repair", "repairId": repair_id, "otherTribeId": other_tribe_id})
+        if stone_discount:
+            detail += f" 山地采石坑节省石块{stone_discount}。"
+        self._add_tribe_history(tribe, "governance", "战后修复", detail, player_id, {"kind": "war_repair", "repairId": repair_id, "otherTribeId": other_tribe_id, "regionEventBonusLabels": bonus_labels})
         await self._notify_tribe(tribe_id, detail)
         await self.broadcast_tribe_state(tribe_id)
 
@@ -1717,6 +2010,8 @@ class GameConflictMixin:
             tribe["food"] = int(tribe.get("food", 0) or 0) + int(task.get("foodReward", 0) or 0)
         if int(task.get("tradeReward", 0) or 0):
             tribe["trade_reputation"] = int(tribe.get("trade_reputation", 0) or 0) + int(task.get("tradeReward", 0) or 0)
+        if int(task.get("discoveryReward", 0) or 0):
+            tribe["discovery_progress"] = int(tribe.get("discovery_progress", 0) or 0) + int(task.get("discoveryReward", 0) or 0)
         relief = int(task.get("fatigueRelief", TRIBE_WAR_REVIVAL_FATIGUE_RELIEF) or 0)
         relieved = 0
         for member_id in (tribe.get("members", {}) or {}).keys():
@@ -1759,6 +2054,8 @@ class GameConflictMixin:
             reward_bits.append(f"食物+{task.get('foodReward')}")
         if int(task.get("tradeReward", 0) or 0):
             reward_bits.append(f"贸易信誉+{task.get('tradeReward')}")
+        if int(task.get("discoveryReward", 0) or 0):
+            reward_bits.append(f"鍙戠幇杩涘害+{task.get('discoveryReward')}")
         if int(task.get("warPressure", 0) or 0):
             reward_bits.append(f"反击意志+{task.get('warPressure')}")
         detail = f"{member.get('name', '成员')} 完成{task.get('title', '战败复兴')}，消耗食物{food_cost}、木材{wood_cost}，{ '、'.join(reward_bits) }，缓解{relieved}名成员战疲。"
@@ -1840,9 +2137,11 @@ class GameConflictMixin:
         trade_reward = int(task.get("tradeReward", 0) or 0)
         pressure_relief = int(task.get("pressureRelief", 0) or 0)
         renown_reward = int(task.get("renownReward", TRIBE_WAR_AFTERMATH_RENOWN) or 0)
+        discovery_reward = int(task.get("discoveryReward", 0) or 0)
         tribe["food"] = int(tribe.get("food", 0) or 0) + food_reward
         tribe["trade_reputation"] = int(tribe.get("trade_reputation", 0) or 0) + trade_reward
         tribe["renown"] = int(tribe.get("renown", 0) or 0) + renown_reward
+        tribe["discovery_progress"] = int(tribe.get("discovery_progress", 0) or 0) + discovery_reward
         other_tribe_id = task.get("otherTribeId")
         relation = tribe.setdefault("boundary_relations", {}).setdefault(other_tribe_id, {})
         if task.get("kind") == "market":
@@ -1866,6 +2165,8 @@ class GameConflictMixin:
             reward_bits.append(f"贸易信誉+{trade_reward}")
         if pressure_relief:
             reward_bits.append(f"战争压力-{pressure_relief}")
+        if discovery_reward:
+            reward_bits.append(f"发现进度+{discovery_reward}")
         detail = f"{member.get('name', '成员')} 处理{task.get('title', '战后余波')}，消耗食物{food_cost}，{ '、'.join(reward_bits) }。"
         self._add_tribe_history(tribe, "governance", "战后余波", detail, player_id, {"kind": "war_aftermath", "aftermathId": aftermath_id, "otherTribeId": other_tribe_id})
         await self._notify_tribe(tribe_id, detail)

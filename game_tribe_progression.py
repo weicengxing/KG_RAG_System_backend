@@ -7,6 +7,942 @@ from game_config import *
 
 
 class GameTribeProgressionMixin:
+    def _region_building_bonus(self, tribe: dict, region_type: str, phase: str) -> tuple[dict, str]:
+        bonus = TRIBE_REGION_BUILDING_BONUSES.get(region_type or "")
+        if not bonus or not self._is_tribe_building_built(tribe, bonus.get("buildingKey", "")):
+            return {}, ""
+        return dict(bonus.get(phase, {}) or {}), bonus.get("label", "")
+
+    def _apply_region_bonus_rewards(self, tribe: dict, rewards: dict, label: str, reward_parts: list):
+        if not rewards:
+            return
+        storage = tribe.setdefault("storage", {"wood": 0, "stone": 0})
+        for key, text in (("wood", "木材"), ("stone", "石块")):
+            amount = int(rewards.get(key, 0) or 0)
+            if amount:
+                storage[key] = int(storage.get(key, 0) or 0) + amount
+                reward_parts.append(f"{label}{text}+{amount}")
+        food = int(rewards.get("food", 0) or 0)
+        if food:
+            tribe["food"] = int(tribe.get("food", 0) or 0) + food
+            reward_parts.append(f"{label}食物+{food}")
+        discovery = int(rewards.get("discoveryProgress", 0) or 0)
+        if discovery:
+            tribe["discovery_progress"] = int(tribe.get("discovery_progress", 0) or 0) + discovery
+            reward_parts.append(f"{label}发现+{discovery}")
+        renown = int(rewards.get("renown", 0) or 0)
+        if renown:
+            tribe["renown"] = int(tribe.get("renown", 0) or 0) + renown
+            reward_parts.append(f"{label}声望+{renown}")
+
+    def _active_region_event_bonuses(self, tribe: dict) -> list:
+        bonuses = []
+        for building_key, bonus in TRIBE_REGION_EVENT_BONUSES.items():
+            if self._is_tribe_building_built(tribe, building_key):
+                bonuses.append({"buildingKey": building_key, **bonus})
+        return bonuses
+
+    def _active_region_event_bonus_summaries(self, tribe: dict) -> list:
+        return [
+            {"label": bonus.get("label", ""), "summary": bonus.get("summary", "")}
+            for bonus in self._active_region_event_bonuses(tribe)
+        ]
+
+    def _region_event_bonus_value(self, tribe: dict, key: str) -> int:
+        return sum(int(bonus.get(key, 0) or 0) for bonus in self._active_region_event_bonuses(tribe))
+
+    def _apply_world_event_region_bonuses(self, tribe: dict, event_key: str, reward: dict, reward_parts: list) -> list:
+        labels = []
+        for bonus in self._active_region_event_bonuses(tribe):
+            if event_key not in (bonus.get("worldEventKeys") or []):
+                continue
+            bonus_reward = dict(bonus.get("worldEventReward") or {})
+            if not bonus_reward:
+                continue
+            labels.append(bonus.get("label", "区域设施"))
+            for key, amount in bonus_reward.items():
+                reward[key] = int(reward.get(key, 0) or 0) + int(amount or 0)
+            reward_parts.append(f"{bonus.get('label', '区域设施')}响应")
+        return labels
+
+    def _world_event_action_available(self, tribe: dict, event: dict, action: dict) -> bool:
+        requires = dict(action.get("requires") or {})
+        building_key = requires.get("building")
+        if building_key and not self._is_tribe_building_built(tribe, building_key):
+            return False
+        region_types = requires.get("regionTypes") or []
+        if region_types and event.get("regionType") not in region_types:
+            return False
+        return True
+
+    def _world_event_action_options(self, tribe: dict) -> dict:
+        result = {}
+        for event_key, actions in WORLD_EVENT_ACTIONS.items():
+            options = []
+            for action_key, action in actions.items():
+                requires = dict(action.get("requires") or {})
+                building_key = requires.get("building")
+                if building_key and not self._is_tribe_building_built(tribe, building_key):
+                    continue
+                options.append({
+                    "key": action_key,
+                    "label": action.get("label", action_key),
+                    "summary": action.get("summary", ""),
+                    "regionTypes": list(requires.get("regionTypes") or []),
+                    "buildingKey": building_key
+                })
+            if options:
+                result[event_key] = options
+        return result
+
+    def _world_event_action_plan(self, tribe: dict, event: dict, action_key: str) -> tuple[Optional[str], Optional[dict]]:
+        event_key = event.get("key")
+        actions = WORLD_EVENT_ACTIONS.get(event_key, {})
+        default_key = "hunt" if event_key == "herd" else ""
+        safe_key = action_key if action_key in actions else default_key
+        if not safe_key:
+            return None, None
+        action = actions.get(safe_key)
+        if not action or not self._world_event_action_available(tribe, event, action):
+            if default_key and default_key in actions:
+                return default_key, actions[default_key]
+            return None, None
+        return safe_key, action
+
+    def _reward_summary_text(self, rewards: dict) -> str:
+        labels = {
+            "wood": "木材",
+            "stone": "石块",
+            "food": "食物",
+            "discoveryProgress": "发现",
+            "renown": "声望",
+            "tradeReputation": "贸易信誉"
+        }
+        parts = []
+        for key, label in labels.items():
+            amount = int((rewards or {}).get(key, 0) or 0)
+            if amount:
+                parts.append(f"{label}+{amount}")
+        return "、".join(parts)
+
+    def _active_world_event_remnants(self, tribe: dict) -> list:
+        active = []
+        now = datetime.now()
+        for remnant in tribe.get("world_event_remnants", []) or []:
+            if not isinstance(remnant, dict) or remnant.get("collectedAt"):
+                continue
+            active_until = remnant.get("activeUntil")
+            if active_until:
+                try:
+                    if datetime.fromisoformat(active_until) <= now:
+                        continue
+                except (TypeError, ValueError):
+                    pass
+            remnant["rewardLabel"] = self._reward_summary_text(remnant.get("reward") or {})
+            active.append(remnant)
+        if len(active) != len(tribe.get("world_event_remnants", []) or []):
+            tribe["world_event_remnants"] = active[-WORLD_EVENT_REMNANT_LIMIT:]
+        return active[-WORLD_EVENT_REMNANT_LIMIT:]
+
+    def _build_world_event_remnant(self, tribe: dict, event: dict, action_key: Optional[str], action_plan: Optional[dict], member: dict) -> Optional[dict]:
+        remnant_plan = dict((action_plan or {}).get("remnant") or {})
+        if not remnant_plan:
+            return None
+
+        now = datetime.now()
+        active_until = now + timedelta(minutes=WORLD_EVENT_REMNANT_ACTIVE_MINUTES)
+        angle = self._weather_rng.random() * math.pi * 2
+        distance = 2.0 + self._weather_rng.random() * max(2.0, float(event.get("radius", 12) or 12) * 0.25)
+        remnant = {
+            "id": f"event_remnant_{tribe.get('id')}_{int(now.timestamp())}_{self._weather_rng.randint(100, 999)}",
+            "tribeId": tribe.get("id"),
+            "type": "world_event_remnant",
+            "remnantKey": remnant_plan.get("key", action_key or "event_trace"),
+            "label": remnant_plan.get("label", "事件余迹"),
+            "summary": remnant_plan.get("summary", "刚刚处理过的事件在这里留下短时痕迹。"),
+            "x": float(event.get("x", 0) or 0) + math.cos(angle) * distance,
+            "z": float(event.get("z", 0) or 0) + math.sin(angle) * distance,
+            "size": 0.9,
+            "regionType": event.get("regionType"),
+            "regionLabel": event.get("regionLabel"),
+            "sourceEventTitle": event.get("title", "世界事件"),
+            "sourceActionKey": action_key,
+            "sourceActionLabel": (action_plan or {}).get("label", "处理"),
+            "reward": dict(remnant_plan.get("reward") or {}),
+            "rewardLabel": self._reward_summary_text(remnant_plan.get("reward") or {}),
+            "createdAt": now.isoformat(),
+            "activeUntil": active_until.isoformat(),
+            "createdBy": member.get("name", "成员")
+        }
+        remnants = self._active_world_event_remnants(tribe)
+        tribe["world_event_remnants"] = [*remnants, remnant][-WORLD_EVENT_REMNANT_LIMIT:]
+        return remnant
+
+    def _apply_world_event_remnant_rewards(self, tribe: dict, rewards: dict, reward_parts: list):
+        storage = tribe.setdefault("storage", {"wood": 0, "stone": 0})
+        for key, label in (("wood", "木材"), ("stone", "石块")):
+            amount = int((rewards or {}).get(key, 0) or 0)
+            if amount:
+                storage[key] = max(0, int(storage.get(key, 0) or 0) + amount)
+                reward_parts.append(f"{label}+{amount}")
+        food = int((rewards or {}).get("food", 0) or 0)
+        if food:
+            tribe["food"] = max(0, int(tribe.get("food", 0) or 0) + food)
+            reward_parts.append(f"食物+{food}")
+        discovery = int((rewards or {}).get("discoveryProgress", 0) or 0)
+        if discovery:
+            tribe["discovery_progress"] = int(tribe.get("discovery_progress", 0) or 0) + discovery
+            reward_parts.append(f"发现进度+{discovery}")
+        renown = int((rewards or {}).get("renown", 0) or 0)
+        if renown:
+            tribe["renown"] = int(tribe.get("renown", 0) or 0) + renown
+            reward_parts.append(f"声望+{renown}")
+        trade = int((rewards or {}).get("tradeReputation", 0) or 0)
+        if trade:
+            tribe["trade_reputation"] = int(tribe.get("trade_reputation", 0) or 0) + trade
+            reward_parts.append(f"贸易信誉+{trade}")
+
+    async def collect_world_event_remnant(self, player_id: str, remnant_id: str):
+        tribe_id = self.player_tribes.get(player_id)
+        tribe = self.tribes.get(tribe_id)
+        if not tribe:
+            await self._send_tribe_error(player_id, "请先加入一个部落")
+            return
+
+        remnants = self._active_world_event_remnants(tribe)
+        remnant = next((item for item in remnants if item.get("id") == remnant_id), None)
+        if not remnant:
+            await self._send_tribe_error(player_id, "事件余迹已经消散")
+            return
+
+        member = tribe.get("members", {}).get(player_id, {})
+        reward_parts = []
+        rewards = dict(remnant.get("reward") or {})
+        self._apply_world_event_remnant_rewards(tribe, rewards, reward_parts)
+        tribe["world_event_remnants"] = [item for item in remnants if item.get("id") != remnant_id]
+
+        detail = f"{member.get('name', '成员')} 整理了{remnant.get('regionLabel', '附近区域')}的{remnant.get('label', '事件余迹')}。"
+        if reward_parts:
+            detail += f" 收获：{'、'.join(reward_parts)}。"
+        self._add_tribe_history(
+            tribe,
+            "world_event",
+            "整理事件余迹",
+            detail,
+            player_id,
+            {
+                "kind": "world_event_remnant",
+                "remnantId": remnant.get("id"),
+                "remnantKey": remnant.get("remnantKey"),
+                "label": remnant.get("label"),
+                "regionLabel": remnant.get("regionLabel"),
+                "memberName": member.get("name", "成员"),
+                "sourceEventTitle": remnant.get("sourceEventTitle"),
+                "sourceActionLabel": remnant.get("sourceActionLabel"),
+                "reward": rewards,
+                "rewardParts": reward_parts
+            }
+        )
+        await self._notify_tribe(tribe_id, detail)
+        await self.broadcast_tribe_state(tribe_id)
+        await self._broadcast_current_map()
+
+    def _create_trade_route_sites(self, tribe: dict, outcome: dict, site: Optional[dict]):
+        other_id = outcome.get("otherTribeId")
+        other_tribe = self.tribes.get(other_id) if other_id else None
+        if not tribe or not other_tribe or not site:
+            return []
+
+        other_site_id = outcome.get("otherSiteId")
+        other_site = next((
+            item for item in (other_tribe.get("scouted_resource_sites", []) or [])
+            if isinstance(item, dict) and item.get("id") == other_site_id
+        ), None) or {}
+        site_ids = sorted([str(site.get("id") or ""), str(other_site_id or "")])
+        shared_id = f"trade_route_{abs(hash('|'.join(site_ids))) % 100000000}"
+        now = datetime.now()
+        now_text = now.isoformat()
+        active_until = datetime.fromtimestamp(now.timestamp() + TRIBE_TRADE_ROUTE_SITE_ACTIVE_MINUTES * 60).isoformat()
+        x1 = float(site.get("x", 0) or 0)
+        z1 = float(site.get("z", 0) or 0)
+        x2 = float(other_site.get("x", x1) or x1)
+        z2 = float(other_site.get("z", z1) or z1)
+        mid_x = (x1 + x2) / 2
+        mid_z = (z1 + z2) / 2
+        created = []
+
+        for target_tribe, partner_tribe, source_site, offset in (
+            (tribe, other_tribe, site, -2.2),
+            (other_tribe, tribe, other_site or site, 2.2)
+        ):
+            target_id = target_tribe.get("id")
+            if not target_id:
+                continue
+            existing = next((
+                item for item in (target_tribe.get("trade_route_sites", []) or [])
+                if isinstance(item, dict) and item.get("sharedRouteId") == shared_id
+            ), None)
+            if existing:
+                continue
+            resource_label = source_site.get("resourceLabel") or outcome.get("siteLabel") or "交换资源"
+            reward = dict(source_site.get("reward") or outcome.get("reward") or {})
+            route_site = {
+                "id": f"{shared_id}_{target_id}",
+                "tribeId": target_id,
+                "type": "trade_route_site",
+                "label": "交换通路贸易点",
+                "resourceLabel": resource_label,
+                "partnerTribeId": partner_tribe.get("id"),
+                "partnerTribeName": partner_tribe.get("name", "邻近部落"),
+                "x": max(-490, min(490, mid_x + offset)),
+                "z": max(-490, min(490, mid_z - offset)),
+                "size": 1.05,
+                "reward": reward,
+                "sharedRouteId": shared_id,
+                "sourceOutcomeId": outcome.get("id"),
+                "createdAt": now_text,
+                "activeUntil": active_until,
+                "lastCollectedAt": None,
+                "collectCount": 0,
+                "marketCollectTarget": TRIBE_TRADE_ROUTE_MARKET_COLLECTS
+            }
+            target_tribe.setdefault("trade_route_sites", []).append(route_site)
+            target_tribe["trade_route_sites"] = target_tribe["trade_route_sites"][-TRIBE_TRADE_ROUTE_SITE_LIMIT:]
+            created.append(route_site)
+        return created
+
+    def _trade_route_market_active(self, site: dict) -> bool:
+        market_until = site.get("marketUntil")
+        if not market_until:
+            return False
+        try:
+            return datetime.fromisoformat(market_until) > datetime.now()
+        except (TypeError, ValueError):
+            return False
+
+    def _trade_route_market_focus_label(self, site: dict) -> str:
+        reward = dict(site.get("reward") or {})
+        if int(reward.get("food", 0) or 0):
+            return "食物互市"
+        if int(reward.get("stone", 0) or 0):
+            return "石料互市"
+        if int(reward.get("wood", 0) or 0):
+            return "木料互市"
+        if int(reward.get("discoveryProgress", 0) or 0):
+            return "旧物互市"
+        return "杂货互市"
+
+    def _append_trade_route_market_task(self, tribe: dict, site: dict, now_text: str):
+        partner_id = site.get("partnerTribeId")
+        if not tribe or not partner_id:
+            return
+        task = {
+            "id": f"border_market_{site.get('sharedRouteId')}_{tribe.get('id')}",
+            "status": "pending",
+            "kind": "border_market",
+            "title": "边市议价",
+            "summary": f"与 {site.get('partnerTribeName', '邻近部落')} 的交换通路升成了短时边市，整理礼物和口头约定可把这轮互市转成更稳定的往来。",
+            "otherTribeId": partner_id,
+            "otherTribeName": site.get("partnerTribeName", "邻近部落"),
+            "foodReward": TRIBE_TRADE_ROUTE_MARKET_FOOD,
+            "tradeReward": TRIBE_TRADE_ROUTE_MARKET_TRADE,
+            "renownReward": TRIBE_TRADE_ROUTE_MARKET_RENOWN,
+            "relationDelta": 1,
+            "tradeTrustDelta": 2,
+            "pactChance": round(self._market_pact_success_chance(tribe, partner_id), 2),
+            "pactMinutes": TRIBE_MARKET_PACT_MINUTES,
+            "sourceTradeRouteId": site.get("id"),
+            "createdAt": now_text
+        }
+        self._append_boundary_followup_task(tribe, task)
+
+    def _activate_trade_route_market(self, site: dict, now: datetime) -> list:
+        shared_id = site.get("sharedRouteId")
+        if not shared_id:
+            return []
+        market_until = datetime.fromtimestamp(now.timestamp() + TRIBE_TRADE_ROUTE_MARKET_MINUTES * 60).isoformat()
+        activated = []
+        for target_tribe in self.tribes.values():
+            route_site = next((
+                item for item in (target_tribe.get("trade_route_sites", []) or [])
+                if isinstance(item, dict) and item.get("sharedRouteId") == shared_id
+            ), None)
+            if not route_site:
+                continue
+            route_site["label"] = "交换通路边市"
+            route_site["marketUntil"] = market_until
+            route_site["marketStartedAt"] = now.isoformat()
+            route_site["marketRewardLabel"] = self._trade_route_market_focus_label(route_site)
+            route_site["marketCount"] = int(route_site.get("marketCount", 0) or 0) + 1
+            route_site["collectCount"] = 0
+            try:
+                active_until = max(datetime.fromisoformat(route_site.get("activeUntil")), datetime.fromisoformat(market_until))
+                route_site["activeUntil"] = active_until.isoformat()
+            except (TypeError, ValueError):
+                route_site["activeUntil"] = market_until
+            partner_id = route_site.get("partnerTribeId")
+            if partner_id:
+                progress = target_tribe.setdefault("boundary_relations", {}).setdefault(partner_id, {})
+                progress["tradeTrust"] = max(0, min(10, int(progress.get("tradeTrust", 0) or 0) + 1))
+                progress["score"] = min(9, int(progress.get("score", 0) or 0) + 1)
+                progress["lastAction"] = "border_market_open"
+                progress["lastActionAt"] = now.isoformat()
+            self._append_trade_route_market_task(target_tribe, route_site, now.isoformat())
+            activated.append(target_tribe.get("id"))
+        return activated
+
+    def _apply_trade_route_market_reward(self, tribe: dict, site: dict, reward_parts: list):
+        if not self._trade_route_market_active(site):
+            return
+        storage = tribe.setdefault("storage", {"wood": 0, "stone": 0})
+        reward = dict(site.get("reward") or {})
+        if int(reward.get("wood", 0) or 0):
+            storage["wood"] = int(storage.get("wood", 0) or 0) + 2
+            tribe["food"] = int(tribe.get("food", 0) or 0) + 1
+            reward_parts.extend(["边市木材+2", "边市食物+1"])
+        elif int(reward.get("stone", 0) or 0):
+            storage["stone"] = int(storage.get("stone", 0) or 0) + 2
+            storage["wood"] = int(storage.get("wood", 0) or 0) + 1
+            reward_parts.extend(["边市石块+2", "边市木材+1"])
+        elif int(reward.get("food", 0) or 0):
+            tribe["food"] = int(tribe.get("food", 0) or 0) + 3
+            reward_parts.append("边市食物+3")
+        elif int(reward.get("discoveryProgress", 0) or 0):
+            tribe["discovery_progress"] = int(tribe.get("discovery_progress", 0) or 0) + 1
+            tribe["renown"] = int(tribe.get("renown", 0) or 0) + 1
+            reward_parts.extend(["边市发现+1", "边市声望+1"])
+        tribe["trade_reputation"] = int(tribe.get("trade_reputation", 0) or 0) + 1
+        reward_parts.append("边市贸易信誉+1")
+
+    def _active_market_pacts(self, tribe: dict) -> list:
+        active = []
+        now = datetime.now()
+        for pact in tribe.get("market_pacts", []) or []:
+            if not isinstance(pact, dict):
+                continue
+            active_until = pact.get("activeUntil")
+            if active_until:
+                try:
+                    if datetime.fromisoformat(active_until) <= now:
+                        continue
+                except (TypeError, ValueError):
+                    pass
+            active.append(pact)
+        if len(active) != len(tribe.get("market_pacts", []) or []):
+            tribe["market_pacts"] = active[-TRIBE_MARKET_PACT_LIMIT:]
+        return active[-TRIBE_MARKET_PACT_LIMIT:]
+
+    def _market_pact_between(self, tribe: dict, other_tribe_id: str) -> Optional[dict]:
+        if not tribe or not other_tribe_id:
+            return None
+        return next((
+            pact for pact in self._active_market_pacts(tribe)
+            if pact.get("otherTribeId") == other_tribe_id
+        ), None)
+
+    def _market_pact_success_chance(self, tribe: dict, other_tribe_id: str) -> float:
+        relation = (tribe.get("boundary_relations", {}) or {}).get(other_tribe_id, {}) or {}
+        trust = max(0, int(relation.get("tradeTrust", 0) or 0))
+        score = max(0, int(relation.get("score", 0) or 0))
+        chance = (
+            TRIBE_MARKET_PACT_CHANCE_BASE
+            + trust * TRIBE_MARKET_PACT_TRUST_BONUS
+            + score * TRIBE_MARKET_PACT_RELATION_BONUS
+        )
+        return max(0.1, min(0.9, chance))
+
+    def _create_market_pact(self, tribe: dict, other_tribe: dict, source_task_id: str, now_text: str) -> Optional[dict]:
+        if not tribe or not other_tribe:
+            return None
+        tribe_id = tribe.get("id")
+        other_tribe_id = other_tribe.get("id")
+        if not tribe_id or not other_tribe_id:
+            return None
+        shared_id = f"market_pact_{source_task_id}".replace(" ", "_")
+        active_until = datetime.fromtimestamp(
+            datetime.now().timestamp() + TRIBE_MARKET_PACT_MINUTES * 60
+        ).isoformat()
+        summary = "边市议价沉淀成互市约定，短期内贸易、联合守望和资源点争执都会更容易转向合作。"
+        created = None
+        for target_tribe, partner_tribe in ((tribe, other_tribe), (other_tribe, tribe)):
+            target_id = target_tribe.get("id")
+            partner_id = partner_tribe.get("id")
+            target_tribe["market_pacts"] = [
+                pact for pact in (target_tribe.get("market_pacts", []) or [])
+                if isinstance(pact, dict) and pact.get("otherTribeId") != partner_id
+            ]
+            pact = {
+                "id": f"{shared_id}_{target_id}",
+                "sharedPactId": shared_id,
+                "title": "互市约定",
+                "summary": summary,
+                "otherTribeId": partner_id,
+                "otherTribeName": partner_tribe.get("name", "邻近部落"),
+                "sourceTaskId": source_task_id,
+                "createdAt": now_text,
+                "activeUntil": active_until,
+                "tradeDiscount": TRIBE_MARKET_PACT_TRADE_DISCOUNT,
+                "tradeReputationBonus": TRIBE_MARKET_PACT_TRADE_REPUTATION_BONUS,
+                "jointWatchTradeTrust": TRIBE_MARKET_PACT_JOINT_WATCH_TRADE_TRUST,
+                "contestRelief": TRIBE_MARKET_PACT_CONTEST_RELIEF
+            }
+            target_tribe.setdefault("market_pacts", []).append(pact)
+            target_tribe["market_pacts"] = target_tribe["market_pacts"][-TRIBE_MARKET_PACT_LIMIT:]
+            if target_id == tribe_id:
+                created = pact
+        return created
+
+    def _diplomacy_council_signals(self, tribe: dict) -> list:
+        signals = []
+        for pact in self._active_market_pacts(tribe):
+            other_id = pact.get("otherTribeId")
+            if other_id:
+                signals.append({
+                    "kind": "market_pact",
+                    "id": pact.get("id"),
+                    "otherTribeId": other_id,
+                    "otherTribeName": pact.get("otherTribeName", "邻近部落"),
+                    "label": pact.get("title", "互市约定")
+                })
+        for truce in self._active_boundary_truces(tribe):
+            other_id = truce.get("otherTribeId")
+            if other_id:
+                signals.append({
+                    "kind": "boundary_truce",
+                    "id": truce.get("id"),
+                    "otherTribeId": other_id,
+                    "otherTribeName": truce.get("otherTribeName", "邻近部落"),
+                    "label": truce.get("title", "停争保护")
+                })
+        for task in tribe.get("war_diplomacy_tasks", []) or []:
+            if not isinstance(task, dict) or task.get("status") != "pending":
+                continue
+            other_id = task.get("otherTribeId")
+            if other_id:
+                signals.append({
+                    "kind": "war_diplomacy",
+                    "id": task.get("id"),
+                    "otherTribeId": other_id,
+                    "otherTribeName": task.get("otherTribeName", "邻近部落"),
+                    "label": task.get("modeLabel", "停战外交")
+                })
+        return signals
+
+    def _diplomacy_council_position(self, tribe: dict, participant_ids: list) -> tuple[float, float]:
+        points = []
+        own_center = (tribe.get("camp") or {}).get("center") or {}
+        if own_center:
+            points.append((float(own_center.get("x", 0) or 0), float(own_center.get("z", 0) or 0)))
+        for participant_id in participant_ids:
+            other = self.tribes.get(participant_id) or {}
+            center = (other.get("camp") or {}).get("center") or {}
+            if center:
+                points.append((float(center.get("x", 0) or 0), float(center.get("z", 0) or 0)))
+        if not points:
+            return 0, 0
+        x = sum(point[0] for point in points) / len(points)
+        z = sum(point[1] for point in points) / len(points)
+        return max(-480, min(480, x)), max(-480, min(480, z))
+
+    def _ensure_diplomacy_council_site(self, tribe: dict, now: datetime) -> Optional[dict]:
+        if not tribe or not tribe.get("id"):
+            return None
+        signals = self._diplomacy_council_signals(tribe)
+        if len(signals) < TRIBE_DIPLOMACY_COUNCIL_SIGNAL_TARGET:
+            return None
+        participant_ids = []
+        for signal in signals:
+            other_id = signal.get("otherTribeId")
+            if other_id and other_id not in participant_ids:
+                participant_ids.append(other_id)
+        if not participant_ids:
+            return None
+        active = [
+            site for site in (tribe.get("diplomacy_council_sites", []) or [])
+            if isinstance(site, dict) and site.get("status") == "active"
+        ]
+        for site in active:
+            try:
+                if datetime.fromisoformat(site.get("activeUntil", "")) <= now:
+                    continue
+            except (TypeError, ValueError):
+                pass
+            if any(participant_id in (site.get("participantTribeIds") or []) for participant_id in participant_ids):
+                return site
+        x, z = self._diplomacy_council_position(tribe, participant_ids)
+        active_until = datetime.fromtimestamp(now.timestamp() + TRIBE_DIPLOMACY_COUNCIL_MINUTES * 60).isoformat()
+        participant_names = []
+        for participant_id in participant_ids:
+            other = self.tribes.get(participant_id) or {}
+            participant_names.append(other.get("name", "邻近部落"))
+        site = {
+            "id": f"diplomacy_council_{tribe.get('id')}_{int(now.timestamp() * 1000)}_{random.randint(100, 999)}",
+            "type": "diplomacy_council_site",
+            "status": "active",
+            "label": "大议会与边市节",
+            "title": "大议会与边市节",
+            "summary": f"{len(signals)} 条互市/停争信号聚到中立火圈，可以公开选择停战、共享洞口或封锁不稳边市。",
+            "x": x,
+            "z": z,
+            "size": 1.15,
+            "signalCount": len(signals),
+            "signals": signals[-5:],
+            "participantTribeIds": participant_ids,
+            "participantTribeNames": participant_names,
+            "createdAt": now.isoformat(),
+            "activeUntil": active_until
+        }
+        tribe.setdefault("diplomacy_council_sites", []).append(site)
+        tribe["diplomacy_council_sites"] = tribe["diplomacy_council_sites"][-TRIBE_DIPLOMACY_COUNCIL_LIMIT:]
+        return site
+
+    def _active_diplomacy_council_sites(self, tribe: dict) -> list:
+        if not tribe:
+            return []
+        now = datetime.now()
+        self._ensure_diplomacy_council_site(tribe, now)
+        active = []
+        for site in tribe.get("diplomacy_council_sites", []) or []:
+            if not isinstance(site, dict) or site.get("status") != "active":
+                continue
+            active_until = site.get("activeUntil")
+            if active_until:
+                try:
+                    if datetime.fromisoformat(active_until) <= now:
+                        site["status"] = "expired"
+                        continue
+                except (TypeError, ValueError):
+                    pass
+            active.append(site)
+        if len(active) != len(tribe.get("diplomacy_council_sites", []) or []):
+            tribe["diplomacy_council_sites"] = [
+                site for site in (tribe.get("diplomacy_council_sites", []) or [])
+                if isinstance(site, dict) and site.get("status") == "active"
+            ][-TRIBE_DIPLOMACY_COUNCIL_LIMIT:]
+        return active[-TRIBE_DIPLOMACY_COUNCIL_LIMIT:]
+
+    def _remove_market_pact_between(self, tribe: dict, other_tribe_id: str):
+        if not tribe or not other_tribe_id:
+            return
+        tribe["market_pacts"] = [
+            pact for pact in (tribe.get("market_pacts", []) or [])
+            if isinstance(pact, dict) and pact.get("otherTribeId") != other_tribe_id
+        ]
+
+    def _append_boundary_followup_task(self, tribe: dict, task: dict):
+        if not tribe or not task:
+            return
+        tasks = [
+            item for item in (tribe.get("boundary_followup_tasks", []) or [])
+            if isinstance(item, dict) and item.get("id") != task.get("id")
+        ]
+        tasks.append(task)
+        tribe["boundary_followup_tasks"] = tasks[-TRIBE_BOUNDARY_FOLLOWUP_LIMIT:]
+
+    def _create_boundary_pressure_aftermath(self, tribe: dict, pressure: dict, now_text: str):
+        if not tribe or not pressure:
+            return
+        pressure_id = pressure.get("id")
+        if not pressure_id:
+            return
+        kind = "pressure_watch" if pressure.get("state") == "pressured" else "pressure_withdraw"
+        task_id = f"boundary_followup_{pressure_id}_{tribe.get('id')}"
+        title = "压力余波"
+        summary = f"与 {pressure.get('otherTribeName', '其他部落')} 的短时边界压力已经散去，族人可以整理标记，避免余怨继续发酵。"
+        relation_delta = 1 if pressure.get("state") == "pressured" else 0
+        pressure_relief = 1 if pressure.get("state") == "pressured" else 0
+        self._append_boundary_followup_task(tribe, {
+            "id": task_id,
+            "status": "pending",
+            "kind": kind,
+            "title": title,
+            "summary": summary,
+            "otherTribeId": pressure.get("otherTribeId"),
+            "otherTribeName": pressure.get("otherTribeName", "其他部落"),
+            "woodCost": TRIBE_BOUNDARY_PRESSURE_AFTERMATH_WOOD_COST,
+            "renownReward": TRIBE_BOUNDARY_PRESSURE_AFTERMATH_RENOWN,
+            "relationDelta": relation_delta,
+            "pressureRelief": pressure_relief,
+            "sourcePressureId": pressure_id,
+            "createdAt": now_text
+        })
+
+    def _create_boundary_truce_talk_task(self, tribe: dict, truce: dict, now_text: str):
+        if not tribe or not truce:
+            return
+        truce_id = truce.get("id")
+        if not truce_id:
+            return
+        food_reward = TRIBE_BOUNDARY_TRUCE_TALK_FOOD_REWARD + self._region_event_bonus_value(tribe, "truceTalkFoodBonus")
+        self._append_boundary_followup_task(tribe, {
+            "id": f"boundary_truce_talk_{truce_id}_{tribe.get('id')}",
+            "status": "pending",
+            "kind": "truce_talk",
+            "title": "停争谈判",
+            "summary": f"趁与 {truce.get('otherTribeName', '其他部落')} 的停争标记仍在，整理边界礼物，把短暂停火转成真正的往来。",
+            "otherTribeId": truce.get("otherTribeId"),
+            "otherTribeName": truce.get("otherTribeName", "其他部落"),
+            "foodReward": food_reward,
+            "tradeReward": TRIBE_BOUNDARY_TRUCE_TALK_TRADE_REWARD,
+            "renownReward": 2,
+            "relationDelta": 1,
+            "tradeTrustDelta": 1,
+            "regionEventBonuses": self._active_region_event_bonus_summaries(tribe),
+            "sourceTruceId": truce_id,
+            "createdAt": now_text
+        })
+
+    def _create_boundary_hostile_wear_task(self, tribe: dict, other_tribe_id: str, other_name: str, now_text: str):
+        if not tribe or not other_tribe_id:
+            return
+        relation = tribe.setdefault("boundary_relations", {}).setdefault(other_tribe_id, {})
+        last_wear = relation.get("lastHostileWearAt")
+        if last_wear:
+            try:
+                if (datetime.now() - datetime.fromisoformat(last_wear)).total_seconds() < TRIBE_BOUNDARY_ACTION_COOLDOWN_SECONDS:
+                    return
+            except (TypeError, ValueError):
+                pass
+        relation["lastHostileWearAt"] = now_text
+        tribe["food"] = max(0, int(tribe.get("food", 0) or 0) - TRIBE_BOUNDARY_HOSTILE_WEAR_FOOD_LOSS)
+        storage = tribe.setdefault("storage", {"wood": 0, "stone": 0})
+        wood_loss = max(0, TRIBE_BOUNDARY_HOSTILE_WEAR_WOOD_LOSS - self._region_event_bonus_value(tribe, "hostileWearWoodRelief"))
+        storage["wood"] = max(0, int(storage.get("wood", 0) or 0) - wood_loss)
+        self._append_boundary_followup_task(tribe, {
+            "id": f"boundary_hostile_wear_{int(datetime.now().timestamp() * 1000)}_{random.randint(100, 999)}",
+            "status": "pending",
+            "kind": "hostile_wear",
+            "title": "敌意损耗",
+            "summary": f"与 {other_name or '其他部落'} 的长期敌意拖慢了营地补给，已经损耗少量食物和木材；整理守边可换回声望并缓解战争压力。",
+            "otherTribeId": other_tribe_id,
+            "otherTribeName": other_name or "其他部落",
+            "renownReward": 4,
+            "pressureRelief": 1,
+            "regionEventBonuses": self._active_region_event_bonus_summaries(tribe),
+            "createdAt": now_text
+        })
+
+    def _public_boundary_followup_tasks(self, tribe: dict) -> list:
+        return [
+            item for item in (tribe.get("boundary_followup_tasks", []) or [])
+            if isinstance(item, dict) and item.get("status") == "pending"
+        ][-TRIBE_BOUNDARY_FOLLOWUP_LIMIT:]
+
+    async def complete_boundary_followup_task(self, player_id: str, task_id: str):
+        tribe_id = self.player_tribes.get(player_id)
+        tribe = self.tribes.get(tribe_id)
+        if not tribe:
+            await self._send_tribe_error(player_id, "请先加入一个部落")
+            return
+        task = next((
+            item for item in (tribe.get("boundary_followup_tasks", []) or [])
+            if isinstance(item, dict) and item.get("id") == task_id and item.get("status") == "pending"
+        ), None)
+        if not task:
+            await self._send_tribe_error(player_id, "没有找到可处理的边界后续")
+            return
+        wood_cost = int(task.get("woodCost", 0) or 0)
+        storage = tribe.setdefault("storage", {"wood": 0, "stone": 0})
+        if int(storage.get("wood", 0) or 0) < wood_cost:
+            await self._send_tribe_error(player_id, f"处理边界后续需要木材 {wood_cost}")
+            return
+        if wood_cost:
+            storage["wood"] = int(storage.get("wood", 0) or 0) - wood_cost
+        food_reward = int(task.get("foodReward", 0) or 0)
+        renown_reward = int(task.get("renownReward", 0) or 0)
+        trade_reward = int(task.get("tradeReward", 0) or 0)
+        tribe["food"] = int(tribe.get("food", 0) or 0) + food_reward
+        tribe["renown"] = int(tribe.get("renown", 0) or 0) + renown_reward
+        tribe["trade_reputation"] = int(tribe.get("trade_reputation", 0) or 0) + trade_reward
+        other_tribe_id = task.get("otherTribeId")
+        relation = tribe.setdefault("boundary_relations", {}).setdefault(other_tribe_id, {})
+        relation_delta = int(task.get("relationDelta", 0) or 0)
+        trade_trust_delta = int(task.get("tradeTrustDelta", 0) or 0)
+        pressure_relief = int(task.get("pressureRelief", 0) or 0)
+        if relation_delta:
+            relation["score"] = max(-9, min(9, int(relation.get("score", 0) or 0) + relation_delta))
+        if trade_trust_delta:
+            relation["tradeTrust"] = max(0, min(10, int(relation.get("tradeTrust", 0) or 0) + trade_trust_delta))
+        if pressure_relief:
+            relation["warPressure"] = max(0, int(relation.get("warPressure", 0) or 0) - pressure_relief)
+            relation["canDeclareWar"] = False
+        now_text = datetime.now().isoformat()
+        relation["lastAction"] = f"boundary_followup_{task.get('kind')}"
+        relation["lastActionAt"] = now_text
+        pact_created = None
+        pact_failed = False
+        other_tribe = self.tribes.get(other_tribe_id) if other_tribe_id else None
+        if task.get("kind") == "border_market" and other_tribe:
+            pact_chance = self._market_pact_success_chance(tribe, other_tribe_id)
+            if random.random() <= pact_chance:
+                pact_created = self._create_market_pact(tribe, other_tribe, task_id, now_text)
+            else:
+                pact_failed = True
+        task["status"] = "completed"
+        task["completedBy"] = player_id
+        task["completedAt"] = now_text
+        member = tribe.get("members", {}).get(player_id, {})
+        reward_bits = []
+        if wood_cost:
+            reward_bits.append(f"木材-{wood_cost}")
+        if food_reward:
+            reward_bits.append(f"食物+{food_reward}")
+        if renown_reward:
+            reward_bits.append(f"声望+{renown_reward}")
+        if trade_reward:
+            reward_bits.append(f"贸易信誉+{trade_reward}")
+        if relation_delta:
+            reward_bits.append(f"关系{relation_delta:+d}")
+        if trade_trust_delta:
+            reward_bits.append(f"信任+{trade_trust_delta}")
+        if pressure_relief:
+            reward_bits.append(f"战争压力-{pressure_relief}")
+        if pact_created:
+            reward_bits.append(f"互市约定{TRIBE_MARKET_PACT_MINUTES}分钟")
+        elif pact_failed:
+            reward_bits.append("互市约定未成")
+        detail = f"{member.get('name', '成员')} 处理{task.get('title', '边界后续')}：{'、'.join(reward_bits) or '边界局势稳定'}。"
+        history_related = {"kind": "boundary_followup", "taskId": task_id, "otherTribeId": other_tribe_id}
+        if pact_created:
+            history_related["marketPact"] = pact_created
+        self._add_tribe_history(tribe, "governance", "边界后续", detail, player_id, history_related)
+        if pact_created and other_tribe:
+            other_detail = f"{tribe.get('name', '部落')} 与本部落定下互市约定，贸易、联合守望和资源点争执会获得轻量修正。"
+            self._add_tribe_history(other_tribe, "trade", "互市约定", other_detail, player_id, {"kind": "market_pact", "otherTribeId": tribe_id, "sourceTaskId": task_id})
+            await self._notify_tribe(other_tribe_id, other_detail)
+            await self._publish_world_rumor(
+                "trade",
+                "互市约定",
+                f"{tribe.get('name', '部落')} 与 {other_tribe.get('name', '部落')} 把边市议价沉淀成了短期互市约定。",
+                {"tribeId": tribe_id, "otherTribeId": other_tribe_id, "pactMinutes": TRIBE_MARKET_PACT_MINUTES}
+            )
+        await self._notify_tribe(tribe_id, detail)
+        await self.broadcast_tribe_state(tribe_id)
+        if pact_created and other_tribe_id:
+            await self.broadcast_tribe_state(other_tribe_id)
+
+    async def resolve_diplomacy_council_site(self, player_id: str, council_id: str, action_key: str):
+        tribe_id = self.player_tribes.get(player_id)
+        tribe = self.tribes.get(tribe_id)
+        if not tribe:
+            await self._send_tribe_error(player_id, "请先加入一个部落")
+            return
+        member = tribe.get("members", {}).get(player_id, {})
+        if member.get("role") not in ("leader", "elder"):
+            await self._send_tribe_error(player_id, "只有首领或长老可以主持大议会")
+            return
+        site = next((
+            item for item in self._active_diplomacy_council_sites(tribe)
+            if isinstance(item, dict) and item.get("id") == council_id
+        ), None)
+        if not site:
+            await self._send_tribe_error(player_id, "这处大议会会场已经散场")
+            return
+        action = TRIBE_DIPLOMACY_COUNCIL_ACTIONS.get(action_key)
+        if not action:
+            await self._send_tribe_error(player_id, "未知的大议会议题")
+            return
+        food_cost = int(action.get("foodCost", 0) or 0)
+        if int(tribe.get("food", 0) or 0) < food_cost:
+            await self._send_tribe_error(player_id, f"主持大议会需要公共食物{food_cost}")
+            return
+
+        if food_cost:
+            tribe["food"] = int(tribe.get("food", 0) or 0) - food_cost
+        renown_reward = int(action.get("renown", 0) or 0)
+        trade_reward = int(action.get("tradeReputation", 0) or 0)
+        discovery_reward = int(action.get("discoveryProgress", 0) or 0)
+        tribe["renown"] = int(tribe.get("renown", 0) or 0) + renown_reward
+        tribe["trade_reputation"] = int(tribe.get("trade_reputation", 0) or 0) + trade_reward
+        tribe["discovery_progress"] = int(tribe.get("discovery_progress", 0) or 0) + discovery_reward
+
+        now_text = datetime.now().isoformat()
+        participant_ids = list(site.get("participantTribeIds") or [])
+        relation_delta = int(action.get("relationDelta", 0) or 0)
+        trust_delta = int(action.get("tradeTrustDelta", 0) or 0)
+        pressure_relief = int(action.get("warPressureRelief", 0) or 0)
+        affected_tribe_ids = {tribe_id}
+        for other_id in participant_ids:
+            other_tribe = self.tribes.get(other_id)
+            relation = tribe.setdefault("boundary_relations", {}).setdefault(other_id, {})
+            if relation_delta:
+                relation["score"] = max(-9, min(9, int(relation.get("score", 0) or 0) + relation_delta))
+            if trust_delta:
+                relation["tradeTrust"] = max(0, min(10, int(relation.get("tradeTrust", 0) or 0) + trust_delta))
+            if pressure_relief:
+                relation["warPressure"] = max(0, int(relation.get("warPressure", 0) or 0) - pressure_relief)
+                relation["canDeclareWar"] = False
+            relation["lastAction"] = f"diplomacy_council_{action_key}"
+            relation["lastActionAt"] = now_text
+            if action.get("closeMarketPacts"):
+                self._remove_market_pact_between(tribe, other_id)
+            if other_tribe:
+                other_relation = other_tribe.setdefault("boundary_relations", {}).setdefault(tribe_id, {})
+                if relation_delta:
+                    other_relation["score"] = max(-9, min(9, int(other_relation.get("score", 0) or 0) + relation_delta))
+                if trust_delta:
+                    other_relation["tradeTrust"] = max(0, min(10, int(other_relation.get("tradeTrust", 0) or 0) + trust_delta))
+                if pressure_relief:
+                    other_relation["warPressure"] = max(0, int(other_relation.get("warPressure", 0) or 0) - pressure_relief)
+                    other_relation["canDeclareWar"] = False
+                other_relation["lastAction"] = f"incoming_diplomacy_council_{action_key}"
+                other_relation["lastActionAt"] = now_text
+                if discovery_reward:
+                    other_tribe["discovery_progress"] = int(other_tribe.get("discovery_progress", 0) or 0) + discovery_reward
+                if trade_reward:
+                    other_tribe["trade_reputation"] = int(other_tribe.get("trade_reputation", 0) or 0) + trade_reward
+                if action.get("closeMarketPacts"):
+                    self._remove_market_pact_between(other_tribe, tribe_id)
+                affected_tribe_ids.add(other_id)
+
+        site["status"] = "resolved"
+        site["resolvedBy"] = player_id
+        site["resolvedAt"] = now_text
+        site["resolvedAction"] = action_key
+        reward_bits = []
+        if food_cost:
+            reward_bits.append(f"食物-{food_cost}")
+        if renown_reward:
+            reward_bits.append(f"声望+{renown_reward}")
+        if trade_reward:
+            reward_bits.append(f"贸易信誉+{trade_reward}")
+        if discovery_reward:
+            reward_bits.append(f"发现+{discovery_reward}")
+        if relation_delta:
+            reward_bits.append(f"关系{relation_delta:+d}")
+        if trust_delta:
+            reward_bits.append(f"信任{trust_delta:+d}")
+        if pressure_relief:
+            reward_bits.append(f"战争压力-{pressure_relief}")
+        if action.get("closeMarketPacts"):
+            reward_bits.append("互市约定封存")
+        detail = f"{member.get('name', '成员')} 在{site.get('title', '大议会')}主持“{action.get('label', '议题')}”：{action.get('summary', '')} {'、'.join(reward_bits)}。"
+        record = {
+            "kind": "diplomacy_council",
+            "councilId": council_id,
+            "actionKey": action_key,
+            "actionLabel": action.get("label"),
+            "participantTribeIds": participant_ids,
+            "participantTribeNames": site.get("participantTribeNames", []),
+            "rewardParts": reward_bits,
+            "createdAt": site.get("createdAt"),
+            "resolvedAt": now_text
+        }
+        for target_id in affected_tribe_ids:
+            target = self.tribes.get(target_id)
+            if target:
+                self._add_tribe_history(target, "governance", "大议会与边市节", detail, player_id, record)
+                await self._notify_tribe(target_id, detail)
+        await self._publish_world_rumor(
+            "trade",
+            "大议会与边市节",
+            f"{tribe.get('name', '部落')} 在中立火圈主持“{action.get('label', '议题')}”，把多条互市/停争信号变成公开外交结果。",
+            {"tribeId": tribe_id, "councilId": council_id, "action": action_key}
+        )
+        for target_id in affected_tribe_ids:
+            await self.broadcast_tribe_state(target_id)
+        await self._broadcast_current_map()
+
     def _ensure_boundary_outcome_legacy(self, tribe: dict, relation: dict):
         if not tribe or not relation:
             return
@@ -179,6 +1115,12 @@ class GameTribeProgressionMixin:
             relation_progress["score"] = max(-9, min(9, int(relation_progress.get("score", 0) or 0) + relation_delta))
             if trade_delta:
                 relation_progress["tradeTrust"] = max(0, min(9, int(relation_progress.get("tradeTrust", 0) or 0) + trade_delta))
+            if relation_delta:
+                reward_parts.append(f"关系{relation_delta:+d}")
+            if trade_delta:
+                reward_parts.append(f"信任+{trade_delta}")
+            if outcome.get("marketPact"):
+                reward_parts.append("互市约定修正")
         elif outcome.get("state") == "hostile":
             relation_progress["score"] = max(-9, int(relation_progress.get("score", 0) or 0) - 1)
         else:
@@ -212,6 +1154,8 @@ class GameTribeProgressionMixin:
             {"tribeId": tribe_id, "outcomeId": outcome_id, "state": outcome.get("state")}
         )
         await self.broadcast_tribe_state(tribe_id)
+        if outcome.get("kind") == "resource_site_contest" and response_key == "trade_path" and outcome.get("otherTribeId"):
+            await self.broadcast_tribe_state(outcome.get("otherTribeId"))
 
     def _apply_resource_contest_response(self, tribe: dict, outcome: dict, response_key: str) -> dict:
         site_id = outcome.get("siteId")
@@ -224,6 +1168,8 @@ class GameTribeProgressionMixin:
             outcome["responseLabel"] = "让渡"
             outcome["relationDelta"] = 2
             outcome["tradeTrustDelta"] = 1
+            if outcome.get("marketPact"):
+                outcome["tradeTrustDelta"] += 1
             if site:
                 site["status"] = "ceded"
                 tribe["scouted_resource_sites"] = [
@@ -235,9 +1181,13 @@ class GameTribeProgressionMixin:
             outcome["responseLabel"] = "交换通路"
             outcome["relationDelta"] = 1
             outcome["tradeTrustDelta"] = 3
+            if outcome.get("marketPact"):
+                outcome["relationDelta"] += 1
+                outcome["tradeTrustDelta"] += 1
             if site:
                 site["contested"] = False
                 site["contestResolvedAs"] = "trade_path"
+                self._create_trade_route_sites(tribe, outcome, site)
             return {
                 "food": max(2, int(base_reward.get("food", 0) or 0) // 2),
                 "wood": max(0, int(base_reward.get("wood", 0) or 0) // 2),
@@ -246,8 +1196,8 @@ class GameTribeProgressionMixin:
                 "renown": 2
             }
         outcome["responseLabel"] = "守住"
-        outcome["relationDelta"] = -2
-        outcome["tradeTrustDelta"] = 0
+        outcome["relationDelta"] = -1 if outcome.get("marketPact") else -2
+        outcome["tradeTrustDelta"] = 1 if outcome.get("marketPact") else 0
         if site:
             site["contestResolvedAs"] = "hold"
         base_reward["renown"] = int(base_reward.get("renown", 0) or 0) + 2
@@ -451,6 +1401,7 @@ class GameTribeProgressionMixin:
         tide = env["resourceTide"]
         region_type = tide.get("regionType", "region_forest")
         site_reward = TRIBE_SCOUT_SITE_REWARDS.get(region_type, TRIBE_SCOUT_SITE_REWARDS["region_forest"])
+        _, region_bonus_label = self._region_building_bonus(tribe, region_type, "secure")
         angle = random.random() * math.pi * 2
         distance = random.randint(10, max(14, int(tide.get("radius", 20) or 20)))
         site_x = max(-490, min(490, float(tide.get("x", 0) or 0) + math.cos(angle) * distance))
@@ -467,6 +1418,7 @@ class GameTribeProgressionMixin:
             "z": site_z,
             "size": 1.0,
             "reward": {key: value for key, value in site_reward.items() if key != "label"},
+            "regionBonusLabel": region_bonus_label,
             "foundBy": member.get("name", "成员"),
             "status": "active",
             "createdAt": datetime.now().isoformat(),
@@ -540,9 +1492,11 @@ class GameTribeProgressionMixin:
         site["contestedByTribeId"] = other_id
         site["contestedByTribeName"] = other_tribe.get("name", "其他部落")
         site["contestSiteId"] = other_site.get("id")
+        market_pact = self._market_pact_between(tribe, other_id)
 
         progress = tribe.setdefault("boundary_relations", {}).setdefault(other_id, {})
-        progress["score"] = max(-9, int(progress.get("score", 0) or 0) - 2)
+        score_loss = max(0, 2 - (TRIBE_MARKET_PACT_CONTEST_RELIEF if market_pact else 0))
+        progress["score"] = max(-9, int(progress.get("score", 0) or 0) - score_loss)
         progress["lastAction"] = "resource_site_contest"
         progress["lastActionAt"] = datetime.now().isoformat()
 
@@ -566,17 +1520,22 @@ class GameTribeProgressionMixin:
             reward["food"] = 4
         if int(site_reward.get("discoveryProgress", 0) or 0):
             reward["discoveryProgress"] = 1
+        summary = f"{site.get('label', '侦察资源点')} 与 {other_tribe.get('name', '其他部落')} 的侦察线索重叠，边界关系变得紧张。"
+        if market_pact:
+            summary += " 互市约定降低了误判，争执更容易转向交换通路。"
         pending.append({
             "id": f"resource_contest_{int(datetime.now().timestamp() * 1000)}_{random.randint(100, 999)}",
             "kind": "resource_site_contest",
             "state": "hostile",
             "title": "资源点争执",
-            "summary": f"{site.get('label', '侦察资源点')} 与 {other_tribe.get('name', '其他部落')} 的侦察线索重叠，边界关系变得紧张。",
+            "summary": summary,
             "siteId": site.get("id"),
             "siteLabel": site.get("label"),
             "otherSiteId": other_site.get("id"),
             "otherTribeId": other_id,
             "otherTribeName": other_tribe.get("name", "其他部落"),
+            "marketPact": bool(market_pact),
+            "marketPactTitle": market_pact.get("title") if market_pact else "",
             "reward": reward,
             "responseOptions": [
                 {"key": "hold", "label": "守住"},
@@ -664,6 +1623,8 @@ class GameTribeProgressionMixin:
             storage["wood"] = int(storage.get("wood", 0) or 0) + 2
             storage["stone"] = int(storage.get("stone", 0) or 0) + 2
             reward_parts.append("道路驮运木材+2/石块+2")
+        region_bonus, region_bonus_label = self._region_building_bonus(tribe, site.get("regionType"), "secure")
+        self._apply_region_bonus_rewards(tribe, region_bonus, region_bonus_label, reward_parts)
 
         member = tribe.get("members", {}).get(player_id, {})
         site["status"] = "secured"
@@ -679,6 +1640,7 @@ class GameTribeProgressionMixin:
             "patrolCount": 0,
             "relayCount": 0,
             "roadLinked": self._has_tribe_structure_type(tribe, "tribe_road"),
+            "regionBonusLabel": region_bonus_label,
             "securedByName": member.get("name", "成员"),
             "controlledAt": site["securedAt"],
             "lastYieldAt": None,
@@ -778,6 +1740,10 @@ class GameTribeProgressionMixin:
             storage["wood"] = int(storage.get("wood", 0) or 0) + road_bonus
             storage["stone"] = int(storage.get("stone", 0) or 0) + road_bonus
             reward_parts.append(f"道路运输木材+{road_bonus}/石块+{road_bonus}")
+        region_bonus, region_bonus_label = self._region_building_bonus(tribe, site.get("regionType"), "yield")
+        self._apply_region_bonus_rewards(tribe, region_bonus, region_bonus_label, reward_parts)
+        if region_bonus_label:
+            site["regionBonusLabel"] = region_bonus_label
 
         if not reward_parts:
             tribe["renown"] = int(tribe.get("renown", 0) or 0) + 1
@@ -816,6 +1782,106 @@ class GameTribeProgressionMixin:
         self._add_tribe_history(tribe, "world_event", "收取控制资源点", detail, player_id, record)
         await self._notify_tribe(tribe_id, detail)
         await self.broadcast_tribe_state(tribe_id)
+        await self._broadcast_current_map()
+
+    async def collect_trade_route_site(self, player_id: str, site_id: str):
+        tribe_id = self.player_tribes.get(player_id)
+        tribe = self.tribes.get(tribe_id)
+        if not tribe:
+            await self._send_tribe_error(player_id, "请先加入一个部落")
+            return
+
+        sites = self._active_trade_route_sites(tribe)
+        site = next((item for item in sites if item.get("id") == site_id), None)
+        if not site:
+            await self._send_tribe_error(player_id, "这条交换通路已经消散")
+            return
+
+        player = self.players.get(player_id, {})
+        dx = float(player.get("x", 0) or 0) - float(site.get("x", 0) or 0)
+        dz = float(player.get("z", 0) or 0) - float(site.get("z", 0) or 0)
+        if dx * dx + dz * dz > TRIBE_SCOUT_SITE_INTERACT_DISTANCE * TRIBE_SCOUT_SITE_INTERACT_DISTANCE:
+            await self._send_tribe_error(player_id, "靠近交换通路贸易点后才能收取")
+            return
+
+        last_collected_at = site.get("lastCollectedAt")
+        if last_collected_at:
+            try:
+                elapsed = (datetime.now() - datetime.fromisoformat(last_collected_at)).total_seconds()
+                if elapsed < TRIBE_TRADE_ROUTE_SITE_COLLECT_COOLDOWN_SECONDS:
+                    remaining = max(1, math.ceil((TRIBE_TRADE_ROUTE_SITE_COLLECT_COOLDOWN_SECONDS - elapsed) / 60))
+                    await self._send_tribe_error(player_id, f"这条交换通路刚整理过，还需约 {remaining} 分钟")
+                    return
+            except (TypeError, ValueError):
+                pass
+
+        storage = tribe.setdefault("storage", {"wood": 0, "stone": 0})
+        reward = dict(site.get("reward") or {})
+        reward_parts = []
+        if int(reward.get("wood", 0) or 0):
+            storage["wood"] = int(storage.get("wood", 0) or 0) + 2
+            reward_parts.append("木材+2")
+        if int(reward.get("stone", 0) or 0):
+            storage["stone"] = int(storage.get("stone", 0) or 0) + 2
+            reward_parts.append("石块+2")
+        if int(reward.get("food", 0) or 0):
+            tribe["food"] = int(tribe.get("food", 0) or 0) + 2
+            reward_parts.append("食物+2")
+        if int(reward.get("discoveryProgress", 0) or 0):
+            tribe["discovery_progress"] = int(tribe.get("discovery_progress", 0) or 0) + 1
+            reward_parts.append("发现+1")
+        self._apply_trade_route_market_reward(tribe, site, reward_parts)
+
+        tribe["trade_reputation"] = int(tribe.get("trade_reputation", 0) or 0) + 1
+        tribe["renown"] = int(tribe.get("renown", 0) or 0) + 1
+        reward_parts.extend(["贸易信誉+1", "声望+1"])
+        partner_id = site.get("partnerTribeId")
+        if partner_id:
+            progress = tribe.setdefault("boundary_relations", {}).setdefault(partner_id, {})
+            progress["tradeTrust"] = max(0, min(9, int(progress.get("tradeTrust", 0) or 0) + 1))
+            progress["score"] = min(9, int(progress.get("score", 0) or 0) + 1)
+            progress["lastAction"] = "trade_route_collect"
+            progress["lastActionAt"] = datetime.now().isoformat()
+
+        site["lastCollectedAt"] = datetime.now().isoformat()
+        site["collectCount"] = int(site.get("collectCount", 0) or 0) + 1
+        market_started = False
+        market_target = int(site.get("marketCollectTarget", TRIBE_TRADE_ROUTE_MARKET_COLLECTS) or TRIBE_TRADE_ROUTE_MARKET_COLLECTS)
+        if not self._trade_route_market_active(site) and site["collectCount"] >= market_target:
+            activated_tribes = self._activate_trade_route_market(site, datetime.now())
+            market_started = bool(activated_tribes)
+            if market_started:
+                reward_parts.append(f"边市开启{TRIBE_TRADE_ROUTE_MARKET_MINUTES}分钟")
+        member = tribe.get("members", {}).get(player_id, {})
+        site["lastCollectedBy"] = member.get("name", "成员")
+        record = {
+            "kind": "trade_route_site",
+            "siteId": site.get("id"),
+            "siteLabel": site.get("label", "交换通路贸易点"),
+            "partnerTribeName": site.get("partnerTribeName", "邻近部落"),
+            "memberName": member.get("name", "成员"),
+            "rewardParts": reward_parts,
+            "marketStarted": market_started,
+            "marketRewardLabel": site.get("marketRewardLabel"),
+            "createdAt": site["lastCollectedAt"]
+        }
+        detail = f"{record['memberName']} 整理了与 {record['partnerTribeName']} 的交换通路：{'、'.join(reward_parts)}。"
+        if market_started:
+            detail += " 两边的交换通路升成短时边市，并留下了可处理的边市议价。"
+        self._add_tribe_history(tribe, "trade", "收取交换通路", detail, player_id, record)
+        if market_started:
+            await self._publish_world_rumor(
+                "trade",
+                "边市开张",
+                f"{tribe.get('name', '部落')} 与 {site.get('partnerTribeName', '邻近部落')} 的交换通路升成短时边市。",
+                {"tribeId": tribe_id, "siteId": site_id, "sharedRouteId": site.get("sharedRouteId")}
+            )
+        await self._notify_tribe(tribe_id, detail)
+        await self.broadcast_tribe_state(tribe_id)
+        if market_started:
+            partner_id = site.get("partnerTribeId")
+            if partner_id and partner_id in self.tribes:
+                await self.broadcast_tribe_state(partner_id)
         await self._broadcast_current_map()
 
     async def patrol_controlled_resource_site(self, player_id: str, site_id: str):
@@ -1185,6 +2251,7 @@ class GameTribeProgressionMixin:
             target_id = target_tribe.get("id")
             if not target_id:
                 continue
+            _, region_bonus_label = self._region_building_bonus(target_tribe, region_type, "secure")
             site = {
                 "id": f"{shared_id}_{target_id}",
                 "tribeId": target_id,
@@ -1197,6 +2264,7 @@ class GameTribeProgressionMixin:
                 "z": site_z,
                 "size": 1.05,
                 "reward": {key: value for key, value in site_reward.items() if key != "label"},
+                "regionBonusLabel": region_bonus_label,
                 "foundBy": member_name,
                 "status": "active",
                 "sharedByTribeId": tribe.get("id"),
@@ -1526,6 +2594,15 @@ class GameTribeProgressionMixin:
                     other_tribe["boundary_pressures"] = other_tribe["boundary_pressures"][-TRIBE_BOUNDARY_OUTCOME_LIMIT:]
                     affected_tribe_ids.add(other_tribe_id)
                     reward_parts.append(f"边界压制{TRIBE_BOUNDARY_PRESSURE_MINUTES}分钟")
+                    if relation.get("state") == "hostile" and pressure_chain_count:
+                        self._create_boundary_hostile_wear_task(
+                            other_tribe,
+                            tribe_id,
+                            tribe.get("name", "对方部落"),
+                            boundary_progress["lastActionAt"]
+                        )
+                        affected_tribe_ids.add(other_tribe_id)
+                        reward_parts.append("长期敌意造成对方营地损耗")
             relation = self._flag_boundary_relation(tribe_id, flag) or relation
             affected_tribe_ids.update(self._ensure_boundary_outcome(tribe, relation))
             if action.get("pressure") and pressure_chain_count:
@@ -1543,6 +2620,22 @@ class GameTribeProgressionMixin:
             if shared_sites:
                 affected_tribe_ids.add(other_tribe_id)
                 reward_parts.append("共享资源线索+1")
+                market_pact = self._market_pact_between(tribe, other_tribe_id)
+                if market_pact:
+                    pact_bonus = TRIBE_MARKET_PACT_JOINT_WATCH_TRADE_TRUST
+                    boundary_progress["tradeTrust"] = max(
+                        0,
+                        min(10, int(boundary_progress.get("tradeTrust", 0) or 0) + pact_bonus)
+                    )
+                    tribe["trade_reputation"] = int(tribe.get("trade_reputation", 0) or 0) + TRIBE_MARKET_PACT_TRADE_REPUTATION_BONUS
+                    if other_tribe:
+                        other_progress = other_tribe.setdefault("boundary_relations", {}).setdefault(tribe_id, {})
+                        other_progress["tradeTrust"] = max(
+                            0,
+                            min(10, int(other_progress.get("tradeTrust", 0) or 0) + pact_bonus)
+                        )
+                        other_tribe["trade_reputation"] = int(other_tribe.get("trade_reputation", 0) or 0) + TRIBE_MARKET_PACT_TRADE_REPUTATION_BONUS
+                    reward_parts.append(f"互市约定守望信任+{pact_bonus}")
         record = {
             "kind": "boundary_action",
             "flagId": flag.get("id"),

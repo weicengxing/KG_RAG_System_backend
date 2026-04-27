@@ -278,6 +278,7 @@ class GameWorldLogicMixin:
                 "key": layout["key"],
                 "type": layout["type"],
                 "label": layout.get("label") or self._tribe_building_label(tribe.get("name", "部落"), layout),
+                "summary": layout.get("summary", ""),
                 "wood": required_wood,
                 "stone": required_stone,
                 "baseWood": cost["baseWood"],
@@ -457,6 +458,9 @@ class GameWorldLogicMixin:
                 decorations.append(beast_marker)
             decorations.extend(self._active_scouted_resource_sites(tribe))
             decorations.extend(self._active_controlled_resource_sites(tribe))
+            decorations.extend(self._active_trade_route_sites(tribe))
+            decorations.extend(self._active_diplomacy_council_sites(tribe))
+            decorations.extend(self._active_world_event_remnants(tribe))
         return decorations
 
     def _active_scouted_resource_sites(self, tribe: dict) -> List[dict]:
@@ -494,6 +498,33 @@ class GameWorldLogicMixin:
         if len(active) != len(tribe.get("controlled_resource_sites", []) or []):
             tribe["controlled_resource_sites"] = active[-TRIBE_CONTROLLED_SITE_LIMIT:]
         return active[-TRIBE_CONTROLLED_SITE_LIMIT:]
+
+    def _active_trade_route_sites(self, tribe: dict) -> List[dict]:
+        active = []
+        now = datetime.now()
+        for site in tribe.get("trade_route_sites", []) or []:
+            if not isinstance(site, dict):
+                continue
+            active_until = site.get("activeUntil")
+            if active_until:
+                try:
+                    if datetime.fromisoformat(active_until) <= now:
+                        continue
+                except (TypeError, ValueError):
+                    pass
+            market_until = site.get("marketUntil")
+            site["isBorderMarket"] = False
+            if market_until:
+                try:
+                    site["isBorderMarket"] = datetime.fromisoformat(market_until) > now
+                except (TypeError, ValueError):
+                    site["isBorderMarket"] = False
+            if not site["isBorderMarket"] and site.get("label") == "交换通路边市":
+                site["label"] = "交换通路贸易点"
+            active.append(site)
+        if len(active) != len(tribe.get("trade_route_sites", []) or []):
+            tribe["trade_route_sites"] = active[-TRIBE_TRADE_ROUTE_SITE_LIMIT:]
+        return active[-TRIBE_TRADE_ROUTE_SITE_LIMIT:]
 
     def _tribe_beast_marker(self, tribe: dict) -> Optional[dict]:
         if int(tribe.get("tamed_beasts", 0) or 0) <= 0:
@@ -667,6 +698,60 @@ class GameWorldLogicMixin:
                     "lastRelayedAt": site.get("lastRelayedAt"),
                     "lastRelayedBy": site.get("lastRelayedBy"),
                     "contestResolvedAs": site.get("contestResolvedAs")
+                })
+            for site in self._active_trade_route_sites(tribe):
+                landmarks.append({
+                    "id": site.get("id"),
+                    "tribeId": tribe_id,
+                    "label": site.get("label", "交换通路贸易点"),
+                    "x": site.get("x", 0),
+                    "z": site.get("z", 0),
+                    "type": "trade_route_site",
+                    "resourceLabel": site.get("resourceLabel"),
+                    "partnerTribeId": site.get("partnerTribeId"),
+                    "partnerTribeName": site.get("partnerTribeName"),
+                    "collectCount": int(site.get("collectCount", 0) or 0),
+                    "marketCollectTarget": int(site.get("marketCollectTarget", TRIBE_TRADE_ROUTE_MARKET_COLLECTS) or TRIBE_TRADE_ROUTE_MARKET_COLLECTS),
+                    "isBorderMarket": bool(site.get("isBorderMarket")),
+                    "marketRewardLabel": site.get("marketRewardLabel"),
+                    "claimedAt": site.get("createdAt"),
+                    "activeUntil": site.get("activeUntil"),
+                    "lastCollectedAt": site.get("lastCollectedAt"),
+                    "lastCollectedBy": site.get("lastCollectedBy"),
+                    "sharedRouteId": site.get("sharedRouteId")
+                })
+            for site in self._active_diplomacy_council_sites(tribe):
+                landmarks.append({
+                    "id": site.get("id"),
+                    "tribeId": tribe_id,
+                    "label": site.get("label", "大议会与边市节"),
+                    "x": site.get("x", 0),
+                    "z": site.get("z", 0),
+                    "type": "diplomacy_council_site",
+                    "summary": site.get("summary"),
+                    "signalCount": int(site.get("signalCount", 0) or 0),
+                    "participantTribeNames": site.get("participantTribeNames", []),
+                    "claimedAt": site.get("createdAt"),
+                    "activeUntil": site.get("activeUntil")
+                })
+            for remnant in self._active_world_event_remnants(tribe):
+                landmarks.append({
+                    "id": remnant.get("id"),
+                    "tribeId": tribe_id,
+                    "label": remnant.get("label", "事件余迹"),
+                    "x": remnant.get("x", 0),
+                    "z": remnant.get("z", 0),
+                    "type": "world_event_remnant",
+                    "remnantKey": remnant.get("remnantKey"),
+                    "summary": remnant.get("summary"),
+                    "rewardLabel": remnant.get("rewardLabel"),
+                    "regionType": remnant.get("regionType"),
+                    "regionLabel": remnant.get("regionLabel"),
+                    "sourceEventTitle": remnant.get("sourceEventTitle"),
+                    "sourceActionLabel": remnant.get("sourceActionLabel"),
+                    "claimedBy": remnant.get("createdBy"),
+                    "claimedAt": remnant.get("createdAt"),
+                    "activeUntil": remnant.get("activeUntil")
                 })
         return landmarks
 

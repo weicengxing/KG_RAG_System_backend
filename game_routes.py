@@ -767,22 +767,31 @@ class ConnectionManager(GameConflictMixin, GameTribeProgressionMixin, GameWorldL
         return True
 
     def _public_trade(self, trade: dict) -> dict:
+        from_tribe_id = trade.get("fromTribeId")
+        to_tribe_id = trade.get("toTribeId")
+        market_pact = self._market_pact_between(self.tribes.get(from_tribe_id), to_tribe_id)
         return {
             "id": trade.get("id"),
-            "fromTribeId": trade.get("fromTribeId"),
+            "fromTribeId": from_tribe_id,
             "fromTribeName": trade.get("fromTribeName", "部落"),
-            "toTribeId": trade.get("toTribeId"),
+            "toTribeId": to_tribe_id,
             "toTribeName": trade.get("toTribeName", "部落"),
             "offer": dict(trade.get("offer", {})),
             "request": dict(trade.get("request", {})),
             "status": trade.get("status", "active"),
             "createdAt": trade.get("createdAt"),
-            "resolvedAt": trade.get("resolvedAt")
+            "resolvedAt": trade.get("resolvedAt"),
+            "marketPact": bool(market_pact or trade.get("marketPact")),
+            "marketPactTitle": (market_pact or {}).get("title") or trade.get("marketPactTitle"),
+            "marketPactActiveUntil": (market_pact or {}).get("activeUntil") or trade.get("marketPactActiveUntil"),
+            "marketPactDiscount": int(trade.get("marketPactDiscount", 0) or 0),
+            "marketPactReputationBonus": int(trade.get("marketPactReputationBonus", 0) or 0)
         }
 
     def _active_boundary_pressures(self, tribe: dict) -> List[dict]:
         active = []
         now = datetime.now()
+        now_text = now.isoformat()
         for item in tribe.get("boundary_pressures", []) or []:
             if not isinstance(item, dict):
                 continue
@@ -790,6 +799,7 @@ class ConnectionManager(GameConflictMixin, GameTribeProgressionMixin, GameWorldL
             if active_until:
                 try:
                     if datetime.fromisoformat(active_until) < now:
+                        self._create_boundary_pressure_aftermath(tribe, item, now_text)
                         continue
                 except (TypeError, ValueError):
                     pass
@@ -801,6 +811,7 @@ class ConnectionManager(GameConflictMixin, GameTribeProgressionMixin, GameWorldL
     def _active_boundary_truces(self, tribe: dict) -> List[dict]:
         active = []
         now = datetime.now()
+        now_text = now.isoformat()
         for item in tribe.get("boundary_truces", []) or []:
             if not isinstance(item, dict):
                 continue
@@ -811,6 +822,7 @@ class ConnectionManager(GameConflictMixin, GameTribeProgressionMixin, GameWorldL
                         continue
                 except (TypeError, ValueError):
                     pass
+            self._create_boundary_truce_talk_task(tribe, item, now_text)
             active.append(item)
         if len(active) != len(tribe.get("boundary_truces", []) or []):
             tribe["boundary_truces"] = active[-TRIBE_BOUNDARY_OUTCOME_LIMIT:]
@@ -825,11 +837,13 @@ class ConnectionManager(GameConflictMixin, GameTribeProgressionMixin, GameWorldL
         ][-TRIBE_TRADE_MAX_ACTIVE:]
 
     def _trade_targets_for_tribe(self, tribe_id: str) -> List[dict]:
+        own_tribe = self.tribes.get(tribe_id)
         return [
             {
                 "id": tribe.get("id"),
                 "name": tribe.get("name", "部落"),
-                "tradeReputation": self._trade_reputation_state(tribe)
+                "tradeReputation": self._trade_reputation_state(tribe),
+                "marketPact": bool(self._market_pact_between(own_tribe, tribe.get("id")))
             }
             for tribe in self.tribes.values()
             if tribe.get("id") and tribe.get("id") != tribe_id
@@ -923,6 +937,45 @@ class ConnectionManager(GameConflictMixin, GameTribeProgressionMixin, GameWorldL
         }
         return max(0, int(bonuses.get(oath_key, {}).get(key, 0) or 0))
 
+    def _maybe_create_newcomer_key_moment(self, player_id: str, tribe: dict, member: dict, previous_contribution: int, donated_points: int):
+        player = self.players.get(player_id, {})
+        if not tribe or not member or donated_points < TRIBE_NEWCOMER_KEY_MIN_DONATION:
+            return None
+        if previous_contribution > TRIBE_NEWCOMER_KEY_CONTRIBUTION_MAX:
+            return None
+        if int(player.get("personal_renown", 0) or 0) > PLAYER_NEWCOMER_KEY_RENOWN_MAX:
+            return None
+        if player.get("newcomer_key_used") or member.get("newcomer_key_used"):
+            return None
+        moment = dict(random.choice(TRIBE_NEWCOMER_KEY_MOMENTS))
+        storage = tribe.setdefault("storage", {"wood": 0, "stone": 0})
+        for key in ("wood", "stone"):
+            amount = int(moment.get(key, 0) or 0)
+            if amount:
+                storage[key] = int(storage.get(key, 0) or 0) + amount
+        food = int(moment.get("food", 0) or 0)
+        if food:
+            tribe["food"] = int(tribe.get("food", 0) or 0) + food
+        renown = int(moment.get("renown", 0) or 0)
+        if renown:
+            tribe["renown"] = int(tribe.get("renown", 0) or 0) + renown
+        discovery = int(moment.get("discoveryProgress", 0) or 0)
+        if discovery:
+            tribe["discovery_progress"] = int(tribe.get("discovery_progress", 0) or 0) + discovery
+        player["personal_renown"] = int(player.get("personal_renown", 0) or 0) + TRIBE_NEWCOMER_KEY_RENOWN
+        player["newcomer_key_used"] = True
+        member["newcomer_key_used"] = True
+        record = {
+            "key": moment.get("key"),
+            "label": moment.get("label", "新人关键时刻"),
+            "summary": moment.get("summary", ""),
+            "personalRenown": TRIBE_NEWCOMER_KEY_RENOWN,
+            "createdAt": datetime.now().isoformat()
+        }
+        member.setdefault("newcomer_moments", []).append(record)
+        member["newcomer_moments"] = member["newcomer_moments"][-3:]
+        return record
+
     def _public_member(self, member: dict) -> dict:
         return {
             "id": member.get("id"),
@@ -930,6 +983,7 @@ class ConnectionManager(GameConflictMixin, GameTribeProgressionMixin, GameWorldL
             "role": member.get("role", "member"),
             "contribution": member.get("contribution", 0),
             "allocation": dict(member.get("allocation", {"wood": 0, "stone": 0})),
+            "newcomerMoments": list(member.get("newcomer_moments", []) or [])[-2:],
             "punishCount": int(member.get("punish_count", 0) or 0)
         }
 
@@ -983,6 +1037,10 @@ class ConnectionManager(GameConflictMixin, GameTribeProgressionMixin, GameWorldL
             "scoutReports": list(tribe.get("scout_reports", []) or [])[-3:],
             "scoutedResourceSites": self._active_scouted_resource_sites(tribe),
             "controlledResourceSites": self._active_controlled_resource_sites(tribe),
+            "tradeRouteSites": self._active_trade_route_sites(tribe),
+            "regionEventBonuses": self._active_region_event_bonus_summaries(tribe),
+            "worldEventActions": self._world_event_action_options(tribe),
+            "worldEventRemnants": self._active_world_event_remnants(tribe),
             "tamedBeasts": int(tribe.get("tamed_beasts", 0) or 0),
             "beastGrowth": self._beast_growth_state(tribe),
             "beastTaskConfig": TRIBE_BEAST_TASK_REWARDS,
@@ -1002,6 +1060,7 @@ class ConnectionManager(GameConflictMixin, GameTribeProgressionMixin, GameWorldL
                 "minHistory": TRIBE_ORAL_EPIC_MIN_HISTORY
             },
             "tradeRequests": self._active_trade_requests_for_tribe(tribe.get("id")),
+            "marketPacts": self._active_market_pacts(tribe),
             "boundaryOutcomes": [
                 item for item in (tribe.get("boundary_outcomes", []) or [])
                 if isinstance(item, dict) and item.get("status") == "pending"
@@ -1016,6 +1075,9 @@ class ConnectionManager(GameConflictMixin, GameTribeProgressionMixin, GameWorldL
             "boundaryRelations": dict(tribe.get("boundary_relations", {}) or {}),
             "boundaryPressures": self._active_boundary_pressures(tribe),
             "boundaryTruces": self._active_boundary_truces(tribe),
+            "boundaryFollowupTasks": self._public_boundary_followup_tasks(tribe),
+            "diplomacyCouncilSites": self._active_diplomacy_council_sites(tribe),
+            "diplomacyCouncilActions": TRIBE_DIPLOMACY_COUNCIL_ACTIONS,
             "personalConflicts": list(tribe.get("personal_conflicts", []) or [])[-5:],
             "smallConflicts": self._public_small_conflicts(tribe),
             "warPressure": self._public_war_pressure(tribe),
@@ -1311,8 +1373,17 @@ class ConnectionManager(GameConflictMixin, GameTribeProgressionMixin, GameWorldL
             return
 
         member = tribe["members"].get(player_id)
+        newcomer_moment = None
         if member:
+            previous_contribution = int(member.get("contribution", 0) or 0)
             member["contribution"] = member.get("contribution", 0) + total_points
+            newcomer_moment = self._maybe_create_newcomer_key_moment(
+                player_id,
+                tribe,
+                member,
+                previous_contribution,
+                total_points
+            )
 
         previous_target = self._build_target_state(tribe)
         self._refresh_tribe_target(tribe)
@@ -1323,6 +1394,20 @@ class ConnectionManager(GameConflictMixin, GameTribeProgressionMixin, GameWorldL
                 tribe_id,
                 f"部落目标已完成：{current_target.get('title', '当前目标')}。前往石器台即可推进下一阶段。"
             )
+
+        if newcomer_moment:
+            player_name = member.get("name", "新人") if member else self._get_player_name(player_id)
+            detail = f"{player_name} 触发新人关键时刻“{newcomer_moment.get('label', '新人关键时刻')}”：{newcomer_moment.get('summary', '')} 个人声望 +{TRIBE_NEWCOMER_KEY_RENOWN}。"
+            self._add_tribe_history(
+                tribe,
+                "governance",
+                "新人关键时刻",
+                detail,
+                player_id,
+                {"kind": "newcomer_key_moment", **newcomer_moment}
+            )
+            await self._notify_tribe(tribe_id, detail)
+            await self.send_personal_conflict_status(player_id)
 
         await self.broadcast_tribe_state(tribe_id)
 
@@ -1545,6 +1630,14 @@ class ConnectionManager(GameConflictMixin, GameTribeProgressionMixin, GameWorldL
         if offer_amount <= 0 or request_amount <= 0:
             await self._send_tribe_error(player_id, "贸易数量必须大于 0")
             return
+        market_pact = self._market_pact_between(tribe, target_tribe_id)
+        market_pact_discount = 0
+        if market_pact:
+            market_pact_discount = min(
+                request_amount - 1,
+                int(market_pact.get("tradeDiscount", TRIBE_MARKET_PACT_TRADE_DISCOUNT) or 0)
+            )
+            request_amount = max(1, request_amount - market_pact_discount)
         if not self._deduct_trade_resource(tribe, offer_resource, offer_amount):
             await self._send_tribe_error(player_id, "部落资源不足，无法托管贸易物资")
             return
@@ -1560,12 +1653,18 @@ class ConnectionManager(GameConflictMixin, GameTribeProgressionMixin, GameWorldL
             "request": {"resource": request_resource, "amount": request_amount},
             "status": "active",
             "createdBy": player_id,
-            "createdAt": datetime.now().isoformat()
+            "createdAt": datetime.now().isoformat(),
+            "marketPact": bool(market_pact),
+            "marketPactTitle": market_pact.get("title") if market_pact else "",
+            "marketPactActiveUntil": market_pact.get("activeUntil") if market_pact else None,
+            "marketPactDiscount": market_pact_discount,
+            "marketPactReputationBonus": int((market_pact or {}).get("tradeReputationBonus", 0) or 0)
         }
         self.tribe_trades[trade_id] = trade
-        detail = f"{member.get('name', '管理者')} 向 {target_tribe.get('name', '部落')} 发布贸易：出 {offer_amount} {offer_resource}，换 {request_amount} {request_resource}。"
+        pact_text = f" 互市约定让请求少要 {market_pact_discount} 份。" if market_pact_discount else ""
+        detail = f"{member.get('name', '管理者')} 向 {target_tribe.get('name', '部落')} 发布贸易：出 {offer_amount} {offer_resource}，换 {request_amount} {request_resource}。{pact_text}"
         self._add_tribe_history(tribe, "trade", "发布部落贸易", detail, player_id, {"kind": "trade", **self._public_trade(trade)})
-        await self._notify_tribe(target_tribe_id, f"{tribe.get('name', '部落')} 发来贸易请求：出 {offer_amount} {offer_resource}，换 {request_amount} {request_resource}。")
+        await self._notify_tribe(target_tribe_id, f"{tribe.get('name', '部落')} 发来贸易请求：出 {offer_amount} {offer_resource}，换 {request_amount} {request_resource}。{pact_text}")
         await self.broadcast_tribe_state(tribe_id)
         await self.broadcast_tribe_state(target_tribe_id)
 
@@ -1643,11 +1742,23 @@ class ConnectionManager(GameConflictMixin, GameTribeProgressionMixin, GameWorldL
                 from_tribe["renown"] += from_oath_bonus
             if to_oath_bonus:
                 to_tribe["renown"] += to_oath_bonus
+            market_pact_bonus = int(trade.get("marketPactReputationBonus", 0) or 0)
+            if market_pact_bonus:
+                from_tribe["trade_reputation"] += market_pact_bonus
+                to_tribe["trade_reputation"] += market_pact_bonus
+                from_progress = from_tribe.setdefault("boundary_relations", {}).setdefault(to_tribe_id, {})
+                to_progress = to_tribe.setdefault("boundary_relations", {}).setdefault(from_tribe_id, {})
+                for progress in (from_progress, to_progress):
+                    progress["score"] = max(-9, min(9, int(progress.get("score", 0) or 0) + 1))
+                    progress["tradeTrust"] = max(0, min(10, int(progress.get("tradeTrust", 0) or 0) + 1))
+                    progress["lastAction"] = "market_pact_trade"
+                    progress["lastActionAt"] = datetime.now().isoformat()
             trade["status"] = "accepted"
             trade["resolvedAt"] = datetime.now().isoformat()
-            detail = f"{member.get('name', '管理者')} 接受了 {trade.get('fromTribeName', '部落')} 的贸易：收到 {trade['offer']['amount']} {trade['offer']['resource']}，交付 {request_amount} {request_resource}。"
+            pact_detail = f" 互市约定让双方贸易信誉额外 +{market_pact_bonus}。" if market_pact_bonus else ""
+            detail = f"{member.get('name', '管理者')} 接受了 {trade.get('fromTribeName', '部落')} 的贸易：收到 {trade['offer']['amount']} {trade['offer']['resource']}，交付 {request_amount} {request_resource}。{pact_detail}"
             self._add_tribe_history(to_tribe, "trade", "接受部落贸易", detail, player_id, {"kind": "trade", **self._public_trade(trade)})
-            self._add_tribe_history(from_tribe, "trade", "完成部落贸易", f"{to_tribe.get('name', '部落')} 接受贸易，部落收到 {request_amount} {request_resource}。", player_id, {"kind": "trade", **self._public_trade(trade)})
+            self._add_tribe_history(from_tribe, "trade", "完成部落贸易", f"{to_tribe.get('name', '部落')} 接受贸易，部落收到 {request_amount} {request_resource}。{pact_detail}", player_id, {"kind": "trade", **self._public_trade(trade)})
             await self._notify_tribe(from_tribe_id, f"{to_tribe.get('name', '部落')} 接受了贸易请求，交换已完成。")
             await self._publish_world_rumor(
                 "trade",
@@ -1662,6 +1773,7 @@ class ConnectionManager(GameConflictMixin, GameTribeProgressionMixin, GameWorldL
                     "toOathBonus": to_oath_bonus,
                     "fromRoadBonus": from_road_bonus,
                     "toRoadBonus": to_road_bonus,
+                    "marketPactBonus": market_pact_bonus,
                     "fromReputation": self._trade_reputation_state(from_tribe),
                     "toReputation": self._trade_reputation_state(to_tribe)
                 }
@@ -2180,15 +2292,18 @@ class ConnectionManager(GameConflictMixin, GameTribeProgressionMixin, GameWorldL
         reward = dict(WORLD_EVENT_REWARDS.get(event_key, {}))
         event_action_key = None
         event_action_label = None
-        if event_key == "herd":
-            event_action_key = event_action if event_action in TRIBE_HERD_ACTIONS else "hunt"
-            action_plan = TRIBE_HERD_ACTIONS[event_action_key]
+        event_action_key, action_plan = self._world_event_action_plan(tribe, event, event_action)
+        if action_plan:
             event_action_label = action_plan.get("label", "追猎")
-            reward["food"] = math.floor(int(reward.get("food", 0) or 0) * float(action_plan.get("foodMultiplier", 1) or 1))
+            if "foodMultiplier" in action_plan:
+                reward["food"] = math.floor(int(reward.get("food", 0) or 0) * float(action_plan.get("foodMultiplier", 1) or 1))
             reward["renown"] = int(reward.get("renown", 0) or 0) + int(action_plan.get("renownBonus", 0) or 0)
+            for key, amount in (action_plan.get("reward") or {}).items():
+                reward[key] = int(reward.get(key, 0) or 0) + int(amount or 0)
             if int(action_plan.get("tamedBeasts", 0) or 0) > 0:
                 tribe["tamed_beasts"] = int(tribe.get("tamed_beasts", 0) or 0) + int(action_plan.get("tamedBeasts", 0) or 0)
         reward_parts = []
+        region_event_bonus_labels = self._apply_world_event_region_bonuses(tribe, event_key, reward, reward_parts)
         for resource_key, label in (("wood", "木材"), ("stone", "石块")):
             amount = int(reward.get(resource_key, 0) or 0)
             if amount == 0:
@@ -2211,10 +2326,14 @@ class ConnectionManager(GameConflictMixin, GameTribeProgressionMixin, GameWorldL
         if renown_reward > 0:
             tribe["renown"] = int(tribe.get("renown", 0) or 0) + renown_reward
             reward_parts.append(f"声望+{renown_reward}")
+        trade_reward = int(reward.get("tradeReputation", 0) or 0)
+        if trade_reward > 0:
+            tribe["trade_reputation"] = int(tribe.get("trade_reputation", 0) or 0) + trade_reward
+            reward_parts.append(f"贸易信誉+{trade_reward}")
         discovery_key = None
         if event_key == "ruin_clue":
             discovery_key = "deep_cave_echo"
-            chain_count = int(tribe.get("ruin_clue_chain", 0) or 0) + 1
+            chain_count = int(tribe.get("ruin_clue_chain", 0) or 0) + 1 + int((action_plan or {}).get("ruinClueChainBonus", 0) or 0)
             tribe["ruin_clue_chain"] = chain_count
             discoveries = tribe.setdefault("discoveries", [])
             if discovery_key not in discoveries:
@@ -2241,8 +2360,13 @@ class ConnectionManager(GameConflictMixin, GameTribeProgressionMixin, GameWorldL
             if discovery_key not in discoveries:
                 discoveries.append(discovery_key)
             detail += " 稀有遗迹被完整记录，部落获得了古老记忆，可继续发展更高阶铭文。"
+        if action_plan and action_plan.get("detail"):
+            detail += f" {action_plan.get('detail')}"
         if reward_parts:
             detail += f" 奖励：{'、'.join(reward_parts)}。"
+        remnant = self._build_world_event_remnant(tribe, event, event_action_key, action_plan, member)
+        if remnant:
+            detail += f" {remnant.get('label', '事件余迹')}留在附近，成员可再次整理。"
 
         env["worldEvents"] = [item for item in events if item.get("id") != event_id]
         rare_spawned = False
@@ -2270,11 +2394,13 @@ class ConnectionManager(GameConflictMixin, GameTribeProgressionMixin, GameWorldL
                 "memberName": member.get("name", "成员"),
                 "reward": reward,
                 "rewardParts": reward_parts,
+                "regionEventBonusLabels": region_event_bonus_labels,
                 "eventActionKey": event_action_key,
                 "eventActionLabel": event_action_label,
                 "discoveryKey": discovery_key,
                 "celebrationDiscoveryBonus": discovery_buff_bonus if discovery_progress > 0 else 0,
-                "rareSpawned": rare_spawned
+                "rareSpawned": rare_spawned,
+                "remnant": remnant
             }
         )
         await self._notify_tribe(tribe_id, detail)
@@ -2686,19 +2812,82 @@ class ConnectionManager(GameConflictMixin, GameTribeProgressionMixin, GameWorldL
             return None
         return guard
 
+    def _active_personal_inspiration(self, player: dict):
+        inspiration = player.get("personal_inspiration") if isinstance(player.get("personal_inspiration"), dict) else None
+        if not inspiration:
+            return None
+        try:
+            if datetime.fromisoformat(inspiration.get("activeUntil")).timestamp() < datetime.now().timestamp():
+                player.pop("personal_inspiration", None)
+                return None
+        except (TypeError, ValueError):
+            player.pop("personal_inspiration", None)
+            return None
+        return inspiration
+
+    def _personal_renown_title(self, renown: int) -> dict:
+        for title in PLAYER_RENOWN_TITLES:
+            if renown >= int(title.get("min", 0) or 0):
+                return dict(title)
+        return dict(PLAYER_RENOWN_TITLES[-1])
+
+    def _personal_title_bonus(self, player: dict, key: str) -> int:
+        title = self._personal_renown_title(int(player.get("personal_renown", 0) or 0))
+        return int(title.get(key, 0) or 0)
+
+    def _personal_guard_radius(self, player: dict) -> int:
+        return PLAYER_CONFLICT_GUARD_RADIUS + self._personal_title_bonus(player, "guardRadiusBonus")
+
+    def _personal_fatigue_recovery_seconds(self, player: dict) -> int:
+        return max(60, PLAYER_CONFLICT_FATIGUE_DECAY_SECONDS - self._personal_title_bonus(player, "fatigueRecoveryBonusSeconds"))
+
     def _public_personal_conflict_status(self, player: dict) -> dict:
         fatigue = self._active_player_fatigue(player)
         guard = self._active_personal_guard(player)
+        inspiration = self._active_personal_inspiration(player)
+        personal_renown = int(player.get("personal_renown", 0) or 0)
+        renown_title = self._personal_renown_title(personal_renown)
         return {
             "fatigue": fatigue,
             "fatigueMax": PLAYER_CONFLICT_FATIGUE_MAX,
             "fatigueUntil": player.get("conflict_fatigue_until") if fatigue else "",
             "guardUntil": guard.get("activeUntil") if guard else "",
             "guardTargetName": guard.get("targetName") if guard else "",
-            "personalRenown": int(player.get("personal_renown", 0) or 0),
-            "fatigueDecaySeconds": PLAYER_CONFLICT_FATIGUE_DECAY_SECONDS,
-            "guardSeconds": PLAYER_CONFLICT_GUARD_SECONDS
+            "guardRadius": guard.get("radius", self._personal_guard_radius(player)) if guard else self._personal_guard_radius(player),
+            "personalRenown": personal_renown,
+            "renownTitle": renown_title,
+            "inspirationUntil": inspiration.get("activeUntil") if inspiration else "",
+            "inspirationSourceName": inspiration.get("sourceName") if inspiration else "",
+            "inspirationContribution": int(inspiration.get("contributionBonus", 0) or 0) if inspiration else 0,
+            "inspireMinRenown": PLAYER_CONFLICT_INSPIRE_MIN_RENOWN,
+            "fatigueDecaySeconds": self._personal_fatigue_recovery_seconds(player),
+            "fatigueRecoveryBonusSeconds": int(renown_title.get("fatigueRecoveryBonusSeconds", 0) or 0),
+            "sparTrainingBonus": int(renown_title.get("sparTrainingBonus", 0) or 0),
+            "skirmishContributionBonus": int(renown_title.get("skirmishContributionBonus", 0) or 0),
+            "guardSeconds": PLAYER_CONFLICT_GUARD_SECONDS,
+            "inspireSeconds": PLAYER_CONFLICT_INSPIRE_SECONDS
         }
+
+    def _find_personal_guardian(self, actor_id: str, target_id: str, target_tribe_id: str):
+        if not actor_id or not target_id or not target_tribe_id:
+            return None, None
+        target = self.players.get(target_id)
+        if not target:
+            return None, None
+        for guardian_id, guardian in self.players.items():
+            if guardian_id in {actor_id, target_id}:
+                continue
+            if self.player_tribes.get(guardian_id) != target_tribe_id:
+                continue
+            guard = self._active_personal_guard(guardian)
+            if not guard or guard.get("targetId") != actor_id:
+                continue
+            dx = float(guardian.get("x", 0) or 0) - float(target.get("x", 0) or 0)
+            dz = float(guardian.get("z", 0) or 0) - float(target.get("z", 0) or 0)
+            radius = float(guard.get("radius", self._personal_guard_radius(guardian)) or PLAYER_CONFLICT_GUARD_RADIUS)
+            if dx * dx + dz * dz <= radius * radius:
+                return guardian_id, guardian
+        return None, None
 
     async def send_personal_conflict_status(self, player_id: str):
         player = self.players.get(player_id)
@@ -2718,7 +2907,7 @@ class ConnectionManager(GameConflictMixin, GameTribeProgressionMixin, GameWorldL
         actor_tribe_id = self.player_tribes.get(player_id)
         target_tribe_id = self.player_tribes.get(target_id)
         if action.get("sameTribeOnly") and actor_tribe_id != target_tribe_id:
-            await self.send_personal_message(player_id, {"type": "personal_conflict_error", "message": "切磋只能对同部落成员发起"})
+            await self.send_personal_message(player_id, {"type": "personal_conflict_error", "message": f"{action.get('label', '行动')}只能对同部落成员发起"})
             return
 
         dx = float(target.get("x", 0) or 0) - float(actor.get("x", 0) or 0)
@@ -2728,9 +2917,12 @@ class ConnectionManager(GameConflictMixin, GameTribeProgressionMixin, GameWorldL
             return
 
         if action.get("guard"):
+            guard_radius = self._personal_guard_radius(actor)
             actor["personal_guard"] = {
                 "targetId": target_id,
                 "targetName": target.get("name", "玩家"),
+                "protectTribeId": actor_tribe_id,
+                "radius": guard_radius,
                 "activeUntil": datetime.fromtimestamp(datetime.now().timestamp() + PLAYER_CONFLICT_GUARD_SECONDS).isoformat()
             }
             await self.send_personal_message(player_id, {
@@ -2743,11 +2935,66 @@ class ConnectionManager(GameConflictMixin, GameTribeProgressionMixin, GameWorldL
                 "targetName": target.get("name", "玩家"),
                 "winnerId": player_id,
                 "guardUntil": actor["personal_guard"]["activeUntil"],
+                "guardRadius": guard_radius,
                 "fatigue": actor.get("conflict_fatigue", 0),
                 "status": self._public_personal_conflict_status(actor),
                 "renownGain": 0
             })
             await self.send_personal_conflict_status(player_id)
+            return
+
+        if action.get("inspire"):
+            personal_renown = int(actor.get("personal_renown", 0) or 0)
+            if personal_renown < PLAYER_CONFLICT_INSPIRE_MIN_RENOWN:
+                await self.send_personal_message(player_id, {
+                    "type": "personal_conflict_error",
+                    "message": f"个人声望至少需要 {PLAYER_CONFLICT_INSPIRE_MIN_RENOWN} 才能鼓舞同伴"
+                })
+                return
+            title = self._personal_renown_title(personal_renown)
+            target["personal_inspiration"] = {
+                "sourceId": player_id,
+                "sourceName": actor.get("name", "玩家"),
+                "sourceTitle": title.get("title"),
+                "contributionBonus": PLAYER_CONFLICT_INSPIRE_CONTRIBUTION,
+                "activeUntil": datetime.fromtimestamp(datetime.now().timestamp() + PLAYER_CONFLICT_INSPIRE_SECONDS).isoformat()
+            }
+            result = {
+                "type": "personal_conflict_result",
+                "actionKey": action_key,
+                "actionLabel": action.get("label", "鼓舞"),
+                "actorId": player_id,
+                "actorName": actor.get("name", "玩家"),
+                "targetId": target_id,
+                "targetName": target.get("name", "玩家"),
+                "winnerId": player_id,
+                "inspirationUntil": target["personal_inspiration"]["activeUntil"],
+                "inspirationContribution": PLAYER_CONFLICT_INSPIRE_CONTRIBUTION,
+                "renownTitle": title,
+                "status": self._public_personal_conflict_status(actor),
+                "targetStatus": self._public_personal_conflict_status(target),
+                "renownGain": 0
+            }
+            record = {
+                "actionLabel": result["actionLabel"],
+                "actorName": result["actorName"],
+                "targetName": result["targetName"],
+                "winnerName": result["actorName"],
+                "renownTitle": title.get("title"),
+                "inspirationContribution": PLAYER_CONFLICT_INSPIRE_CONTRIBUTION,
+                "inspirationUntil": target["personal_inspiration"]["activeUntil"],
+                "createdAt": datetime.now().isoformat()
+            }
+            tribe = self.tribes.get(actor_tribe_id)
+            if tribe:
+                tribe.setdefault("personal_conflicts", []).append(record)
+                tribe["personal_conflicts"] = tribe["personal_conflicts"][-8:]
+            nearby = set(self._players_in_range(player_id, self.aoi_radius)) | set(self._players_in_range(target_id, self.aoi_radius)) | {player_id, target_id}
+            await self.broadcast(result, include=list(nearby))
+            await self.send_personal_conflict_status(player_id)
+            await self.send_personal_conflict_status(target_id)
+            if actor_tribe_id:
+                await self.broadcast_tribe_state(actor_tribe_id)
             return
 
         cooldowns = actor.setdefault("personal_conflict_cooldowns", {})
@@ -2766,29 +3013,49 @@ class ConnectionManager(GameConflictMixin, GameTribeProgressionMixin, GameWorldL
         target_fatigue = self._active_player_fatigue(target)
         actor_roll = random.randint(1, 6) + max(0, 3 - actor_fatigue)
         target_roll = random.randint(1, 6) + max(0, 3 - target_fatigue)
-        target_guard = target.get("personal_guard") if isinstance(target.get("personal_guard"), dict) else None
+        target_guard = self._active_personal_guard(target)
+        guardian_id = None
+        guardian = None
         guard_active = False
         if target_guard and target_guard.get("targetId") == player_id:
             try:
                 guard_active = datetime.fromisoformat(target_guard.get("activeUntil")).timestamp() >= datetime.now().timestamp()
             except (TypeError, ValueError):
                 guard_active = False
+        if not guard_active:
+            guardian_id, guardian = self._find_personal_guardian(player_id, target_id, target_tribe_id)
+            guard_active = bool(guardian)
         if guard_active:
             target_roll += 2
         actor_won = actor_roll >= target_roll
         fatigue_gain = int(action.get("fatigue", 1) or 1)
         if guard_active:
             fatigue_gain = max(0, fatigue_gain - 1)
-            target.pop("personal_guard", None)
+            if guardian:
+                guardian.pop("personal_guard", None)
+            else:
+                target.pop("personal_guard", None)
         target["conflict_fatigue"] = min(PLAYER_CONFLICT_FATIGUE_MAX, target_fatigue + fatigue_gain)
-        target["conflict_fatigue_until"] = datetime.fromtimestamp(datetime.now().timestamp() + PLAYER_CONFLICT_FATIGUE_DECAY_SECONDS).isoformat()
+        target_recovery_seconds = self._personal_fatigue_recovery_seconds(target)
+        actor_recovery_seconds = self._personal_fatigue_recovery_seconds(actor)
+        target["conflict_fatigue_until"] = datetime.fromtimestamp(datetime.now().timestamp() + target_recovery_seconds).isoformat()
         if action_key == "challenge" and not actor_won:
             actor["conflict_fatigue"] = min(PLAYER_CONFLICT_FATIGUE_MAX, actor_fatigue + 1)
-            actor["conflict_fatigue_until"] = target["conflict_fatigue_until"]
+            actor["conflict_fatigue_until"] = datetime.fromtimestamp(datetime.now().timestamp() + actor_recovery_seconds).isoformat()
 
         renown_gain = int(action.get("renown", 0) or 0)
         if actor_won:
             actor["personal_renown"] = int(actor.get("personal_renown", 0) or 0) + renown_gain
+        training_reward = int(action.get("trainingRenown", 0) or 0)
+        training_bonus = 0
+        if training_reward and actor_tribe_id == target_tribe_id:
+            training_bonus = max(
+                self._personal_title_bonus(actor, "sparTrainingBonus"),
+                self._personal_title_bonus(target, "sparTrainingBonus")
+            )
+            training_reward += training_bonus
+            actor["personal_renown"] = int(actor.get("personal_renown", 0) or 0) + training_reward
+            target["personal_renown"] = int(target.get("personal_renown", 0) or 0) + training_reward
         cooldowns[target_id] = datetime.now().isoformat()
 
         if actor_tribe_id and target_tribe_id and actor_tribe_id != target_tribe_id:
@@ -2838,6 +3105,12 @@ class ConnectionManager(GameConflictMixin, GameTribeProgressionMixin, GameWorldL
             "targetFatigue": target.get("conflict_fatigue", 0),
             "cooldownSeconds": PLAYER_CONFLICT_COOLDOWN_SECONDS,
             "guarded": guard_active,
+            "guardianId": guardian_id or (target_id if guard_active else ""),
+            "guardianName": (guardian.get("name", "成员") if guardian else (target.get("name", "玩家") if guard_active else "")),
+            "trainingReward": training_reward,
+            "trainingBonus": training_bonus,
+            "targetRecoverySeconds": target_recovery_seconds,
+            "actorRecoverySeconds": actor_recovery_seconds,
             "renownGain": renown_gain if actor_won else 0
         }
         record = {
@@ -2851,7 +3124,11 @@ class ConnectionManager(GameConflictMixin, GameTribeProgressionMixin, GameWorldL
             "targetFatigue": target.get("conflict_fatigue", 0),
             "fatigueUntil": target.get("conflict_fatigue_until"),
             "renownGain": renown_gain if actor_won else 0,
+            "trainingReward": training_reward,
+            "trainingBonus": training_bonus,
             "guarded": guard_active,
+            "guardianName": result.get("guardianName", ""),
+            "targetRecoverySeconds": target_recovery_seconds,
             "createdAt": cooldowns[target_id]
         }
         for tribe_id in {actor_tribe_id, target_tribe_id}:
@@ -2875,6 +3152,8 @@ class ConnectionManager(GameConflictMixin, GameTribeProgressionMixin, GameWorldL
         }, exclude=[target_id], include=list(nearby))
         await self.send_personal_conflict_status(player_id)
         await self.send_personal_conflict_status(target_id)
+        if guardian_id:
+            await self.send_personal_conflict_status(guardian_id)
 
         if actor_tribe_id:
             await self.broadcast_tribe_state(actor_tribe_id)
@@ -3088,6 +3367,13 @@ async def game_websocket(
                         message.get("action", "")
                     )
 
+                elif message_type == "tribe_resolve_diplomacy_council":
+                    await manager.resolve_diplomacy_council_site(
+                        player_id,
+                        message.get("councilId", ""),
+                        message.get("actionKey", "")
+                    )
+
                 elif message_type == "tribe_complete_war_aftermath":
                     await manager.complete_war_aftermath(
                         player_id,
@@ -3192,6 +3478,12 @@ async def game_websocket(
                         message.get("actionKey", "")
                     )
 
+                elif message_type == "tribe_complete_boundary_followup":
+                    await manager.complete_boundary_followup_task(
+                        player_id,
+                        message.get("taskId", "")
+                    )
+
                 elif message_type == "tribe_unlock_rune":
                     await manager.unlock_tribe_rune(
                         player_id,
@@ -3261,6 +3553,18 @@ async def game_websocket(
                     await manager.collect_controlled_resource_site(
                         player_id,
                         message.get("siteId", "")
+                    )
+
+                elif message_type == "tribe_collect_trade_route_site":
+                    await manager.collect_trade_route_site(
+                        player_id,
+                        message.get("siteId", "")
+                    )
+
+                elif message_type == "tribe_collect_world_event_remnant":
+                    await manager.collect_world_event_remnant(
+                        player_id,
+                        message.get("remnantId", "")
                     )
 
                 elif message_type == "tribe_patrol_controlled_site":
