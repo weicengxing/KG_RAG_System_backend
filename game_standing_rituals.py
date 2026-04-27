@@ -272,6 +272,8 @@ class GameStandingRitualMixin:
         stance_labels = "、".join([item.get("stanceLabel", "见证者") for item in participants])
         detail = f"{member.get('name', '管理者')} 收束{ritual.get('label', '站位仪式')}，{len(participants)} 名成员完成站位：{stance_labels}。{'、'.join(reward_parts) or '仪式已写入历史'}。"
         self._add_tribe_history(tribe, "ritual", "完成站位仪式", detail, player_id, {"kind": "standing_ritual_complete", "ritual": ritual, "rewardParts": reward_parts})
+        if hasattr(self, "_create_celebration_echo"):
+            self._create_celebration_echo(tribe, "ritual", ritual.get("label", "站位仪式"), player_id, ritual.get("id", ""))
         await self._publish_world_rumor(
             "ritual",
             "多人站位仪式",
@@ -280,3 +282,4 @@ class GameStandingRitualMixin:
         )
         await self._notify_tribe(tribe_id, detail)
         await self.broadcast_tribe_state(tribe_id)
+        await self._broadcast_current_map()

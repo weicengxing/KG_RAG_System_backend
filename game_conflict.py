@@ -1902,9 +1902,12 @@ class GameConflictMixin:
         for target_id in {tribe_id, other_tribe_id}:
             target = self.tribes.get(target_id)
             if target:
+                if hasattr(self, "_create_celebration_echo"):
+                    self._create_celebration_echo(target, "war", goal.get("label", "正式战争"), player_id, war_id)
                 self._add_tribe_history(target, "governance", "正式战争结算", detail, player_id, {"kind": "formal_war", "warId": war_id, "winnerTribeId": winner_id})
                 await self._notify_tribe(target_id, detail)
                 await self.broadcast_tribe_state(target_id)
+        await self._broadcast_current_map()
 
     async def request_war_truce(self, player_id: str, war_id: str):
         tribe_id = self.player_tribes.get(player_id)

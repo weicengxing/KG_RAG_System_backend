@@ -251,6 +251,8 @@ class GameDrumRhythmMixin:
         beat_labels = "、".join([item.get("beatLabel", "鼓拍") for item in participants])
         detail = f"{member.get('name', '成员')} 收束{rhythm.get('label', '鼓点节奏')}，{len(participants)} 名成员完成鼓拍：{beat_labels}。{'、'.join(reward_parts) or '鼓声写入部落历史'}。"
         self._add_tribe_history(tribe, "ritual", "鼓点节奏完成", detail, player_id, {"kind": "drum_rhythm_complete", "rhythm": rhythm, "rewardParts": reward_parts})
+        if hasattr(self, "_create_celebration_echo"):
+            self._create_celebration_echo(tribe, "drum", rhythm.get("label", "鼓点节奏"), player_id, rhythm.get("id", ""))
         await self._publish_world_rumor(
             "ritual",
             "鼓点节奏",
@@ -259,3 +261,4 @@ class GameDrumRhythmMixin:
         )
         await self._notify_tribe(tribe_id, detail)
         await self.broadcast_tribe_state(tribe_id)
+        await self._broadcast_current_map()

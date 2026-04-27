@@ -36,22 +36,29 @@ from game_caravans import GameCaravanMixin
 from game_cooking import GameCookingMixin
 from game_drum_rhythms import GameDrumRhythmMixin
 from game_group_emotes import GameGroupEmoteMixin
+from game_sacred_fire import GameSacredFireMixin
+from game_mentorship import GameMentorshipMixin
 from game_celebrations import GameCelebrationMixin
 from game_night_risks import GameNightRiskMixin
 from game_trade_credit import GameTradeCreditMixin
 from game_weather_forecast import GameWeatherForecastMixin
 from game_laws import GameLawMixin
+from game_shared_puzzles import GameSharedPuzzleMixin
 from game_apprentices import GameApprenticeExchangeMixin
 from game_messengers import GameMessengerMixin
 from game_personal_tokens import GamePersonalTokenMixin
 from game_visitors import GameVisitorMixin
 from game_far_returns import GameFarReturnMixin
 from game_trail_markers import GameTrailMarkerMixin
+from game_sanctuaries import GameSanctuaryMixin
 from game_collection_wall import GameCollectionWallMixin
+from game_renown_pledges import GameRenownPledgeMixin
+from game_cave_races import GameCaveRaceMixin
+from game_named_landmarks import GameNamedLandmarkMixin
 from game_tribe_progression import GameTribeProgressionMixin
 from game_conflict import GameConflictMixin
 
-class ConnectionManager(GameConflictMixin, GameEmergencyChoiceMixin, GameMutualAidAlertMixin, GameStoryEventsMixin, GameSeasonTabooMixin, GameStandingRitualMixin, GameBeastLinkMixin, GameMigrationMixin, GameCelestialMixin, GameHistoryFactMixin, GameCaravanMixin, GameCookingMixin, GameDrumRhythmMixin, GameGroupEmoteMixin, GameCelebrationMixin, GameNightRiskMixin, GameTradeCreditMixin, GameWeatherForecastMixin, GameLawMixin, GameApprenticeExchangeMixin, GameMessengerMixin, GamePersonalTokenMixin, GameVisitorMixin, GameFarReturnMixin, GameTrailMarkerMixin, GameCollectionWallMixin, GameMythMixin, GameTribeProgressionMixin, GameWorldLogicMixin):
+class ConnectionManager(GameConflictMixin, GameEmergencyChoiceMixin, GameMutualAidAlertMixin, GameStoryEventsMixin, GameSeasonTabooMixin, GameStandingRitualMixin, GameBeastLinkMixin, GameMigrationMixin, GameCelestialMixin, GameHistoryFactMixin, GameCaravanMixin, GameCookingMixin, GameDrumRhythmMixin, GameGroupEmoteMixin, GameSacredFireMixin, GameMentorshipMixin, GameCelebrationMixin, GameNightRiskMixin, GameTradeCreditMixin, GameWeatherForecastMixin, GameLawMixin, GameSharedPuzzleMixin, GameApprenticeExchangeMixin, GameMessengerMixin, GamePersonalTokenMixin, GameVisitorMixin, GameFarReturnMixin, GameTrailMarkerMixin, GameSanctuaryMixin, GameCollectionWallMixin, GameRenownPledgeMixin, GameCaveRaceMixin, GameNamedLandmarkMixin, GameMythMixin, GameTribeProgressionMixin, GameWorldLogicMixin):
     def __init__(self):
         # 活跃连接：{player_id: websocket}
         self.active_connections: Dict[str, WebSocket] = {}
@@ -826,8 +833,8 @@ class ConnectionManager(GameConflictMixin, GameEmergencyChoiceMixin, GameMutualA
             "marketPactReputationBonus": int(trade.get("marketPactReputationBonus", 0) or 0),
             "tradeCredit": self._trade_credit_public_summary(saved_credit or trade_credit),
             "tradeCreditDiscount": int(trade.get("tradeCreditDiscount", 0) or 0),
-            "tradeCreditReputationBonus": int((saved_credit or {}).get("reputationBonus", 0) or 0),
-            "tradeCreditStockBonus": int((saved_credit or {}).get("stockBonus", 0) or 0),
+            "tradeCreditReputationBonus": int((saved_credit or trade_credit or {}).get("reputationBonus", 0) or 0),
+            "tradeCreditStockBonus": int((saved_credit or trade_credit or {}).get("stockBonus", 0) or 0),
             "earnedTradeCredit": trade.get("earnedTradeCredit")
         }
 
@@ -1029,6 +1036,7 @@ class ConnectionManager(GameConflictMixin, GameEmergencyChoiceMixin, GameMutualA
             "allocation": dict(member.get("allocation", {"wood": 0, "stone": 0})),
             "newcomerMoments": list(member.get("newcomer_moments", []) or [])[-2:],
             "trustMarks": int(member.get("trust_marks", 0) or 0),
+            "renownStains": int(member.get("renown_stains", 0) or 0),
             "punishCount": int(member.get("punish_count", 0) or 0)
         }
 
@@ -1105,9 +1113,14 @@ class ConnectionManager(GameConflictMixin, GameEmergencyChoiceMixin, GameMutualA
             "worldEventActions": self._world_event_action_options(tribe),
             "worldEventRemnants": self._active_world_event_remnants(tribe),
             "mapMemories": self._active_map_memories(tribe),
+            "caveRaces": self._public_cave_races(tribe),
+            "caveRaceActions": TRIBE_CAVE_RACE_ACTIONS,
             "trailMarkers": self._public_trail_markers(tribe),
             "trailMarkerTypes": TRIBE_TRAIL_MARKER_TYPES,
             "trailMarkerActions": self._public_trail_marker_actions(),
+            "neutralSanctuaries": self._public_neutral_sanctuaries(tribe),
+            "neutralSanctuaryActions": self._public_neutral_sanctuary_actions(),
+            "neutralSanctuaryBlessings": self._public_neutral_sanctuary_blessings(tribe),
             "collectionWall": self._public_collection_wall(tribe),
             "collectionCandidates": self._collection_wall_candidates(tribe),
             "collectionActions": TRIBE_COLLECTION_ACTIONS,
@@ -1184,6 +1197,26 @@ class ConnectionManager(GameConflictMixin, GameEmergencyChoiceMixin, GameMutualA
             "groupEmoteConfig": {
                 "cooldownSeconds": TRIBE_GROUP_EMOTE_COOLDOWN_SECONDS
             },
+            "sacredFireRelay": self._public_sacred_fire_relay(tribe),
+            "sacredFireDestinations": {} if self._active_sacred_fire_relay(tribe) else TRIBE_SACRED_FIRE_RELAY_DESTINATIONS,
+            "sacredFireSteps": TRIBE_SACRED_FIRE_RELAY_STEPS,
+            "sacredFireRecords": self._public_sacred_fire_records(tribe),
+            "sacredFireConfig": {
+                "activeMinutes": TRIBE_SACRED_FIRE_RELAY_ACTIVE_MINUTES,
+                "minParticipants": TRIBE_SACRED_FIRE_RELAY_MIN_PARTICIPANTS,
+                "target": TRIBE_SACRED_FIRE_RELAY_TARGET_PARTICIPANTS
+            },
+            "mentorship": self._public_mentorship(tribe),
+            "mentorshipFocusOptions": {} if self._active_mentorship(tribe) else TRIBE_MENTORSHIP_FOCUS_OPTIONS,
+            "mentorCandidates": self._mentor_candidates(tribe),
+            "mentorshipConfig": {
+                "activeMinutes": TRIBE_MENTORSHIP_ACTIVE_MINUTES,
+                "target": TRIBE_MENTORSHIP_TARGET_STUDENTS,
+                "minStudents": TRIBE_MENTORSHIP_MIN_STUDENTS,
+                "minPersonalRenown": TRIBE_MENTORSHIP_MIN_PERSONAL_RENOWN,
+                "minContribution": TRIBE_MENTORSHIP_MIN_CONTRIBUTION
+            },
+            "mentorshipHistory": list(tribe.get("mentorship_history", []) or [])[-TRIBE_MENTORSHIP_HISTORY_LIMIT:],
             "celebrationEchoes": self._public_celebration_echoes(tribe),
             "celebrationEchoRecords": list(tribe.get("celebration_echo_records", []) or [])[-TRIBE_CELEBRATION_ECHO_HISTORY_LIMIT:],
             "celebrationEchoConfig": {
@@ -1210,6 +1243,17 @@ class ConnectionManager(GameConflictMixin, GameEmergencyChoiceMixin, GameMutualA
             "tribeLawOptions": {} if self._active_tribe_law(tribe) else TRIBE_LAW_OPTIONS,
             "tribeLawRemedies": self._public_law_remedies(tribe),
             "tribeLawRecords": self._public_law_records(tribe),
+            "sharedPuzzle": self._public_shared_puzzle(tribe),
+            "sharedPuzzleOptions": self._public_shared_puzzle_options(tribe),
+            "sharedPuzzleRecords": self._public_shared_puzzle_records(tribe),
+            "namedLandmarkOptions": self._public_named_landmark_options(tribe),
+            "namedLandmarkProposals": self._public_named_landmark_proposals(tribe),
+            "namedLandmarks": self._public_named_landmarks(tribe),
+            "namedLandmarkConfig": {
+                "supportTarget": self._named_landmark_support_target(tribe),
+                "nameMin": TRIBE_NAMED_LANDMARK_NAME_MIN,
+                "nameMax": TRIBE_NAMED_LANDMARK_NAME_MAX
+            },
             "oralChain": self._public_oral_chain(tribe),
             "oralChainConfig": {
                 "lineTarget": TRIBE_ORAL_CHAIN_LINE_TARGET,
@@ -1236,6 +1280,15 @@ class ConnectionManager(GameConflictMixin, GameEmergencyChoiceMixin, GameMutualA
             "personalTokens": self._active_personal_tokens(tribe),
             "personalTokenRecords": self._public_personal_token_records(tribe),
             "personalDebtTasks": self._public_personal_debt_tasks(tribe),
+            "renownPledgeOptions": TRIBE_RENOWN_PLEDGE_OPTIONS,
+            "renownPledges": self._active_renown_pledges(tribe),
+            "renownPledgeRecords": self._public_renown_pledge_records(tribe),
+            "renownPledgeConfig": {
+                "activeMinutes": TRIBE_RENOWN_PLEDGE_ACTIVE_MINUTES,
+                "minPersonalRenown": TRIBE_RENOWN_PLEDGE_MIN_PERSONAL_RENOWN,
+                "stake": TRIBE_RENOWN_PLEDGE_STAKE,
+                "failurePenalty": TRIBE_RENOWN_PLEDGE_FAILURE_PENALTY
+            },
             "boundaryOutcomes": [
                 item for item in (tribe.get("boundary_outcomes", []) or [])
                 if isinstance(item, dict) and item.get("status") == "pending"
@@ -1883,7 +1936,10 @@ class ConnectionManager(GameConflictMixin, GameEmergencyChoiceMixin, GameMutualA
             self._add_trade_resource(from_tribe, trade["offer"]["resource"], trade["offer"]["amount"])
             trade["status"] = "cancelled"
             trade["resolvedAt"] = datetime.now().isoformat()
+            credit_repair = self._open_trade_credit_repair_task(from_tribe, to_tribe, trade, "cancel", trade["resolvedAt"])
             detail = f"{member.get('name', '管理者')} 取消了对 {trade.get('toTribeName', '部落')} 的贸易请求，托管物资已返还。"
+            if credit_repair:
+                detail += f" 与 {to_tribe.get('name', '部落')} 的贸易信用需要保证人修复。"
             law_parts = self.apply_tribe_law_violation(from_tribe, player_id, "trade_cancel", "取消贸易")
             if law_parts:
                 detail += f" 律令记录：{'、'.join(law_parts)}。"
@@ -1895,7 +1951,10 @@ class ConnectionManager(GameConflictMixin, GameEmergencyChoiceMixin, GameMutualA
             self._add_trade_resource(from_tribe, trade["offer"]["resource"], trade["offer"]["amount"])
             trade["status"] = "rejected"
             trade["resolvedAt"] = datetime.now().isoformat()
+            credit_repair = self._open_trade_credit_repair_task(to_tribe, from_tribe, trade, "reject", trade["resolvedAt"])
             detail = f"{member.get('name', '管理者')} 拒绝了 {trade.get('fromTribeName', '部落')} 的贸易请求，托管物资已返还。"
+            if credit_repair:
+                detail += f" 与 {from_tribe.get('name', '部落')} 的贸易信用需要补交口信修复。"
             law_parts = self.apply_tribe_law_violation(to_tribe, player_id, "trade_reject", "拒绝贸易")
             if law_parts:
                 detail += f" 律令记录：{'、'.join(law_parts)}。"
@@ -1949,8 +2008,10 @@ class ConnectionManager(GameConflictMixin, GameEmergencyChoiceMixin, GameMutualA
                     progress["tradeTrust"] = max(0, min(10, int(progress.get("tradeTrust", 0) or 0) + 1))
                     progress["lastAction"] = "market_pact_trade"
                     progress["lastActionAt"] = datetime.now().isoformat()
+            trade_credit_parts = self._apply_trade_credit_on_accept(from_tribe, to_tribe, trade)
             trade["status"] = "accepted"
             trade["resolvedAt"] = datetime.now().isoformat()
+            trade_credit_result = self._record_trade_credit_success(from_tribe, to_tribe, trade, trade["resolvedAt"])
             apprentice_detail = ""
             if from_apprentice_trade_bonus or to_apprentice_trade_bonus:
                 apprentice_detail = f" 学徒账法让贸易信誉额外 +{from_apprentice_trade_bonus}/{to_apprentice_trade_bonus}。"
@@ -1958,11 +2019,16 @@ class ConnectionManager(GameConflictMixin, GameEmergencyChoiceMixin, GameMutualA
             law_detail = ""
             if from_law_bonus or to_law_bonus:
                 law_detail = f" 律令加成：{'; '.join(from_law_bonus + to_law_bonus)}。"
+            credit_detail = f" 贸易信用结算：{'、'.join(trade_credit_parts)}。" if trade_credit_parts else ""
+            earned_credit = trade_credit_result.get("fromRecord")
+            if earned_credit:
+                credit_detail += f" 连续守约 {trade_credit_result.get('streak', 0)} 次，形成“{earned_credit.get('label', '贸易信用')}”。"
             detail = f"{member.get('name', '管理者')} 接受了 {trade.get('fromTribeName', '部落')} 的贸易：收到 {trade['offer']['amount']} {trade['offer']['resource']}，交付 {request_amount} {request_resource}。{pact_detail}"
             detail += apprentice_detail
             detail += law_detail
+            detail += credit_detail
             self._add_tribe_history(to_tribe, "trade", "接受部落贸易", detail, player_id, {"kind": "trade", **self._public_trade(trade)})
-            self._add_tribe_history(from_tribe, "trade", "完成部落贸易", f"{to_tribe.get('name', '部落')} 接受贸易，部落收到 {request_amount} {request_resource}。{pact_detail}{apprentice_detail}{law_detail}", player_id, {"kind": "trade", **self._public_trade(trade)})
+            self._add_tribe_history(from_tribe, "trade", "完成部落贸易", f"{to_tribe.get('name', '部落')} 接受贸易，部落收到 {request_amount} {request_resource}。{pact_detail}{apprentice_detail}{law_detail}{credit_detail}", player_id, {"kind": "trade", **self._public_trade(trade)})
             await self._notify_tribe(from_tribe_id, f"{to_tribe.get('name', '部落')} 接受了贸易请求，交换已完成。")
             await self._publish_world_rumor(
                 "trade",
@@ -1978,6 +2044,8 @@ class ConnectionManager(GameConflictMixin, GameEmergencyChoiceMixin, GameMutualA
                     "fromRoadBonus": from_road_bonus,
                     "toRoadBonus": to_road_bonus,
                     "marketPactBonus": market_pact_bonus,
+                    "tradeCreditParts": trade_credit_parts,
+                    "tradeCreditStreak": trade_credit_result.get("streak", 0),
                     "fromApprenticeTradeBonus": from_apprentice_trade_bonus,
                     "toApprenticeTradeBonus": to_apprentice_trade_bonus,
                     "fromLawBonus": from_law_bonus,
@@ -2468,6 +2536,9 @@ class ConnectionManager(GameConflictMixin, GameEmergencyChoiceMixin, GameMutualA
         detail = f"{member.get('name', '成员')} 完成了 {safe_label} 远征：深度 {safe_depth}，收获 {safe_finds}。{food_detail}"
         if discovery_unlocked:
             detail += " 远征队发现了幽洞回声，可尝试刻写稀有铭文。"
+        race_opened = await self._maybe_open_rare_cave_race(tribe, player_id, safe_label, safe_route_key, safe_depth, safe_finds)
+        if race_opened:
+            detail += f" 洞内风声改道，{race_opened.get('label', '短时稀有洞穴')}已经开启，多部落可抢首探。"
         self._record_map_memory(
             tribe,
             "cave_first",
@@ -2500,7 +2571,9 @@ class ConnectionManager(GameConflictMixin, GameEmergencyChoiceMixin, GameMutualA
                 "runeFindsBonus": cave_finds_bonus,
                 "oathFindsBonus": oath_cave_bonus,
                 "discoveryUnlocked": discovery_unlocked,
-                "discoveryKey": discovery_key if discovery_unlocked else None
+                "discoveryKey": discovery_key if discovery_unlocked else None,
+                "caveRaceOpened": bool(race_opened),
+                "caveRaceId": race_opened.get("id") if race_opened else None
             }
         )
         await self._notify_tribe(tribe_id, detail)
@@ -3895,6 +3968,12 @@ async def game_websocket(
                         message.get("action", "")
                     )
 
+                elif message_type == "tribe_complete_trade_credit_repair":
+                    await manager.complete_trade_credit_repair(
+                        player_id,
+                        message.get("taskId", "")
+                    )
+
                 elif message_type == "tribe_claim_flag":
                     await manager.claim_tribe_flag(
                         player_id,
@@ -3966,6 +4045,33 @@ async def game_websocket(
                         message.get("emoteKey", "")
                     )
 
+                elif message_type == "tribe_start_sacred_fire":
+                    await manager.start_sacred_fire_relay(
+                        player_id,
+                        message.get("destinationKey", "")
+                    )
+
+                elif message_type == "tribe_carry_sacred_fire":
+                    await manager.carry_sacred_fire(
+                        player_id,
+                        message.get("stepKey", "")
+                    )
+
+                elif message_type == "tribe_complete_sacred_fire":
+                    await manager.complete_sacred_fire_relay(player_id)
+
+                elif message_type == "tribe_start_mentorship":
+                    await manager.start_mentorship(
+                        player_id,
+                        message.get("focusKey", "")
+                    )
+
+                elif message_type == "tribe_join_mentorship":
+                    await manager.join_mentorship(player_id)
+
+                elif message_type == "tribe_complete_mentorship":
+                    await manager.complete_mentorship(player_id)
+
                 elif message_type == "tribe_join_celebration_echo":
                     await manager.join_celebration_echo(
                         player_id,
@@ -4013,6 +4119,18 @@ async def game_websocket(
                         message.get("finds", 0),
                         bool(message.get("foodSupported", True)),
                         message.get("routeKey", "deep")
+                    )
+
+                elif message_type == "tribe_claim_cave_race":
+                    await manager.claim_cave_race_first_explore(
+                        player_id,
+                        message.get("raceId", "")
+                    )
+
+                elif message_type == "tribe_advance_cave_rescue":
+                    await manager.advance_cave_rescue(
+                        player_id,
+                        message.get("raceId", "")
                     )
 
                 elif message_type == "tribe_resolve_world_event":
@@ -4102,6 +4220,18 @@ async def game_websocket(
                         message.get("taskId", "")
                     )
 
+                elif message_type == "tribe_start_renown_pledge":
+                    await manager.start_renown_pledge(
+                        player_id,
+                        message.get("pledgeKey", "")
+                    )
+
+                elif message_type == "tribe_fulfill_renown_pledge":
+                    await manager.fulfill_renown_pledge(
+                        player_id,
+                        message.get("pledgeId", "")
+                    )
+
                 elif message_type == "tribe_respond_far_reply":
                     await manager.respond_far_reply(
                         player_id,
@@ -4133,6 +4263,35 @@ async def game_websocket(
                     await manager.update_trail_marker(
                         player_id,
                         message.get("markerId", ""),
+                        message.get("actionKey", "")
+                    )
+
+                elif message_type == "tribe_propose_named_landmark":
+                    await manager.propose_named_landmark(
+                        player_id,
+                        message.get("sourceKey", ""),
+                        message.get("name", ""),
+                        message.get("x", 0),
+                        message.get("z", 0)
+                    )
+
+                elif message_type == "tribe_support_named_landmark":
+                    await manager.support_named_landmark(
+                        player_id,
+                        message.get("proposalId", "")
+                    )
+
+                elif message_type == "tribe_visit_neutral_sanctuary":
+                    await manager.visit_neutral_sanctuary(
+                        player_id,
+                        message.get("sanctuaryId", ""),
+                        message.get("actionKey", "")
+                    )
+
+                elif message_type == "tribe_curate_collection_wall":
+                    await manager.curate_collection_wall_item(
+                        player_id,
+                        message.get("candidateId", ""),
                         message.get("actionKey", "")
                     )
 
@@ -4262,6 +4421,15 @@ async def game_websocket(
                         player_id,
                         message.get("remedyId", "")
                     )
+
+                elif message_type == "tribe_record_shared_puzzle_fragment":
+                    await manager.record_shared_puzzle_fragment(
+                        player_id,
+                        message.get("sourceKey", "")
+                    )
+
+                elif message_type == "tribe_complete_shared_puzzle":
+                    await manager.complete_shared_puzzle(player_id)
 
                 elif message_type == "tribe_compose_epic":
                     await manager.compose_oral_epic(player_id)

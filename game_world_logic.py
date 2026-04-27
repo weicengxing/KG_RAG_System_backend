@@ -469,6 +469,10 @@ class GameWorldLogicMixin:
                 decorations.extend(self._active_map_memories(tribe))
             if hasattr(self, "_active_trail_markers"):
                 decorations.extend(self._active_trail_markers(tribe))
+            if hasattr(self, "_active_named_landmarks"):
+                decorations.extend(self._active_named_landmarks(tribe))
+            if hasattr(self, "_active_neutral_sanctuaries"):
+                decorations.extend(self._active_neutral_sanctuaries(tribe))
             if hasattr(self, "_active_standing_ritual"):
                 ritual = self._active_standing_ritual(tribe)
                 center = camp.get("center") or {}
@@ -841,6 +845,25 @@ class GameWorldLogicMixin:
                     "target": int(migration_plan.get("target", TRIBE_MIGRATION_PLAN_PROGRESS_TARGET) or TRIBE_MIGRATION_PLAN_PROGRESS_TARGET),
                     "activeUntil": migration_plan.get("activeUntil")
                 })
+            if hasattr(self, "_active_celebration_echoes"):
+                for echo in self._active_celebration_echoes(tribe):
+                    landmarks.append({
+                        "id": echo.get("id"),
+                        "tribeId": tribe_id,
+                        "label": echo.get("label", "庆功余韵"),
+                        "x": echo.get("x", 0),
+                        "z": echo.get("z", 0),
+                        "type": "celebration_echo",
+                        "summary": echo.get("summary"),
+                        "sourceKind": echo.get("sourceKind"),
+                        "sourceLabel": echo.get("sourceLabel"),
+                        "anchorKey": echo.get("anchorKey"),
+                        "anchorLabel": echo.get("anchorLabel"),
+                        "participantCount": len(echo.get("participants", []) or []),
+                        "rewardLabel": "、".join(self._celebration_reward_parts(echo.get("reward", {}))) if hasattr(self, "_celebration_reward_parts") else "",
+                        "activeUntil": echo.get("activeUntil"),
+                        "claimedAt": echo.get("createdAt")
+                    })
             for memory in self._active_map_memories(tribe):
                 landmarks.append({
                     "id": memory.get("id"),
@@ -870,6 +893,36 @@ class GameWorldLogicMixin:
                         "claimedBy": marker.get("createdByName"),
                         "claimedAt": marker.get("createdAt"),
                         "activeUntil": marker.get("activeUntil")
+                    })
+            if hasattr(self, "_active_named_landmarks"):
+                for landmark in self._active_named_landmarks(tribe):
+                    landmarks.append({
+                        "id": landmark.get("id"),
+                        "tribeId": tribe_id,
+                        "label": landmark.get("label", "有名之地"),
+                        "x": landmark.get("x", 0),
+                        "z": landmark.get("z", 0),
+                        "type": "named_landmark",
+                        "sourceLabel": landmark.get("sourceLabel"),
+                        "summary": landmark.get("summary"),
+                        "rewardParts": landmark.get("rewardParts", [])
+                    })
+            if hasattr(self, "_active_neutral_sanctuaries"):
+                for sanctuary in self._active_neutral_sanctuaries(tribe):
+                    landmarks.append({
+                        "id": sanctuary.get("id"),
+                        "tribeId": tribe_id,
+                        "label": sanctuary.get("label", "中立圣地"),
+                        "x": sanctuary.get("x", 0),
+                        "z": sanctuary.get("z", 0),
+                        "type": "neutral_sanctuary",
+                        "summary": sanctuary.get("summary"),
+                        "regionLabel": sanctuary.get("regionLabel"),
+                        "status": sanctuary.get("status", "active"),
+                        "useCount": sanctuary.get("useCount", 0),
+                        "useTarget": sanctuary.get("useTarget"),
+                        "claimedAt": sanctuary.get("createdAt"),
+                        "activeUntil": sanctuary.get("activeUntil")
                     })
         return landmarks
 
