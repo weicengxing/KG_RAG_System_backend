@@ -147,6 +147,8 @@ class GameWeatherForecastMixin:
             predicted = forecast.get("predictedWeather") or self._forecast_prediction_from_observations(observations, "")
             correct = predicted == next_weather
             reward_parts = self._apply_weather_forecast_reward(tribe, correct, len(observations))
+            if correct and hasattr(self, "apply_tribe_law_event_bonus"):
+                reward_parts.extend(self.apply_tribe_law_event_bonus(tribe, "weather_forecast", "风向预判"))
             now_text = datetime.now().isoformat()
             record = {
                 "id": f"weather_record_{forecast.get('id')}_{int(datetime.now().timestamp())}",

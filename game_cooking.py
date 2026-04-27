@@ -170,6 +170,8 @@ class GameCookingMixin:
             names = "、".join([item.get("name", "成员") for item in cook.get("contributions", [])])
             detail += f" 这锅{cook.get('recipeLabel', '共同烹饪')}完成了，{names}把食材与故事写进宴会记忆：{'、'.join(final_parts) or '部落记住了这锅饭'}。"
             self._add_tribe_history(tribe, "food", "共同烹饪完成", detail, player_id, {"kind": "communal_cook_complete", "cook": cook, "rewardParts": final_parts})
+            if hasattr(self, "_create_celebration_echo"):
+                self._create_celebration_echo(tribe, "cooking", cook.get("recipeLabel", "共同烹饪"), player_id, cook.get("id", ""))
             await self._publish_world_rumor(
                 "food",
                 "共同烹饪",
@@ -178,3 +180,5 @@ class GameCookingMixin:
             )
         await self._notify_tribe(tribe_id, detail)
         await self.broadcast_tribe_state(tribe_id)
+        if completed:
+            await self._broadcast_current_map()

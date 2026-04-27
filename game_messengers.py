@@ -206,6 +206,27 @@ class GameMessengerMixin:
                 if isinstance(item, dict) and item.get("sharedTaskId") == task.get("sharedTaskId")
             ), task)
             self._apply_messenger_rewards(other_tribe, tribe_id, mirror, outcome)
+        if hasattr(self, "_schedule_far_reply"):
+            shared_id = task.get("sharedTaskId") or task_id
+            self._schedule_far_reply(
+                tribe,
+                "messenger",
+                shared_id,
+                "盟约信使的远方回信",
+                f"{task.get('sourceLabel', '盟约信物')}送达后，远方可能托人带回感谢、误解或新的交易口风。",
+                other_tribe,
+                now_text
+            )
+            if other_tribe:
+                self._schedule_far_reply(
+                    other_tribe,
+                    "messenger",
+                    shared_id,
+                    "盟约信使的远方回信",
+                    f"{task.get('sourceLabel', '盟约信物')}送达后，远方可能托人带回感谢、误解或新的交易口风。",
+                    tribe,
+                    now_text
+                )
         detail = (
             f"{member_name} 把{task.get('sourceLabel', '盟约信物')}送到 {task.get('otherTribeName', '邻近部落')}："
             f"{outcome.get('summary', '信物被双方承认')} {'、'.join(reward_bits) or '外交记忆稳定'}。"

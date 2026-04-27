@@ -258,6 +258,16 @@ class GameVisitorMixin:
         }
         tribe.setdefault("nomad_visitor_aftereffects", []).append(aftereffect)
         tribe["nomad_visitor_aftereffects"] = tribe["nomad_visitor_aftereffects"][-TRIBE_NOMAD_VISITOR_AFTEREFFECT_LIMIT:]
+        if hasattr(self, "_schedule_far_reply"):
+            self._schedule_far_reply(
+                tribe,
+                "visitor",
+                aftereffect.get("id") or visitor_id,
+                "来访者的远方回信",
+                f"{visitor.get('label', '神秘旅人')}离开后，旧路上可能带回谢意、求援或新的遗迹口风。",
+                None,
+                now_text
+            )
         if action.get("openMyth") and hasattr(self, "_open_myth_claim"):
             self._open_myth_claim(
                 tribe,

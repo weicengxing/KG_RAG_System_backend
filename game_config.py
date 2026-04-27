@@ -35,6 +35,76 @@ TRIBE_WEATHER_FORECAST_SIGNS = {
         "predictWeather": "fog"
     }
 }
+TRIBE_LAW_ACTIVE_MINUTES = 20
+TRIBE_LAW_RECORD_LIMIT = 5
+TRIBE_LAW_REMEDY_LIMIT = 5
+TRIBE_LAW_OPTIONS = {
+    "border_watch": {
+        "label": "守边令",
+        "summary": "短时要求成员优先整理边界标记和警戒路线，边境相关事件会更稳。",
+        "upholdLabel": "巡边守令",
+        "upholdReward": {"renown": 1},
+        "eventBonus": {"renown": 1, "pressureRelief": 1},
+        "breakLabel": "擅离边线",
+        "remedyTitle": "补刻边界标记",
+        "remedySummary": "成员用木牌和火灰把漏看的边线补回去，避免守边令留下新的压力。",
+        "remedyCost": {"wood": 2},
+        "remedyReward": {"renown": 1, "pressureRelief": 1}
+    },
+    "market_tally": {
+        "label": "互市令",
+        "summary": "短时要求交易和接待都留下木牌账记，贸易相关事件会更容易沉淀信任。",
+        "upholdLabel": "记互市账",
+        "upholdReward": {"tradeReputation": 1},
+        "eventBonus": {"tradeReputation": 1},
+        "breakLabel": "私换漏记",
+        "remedyTitle": "补记互市账",
+        "remedySummary": "成员补上漏记的口头账，让互市令不变成旧怨。",
+        "remedyCost": {"food": 1},
+        "remedyReward": {"tradeReputation": 1}
+    },
+    "fire_quiet": {
+        "label": "禁火令",
+        "summary": "短时要求夜里和雾里少用明火，只保留必要火种，探索和天气事件会更谨慎。",
+        "upholdLabel": "护暗火",
+        "upholdReward": {"discoveryProgress": 1},
+        "eventBonus": {"discoveryProgress": 1},
+        "breakLabel": "擅燃明火",
+        "remedyTitle": "重护暗火",
+        "remedySummary": "成员用泥灰压低火光，把禁火令从惊扰补回守望。",
+        "remedyCost": {"wood": 1, "food": 1},
+        "remedyReward": {"discoveryProgress": 1, "renown": 1}
+    }
+}
+TRIBE_SHARED_PUZZLE_TARGET = 4
+TRIBE_SHARED_PUZZLE_RECORD_LIMIT = 5
+TRIBE_SHARED_PUZZLE_SOURCES = {
+    "cave": {
+        "label": "洞穴碎片",
+        "summary": "从洞口回声、远征记录和深处刻痕里抄下一角图案。",
+        "reward": {"discoveryProgress": 1}
+    },
+    "ruin": {
+        "label": "遗迹碎片",
+        "summary": "把遗迹线索、活地图记忆或旧石拓片补到同一张图上。",
+        "reward": {"renown": 1}
+    },
+    "traveler": {
+        "label": "旅人碎片",
+        "summary": "从来访者口信、远方回信或流浪氏族故事中记下一枚符号。",
+        "reward": {"tradeReputation": 1}
+    },
+    "market": {
+        "label": "边市碎片",
+        "summary": "从互市约定、商队货牌和交换通路账记里拼出边缘纹样。",
+        "reward": {"tradeReputation": 1, "renown": 1}
+    }
+}
+TRIBE_SHARED_PUZZLE_COMPLETE_REWARD = {
+    "discoveryProgress": 2,
+    "renown": 4,
+    "tradeReputation": 2
+}
 DEFAULT_SHORE_RADIUS = 95.0
 PLAYER_RADIUS = 0.7
 PLAYER_CONFLICT_DISTANCE = 4.5
@@ -240,8 +310,231 @@ TRIBE_COMMUNAL_COOK_INGREDIENTS = {
     "stone": {"label": "立热石", "summary": "消耗公共石块，让锅边留下可复用的热石。", "stoneCost": 1, "discoveryProgress": 1},
     "story": {"label": "讲来历", "summary": "不消耗资源，把谁带来了什么写进宴会记忆。", "renown": 1, "tradeReputation": 1}
 }
+TRIBE_NIGHT_OUTING_RECENT_LIMIT = 6
+TRIBE_NIGHT_OUTING_WEATHER_RISK = {
+    "sunny": 0,
+    "rain": 1,
+    "snow": 2,
+    "fog": 1
+}
+TRIBE_NIGHT_OUTING_OPTIONS = {
+    "torch": {
+        "label": "举火探路",
+        "summary": "消耗一份公共木材，让夜路队用火把照出近处痕迹。",
+        "woodCost": 1,
+        "riskRelief": 2,
+        "reward": {"discoveryProgress": 1, "renown": 1},
+        "successMemory": True
+    },
+    "companions": {
+        "label": "结伴守望",
+        "summary": "至少两名成员在册时可组织同伴站位，靠人声和回望压低迷路风险。",
+        "minMembers": 2,
+        "riskRelief": 1,
+        "reward": {"renown": 2},
+        "successMemory": True
+    },
+    "totem_blessing": {
+        "label": "问图腾火",
+        "summary": "从部落图腾取火记方向，图腾或站位仪式会进一步降低夜行风险。",
+        "riskRelief": 1,
+        "reward": {"renown": 1, "discoveryProgress": 1},
+        "successMemory": True
+    },
+    "read_weather": {
+        "label": "按风向预判",
+        "summary": "读取当前风向预判和天气记录，若近期命中过天气会让夜路更稳。",
+        "riskRelief": 1,
+        "reward": {"discoveryProgress": 1, "tradeReputation": 1},
+        "successMemory": True
+    }
+}
+TRIBE_DRUM_RHYTHM_ACTIVE_MINUTES = 18
+TRIBE_DRUM_RHYTHM_MIN_PARTICIPANTS = 2
+TRIBE_DRUM_RHYTHM_TARGET_PARTICIPANTS = 3
+TRIBE_DRUM_RHYTHM_HISTORY_LIMIT = 5
+TRIBE_DRUM_RHYTHM_RADIUS = 16
+TRIBE_DRUM_RHYTHM_OPTIONS = {
+    "festival": {
+        "label": "祭火慢拍",
+        "summary": "在图腾或营火旁打出稳慢鼓点，把祭典余温留给采集和宴会。",
+        "reward": {"renown": 3, "tradeReputation": 1},
+        "fullReward": {"renown": 3}
+    },
+    "muster": {
+        "label": "集结急拍",
+        "summary": "用短促鼓声召回边境成员，压住冲突后的躁动与误判。",
+        "reward": {"renown": 3, "warPressureRelief": 1},
+        "fullReward": {"renown": 2}
+    },
+    "cave": {
+        "label": "洞穴回声",
+        "summary": "让鼓声在洞口故事里反复，给下一轮探路和嗅探留节奏。",
+        "reward": {"discoveryProgress": 1, "renown": 2},
+        "fullReward": {"discoveryProgress": 1}
+    }
+}
+TRIBE_DRUM_RHYTHM_BEATS = {
+    "steady": {"label": "稳拍", "summary": "稳住队列，给仪式留下清晰节奏。", "renown": 1},
+    "answer": {"label": "应拍", "summary": "回应前一名成员的鼓声，让多人节奏连起来。", "tradeReputation": 1},
+    "echo": {"label": "回拍", "summary": "把鼓点送向洞口和旧路，留下探索回声。", "discoveryProgress": 1},
+    "watch": {"label": "守拍", "summary": "用警戒节奏安抚边境，轻微削减战争压力。", "warPressureRelief": 1}
+}
+TRIBE_GROUP_EMOTE_COOLDOWN_SECONDS = 45
+TRIBE_GROUP_EMOTE_HISTORY_LIMIT = 8
+TRIBE_GROUP_EMOTE_ACTIONS = {
+    "sit_fire": {
+        "label": "围火坐下",
+        "summary": "成员在营火旁坐下，把疲惫和闲话压成稳定的营地声望。",
+        "renown": 1,
+        "personalRenown": 1,
+        "animation": "sit"
+    },
+    "raise_torch": {
+        "label": "举火",
+        "summary": "举起火把照亮附近路径，让探索队更容易记住下一段线索。",
+        "woodCost": 1,
+        "renown": 1,
+        "discoveryProgress": 1,
+        "personalRenown": 1,
+        "animation": "guard"
+    },
+    "offer_gift": {
+        "label": "献礼",
+        "summary": "拿出一点公共食物作为公开礼节，巩固来往与交换信誉。",
+        "foodCost": 1,
+        "tradeReputation": 1,
+        "renown": 1,
+        "personalRenown": 1,
+        "animation": "cheer"
+    },
+    "watch": {
+        "label": "警戒",
+        "summary": "成员短暂摆出守望姿态，提醒边界队伍收束误判。",
+        "renown": 1,
+        "pressureRelief": 1,
+        "personalRenown": 1,
+        "animation": "guard"
+    },
+    "mourn": {
+        "label": "默哀",
+        "summary": "围住旧事低声默哀，把冲突后的余震整理成可承认的记忆。",
+        "renown": 2,
+        "pressureRelief": 1,
+        "personalRenown": 1,
+        "animation": "ritual"
+    }
+}
+TRIBE_MENTORSHIP_ACTIVE_MINUTES = 24
+TRIBE_MENTORSHIP_TARGET_STUDENTS = 2
+TRIBE_MENTORSHIP_MIN_STUDENTS = 1
+TRIBE_MENTORSHIP_HISTORY_LIMIT = 6
+TRIBE_MENTORSHIP_MIN_PERSONAL_RENOWN = 7
+TRIBE_MENTORSHIP_MIN_CONTRIBUTION = 40
+TRIBE_MENTORSHIP_FOCUS_OPTIONS = {
+    "gather": {
+        "label": "采集门道",
+        "summary": "导师把辨枝、分粮和回营路线教给新人，适合补足营地日常。",
+        "renown": 2,
+        "food": 2,
+        "mentorRenown": 1,
+        "studentRenown": 1,
+        "animation": "gather"
+    },
+    "guard": {
+        "label": "守边口令",
+        "summary": "导师带新人记住边界呼应、退让和警戒姿势，降低误判余震。",
+        "renown": 2,
+        "pressureRelief": 1,
+        "mentorRenown": 1,
+        "studentRenown": 1,
+        "animation": "guard"
+    },
+    "story": {
+        "label": "讲述规矩",
+        "summary": "导师示范如何把旧事讲成可被外人理解的礼节。",
+        "renown": 2,
+        "tradeReputation": 1,
+        "mentorRenown": 1,
+        "studentRenown": 1,
+        "animation": "cheer"
+    },
+    "trail": {
+        "label": "探路记号",
+        "summary": "导师带新人辨认洞口、路标和旧痕，给下一轮探索留下方法。",
+        "renown": 1,
+        "discoveryProgress": 1,
+        "mentorRenown": 1,
+        "studentRenown": 1,
+        "animation": "ritual"
+    }
+}
+TRIBE_CELEBRATION_ECHO_ACTIVE_MINUTES = 14
+TRIBE_CELEBRATION_ECHO_LIMIT = 5
+TRIBE_CELEBRATION_ECHO_RADIUS = 18
+TRIBE_CELEBRATION_ECHO_HISTORY_LIMIT = 8
+TRIBE_CELEBRATION_ECHO_SOURCES = {
+    "war": {
+        "title": "凯旋余韵",
+        "anchor": "road",
+        "summary": "战争或停战后的队列沿营地道路走过，留下可被成员再次加入的庆功步伐。",
+        "reward": {"renown": 2, "tradeReputation": 1, "personalRenown": 1}
+    },
+    "ritual": {
+        "title": "仪式余韵",
+        "anchor": "totem",
+        "summary": "大型仪式散去后，图腾旁仍留着可见的站位回声。",
+        "reward": {"renown": 2, "discoveryProgress": 1, "personalRenown": 1}
+    },
+    "cooking": {
+        "title": "宴火余韵",
+        "anchor": "campfire",
+        "summary": "共同烹饪后的火边还留着香气和故事，后来者可以补上一段庆功。",
+        "reward": {"renown": 1, "tradeReputation": 1, "personalRenown": 1}
+    },
+    "drum": {
+        "title": "鼓点余韵",
+        "anchor": "totem",
+        "summary": "鼓点收束后，营地仍能听见一段适合回应的节奏。",
+        "reward": {"renown": 1, "discoveryProgress": 1, "personalRenown": 1}
+    }
+}
 TRIBE_TRADE_MAX_ACTIVE = 5
 TRIBE_TRADE_RENOWN_BONUS = 3
+TRIBE_TRADE_CREDIT_ACTIVE_MINUTES = 36
+TRIBE_TRADE_CREDIT_RECORD_LIMIT = 8
+TRIBE_TRADE_CREDIT_REPAIR_LIMIT = 6
+TRIBE_TRADE_CREDIT_REPAIR_WOOD_COST = 2
+TRIBE_TRADE_CREDIT_REPAIR_FOOD_COST = 2
+TRIBE_TRADE_CREDIT_TIERS = [
+    {
+        "key": "credit",
+        "label": "赊账",
+        "minStreak": 2,
+        "requestDiscount": 1,
+        "reputationBonus": 0,
+        "stockBonus": 0,
+        "summary": "连续守约后，下一次贸易可以少要一点资源。"
+    },
+    {
+        "key": "reservation",
+        "label": "预订",
+        "minStreak": 3,
+        "requestDiscount": 1,
+        "reputationBonus": 1,
+        "stockBonus": 0,
+        "summary": "双方愿意为对方留货，完成贸易后额外增加贸易信誉。"
+    },
+    {
+        "key": "shared_stock",
+        "label": "共同库存",
+        "minStreak": 4,
+        "requestDiscount": 2,
+        "reputationBonus": 1,
+        "stockBonus": 1,
+        "summary": "长期守约形成共同库存，完成贸易后双方各回收一点交换物资。"
+    }
+]
 TRIBE_FLAG_MAX = 4
 TRIBE_FLAG_WOOD_COST = 8
 TRIBE_FLAG_STONE_COST = 4
@@ -1137,7 +1430,87 @@ TRIBE_MAP_MEMORY_REWARDS = {
     "war_aftermath": {"renown": 2},
     "border_market": {"tradeReputation": 1, "renown": 1},
     "oral_epic": {"renown": 2},
-    "season_taboo": {"renown": 1, "discoveryProgress": 1}
+    "season_taboo": {"renown": 1, "discoveryProgress": 1},
+    "night_trace": {"renown": 1, "discoveryProgress": 1}
+}
+TRIBE_TRAIL_MARKER_ACTIVE_MINUTES = 45
+TRIBE_TRAIL_MARKER_LIMIT = 8
+TRIBE_TRAIL_MARKER_HISTORY_LIMIT = 8
+TRIBE_TRAIL_MARKER_TYPES = {
+    "wood_sign": {
+        "label": "木牌路标",
+        "summary": "在附近插一块木牌，适合标记采集、洞口和回营路线。",
+        "woodCost": 1,
+        "reward": {"discoveryProgress": 1}
+    },
+    "stone_cairn": {
+        "label": "石堆路标",
+        "summary": "堆起石块，让商队、学徒或信使更容易认路。",
+        "stoneCost": 1,
+        "reward": {"tradeReputation": 1}
+    },
+    "bone_mark": {
+        "label": "骨痕路标",
+        "summary": "留下醒目的骨痕警示，适合边界、兽群或冲突后的现场。",
+        "foodCost": 1,
+        "reward": {"renown": 1}
+    }
+}
+TRIBE_TRAIL_MARKER_ACTIONS = {
+    "reinterpret": {
+        "label": "修正解释",
+        "summary": "把路标重新解释成更清楚的路线说明，增加发现进度。",
+        "reward": {"discoveryProgress": 1, "renown": 1}
+    },
+    "reinforce": {
+        "label": "加固",
+        "summary": "补木或压石，让路标保留更久并提升贸易信誉。",
+        "woodCost": 1,
+        "reward": {"tradeReputation": 1, "renown": 1},
+        "extendMinutes": 12
+    },
+    "break": {
+        "label": "拆除",
+        "summary": "拆掉已经误导族人的路标，回收少量材料并留下改写记录。",
+        "reward": {"wood": 1, "renown": 1},
+        "resolve": True
+    }
+}
+TRIBE_COLLECTION_WALL_LIMIT = 8
+TRIBE_COLLECTION_CANDIDATE_LIMIT = 10
+TRIBE_COLLECTION_INFLUENCE_LIMIT = 5
+TRIBE_COLLECTION_INFLUENCE_MINUTES = 60
+TRIBE_COLLECTION_ACTIONS = {
+    "old_object": {
+        "label": "旧物上墙",
+        "summary": "把这段来源整理成营地旧物，强调谁把它带回了火边。",
+        "renown": 2,
+        "influenceLabel": "旧物传闻",
+        "influenceSummary": "后续传闻会更容易引用这件旧物的来历。"
+    },
+    "rubbing": {
+        "label": "拓片整理",
+        "summary": "把来源刻成拓片或纹样，方便后来者从中认路。",
+        "renown": 1,
+        "discoveryProgress": 1,
+        "influenceLabel": "拓片线索",
+        "influenceSummary": "后续探索、遗迹和路标故事可以引用这份拓片。"
+    },
+    "mask": {
+        "label": "面具陈列",
+        "summary": "把来源讲成可展示的面具和仪式故事。",
+        "renown": 1,
+        "tradeReputation": 1,
+        "influenceLabel": "面具口碑",
+        "influenceSummary": "后续来访者和边市传闻会记住这面陈列。"
+    },
+    "token": {
+        "label": "信物挂墙",
+        "summary": "把信物、回信或承诺挂上收藏墙，给外交和互信留下证据。",
+        "tradeReputation": 2,
+        "influenceLabel": "信物旧痕",
+        "influenceSummary": "后续信使、学徒和人情债故事可以引用这份旧痕。"
+    }
 }
 TRIBE_MYTH_CLAIM_ACTIVE_MINUTES = 45
 TRIBE_MYTH_CLAIM_LIMIT = 6

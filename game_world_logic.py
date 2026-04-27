@@ -467,6 +467,8 @@ class GameWorldLogicMixin:
             decorations.extend(self._active_world_event_remnants(tribe))
             if hasattr(self, "_active_map_memories"):
                 decorations.extend(self._active_map_memories(tribe))
+            if hasattr(self, "_active_trail_markers"):
+                decorations.extend(self._active_trail_markers(tribe))
             if hasattr(self, "_active_standing_ritual"):
                 ritual = self._active_standing_ritual(tribe)
                 center = camp.get("center") or {}
@@ -772,6 +774,25 @@ class GameWorldLogicMixin:
                         "activeUntil": visitor.get("activeUntil"),
                         "claimedAt": visitor.get("createdAt")
                     })
+            if hasattr(self, "_active_mutual_aid_alerts"):
+                for alert in self._active_mutual_aid_alerts(tribe):
+                    landmarks.append({
+                        "id": alert.get("id"),
+                        "tribeId": tribe_id,
+                        "label": alert.get("title", "火烟互助警报"),
+                        "x": alert.get("x", 0),
+                        "z": alert.get("z", 0),
+                        "type": "mutual_aid_alert",
+                        "summary": alert.get("summary"),
+                        "direction": alert.get("direction"),
+                        "sourceTitle": alert.get("sourceTitle"),
+                        "sourceTribeId": alert.get("sourceTribeId"),
+                        "sourceTribeName": alert.get("sourceTribeName"),
+                        "targetTribeId": alert.get("targetTribeId"),
+                        "targetTribeName": alert.get("targetTribeName"),
+                        "activeUntil": alert.get("activeUntil"),
+                        "claimedAt": alert.get("createdAt")
+                    })
             for site in self._active_diplomacy_council_sites(tribe):
                 landmarks.append({
                     "id": site.get("id"),
@@ -835,6 +856,21 @@ class GameWorldLogicMixin:
                     "claimedAt": memory.get("createdAt"),
                     "activeUntil": memory.get("activeUntil")
                 })
+            if hasattr(self, "_active_trail_markers"):
+                for marker in self._active_trail_markers(tribe):
+                    landmarks.append({
+                        "id": marker.get("id"),
+                        "tribeId": tribe_id,
+                        "label": marker.get("label", "活路标"),
+                        "x": marker.get("x", 0),
+                        "z": marker.get("z", 0),
+                        "type": "trail_marker",
+                        "markerKey": marker.get("markerKey"),
+                        "summary": marker.get("summary"),
+                        "claimedBy": marker.get("createdByName"),
+                        "claimedAt": marker.get("createdAt"),
+                        "activeUntil": marker.get("activeUntil")
+                    })
         return landmarks
 
     def _compose_map_data(self, map_name: Optional[str] = None) -> Optional[dict]:

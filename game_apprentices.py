@@ -166,6 +166,25 @@ class GameApprenticeExchangeMixin:
         member_name = member.get("name", "管理者")
         record = self._record_apprentice_exchange(tribe, target_tribe, focus_key, action, member_name, now_text, reward_parts)
         self._record_apprentice_exchange(target_tribe, tribe, focus_key, action, member_name, now_text, reward_parts)
+        if hasattr(self, "_schedule_far_reply"):
+            self._schedule_far_reply(
+                tribe,
+                "apprentice",
+                record.get("id") or f"{focus_key}_{target_tribe_id}",
+                "学徒的远方回信",
+                f"学习“{action.get('label', '学徒交换')}”的年轻成员离营后，可能带回新规矩、求问或误会。",
+                target_tribe,
+                now_text
+            )
+            self._schedule_far_reply(
+                target_tribe,
+                "apprentice",
+                record.get("id") or f"{focus_key}_{tribe_id}",
+                "学徒的远方回信",
+                f"学习“{action.get('label', '学徒交换')}”的年轻成员离营后，可能带回新规矩、求问或误会。",
+                tribe,
+                now_text
+            )
         detail = f"{member_name} 与 {target_tribe.get('name', '邻近部落')} 互派学徒，方向为“{action.get('label', '学徒交换')}”：{'、'.join(reward_parts) or '双方记下新的营地经验'}。"
         self._add_tribe_history(tribe, "trade", "学徒交换", detail, player_id, {"kind": "apprentice_exchange", **record})
         self._add_tribe_history(target_tribe, "trade", "学徒交换", f"{tribe.get('name', '部落')} 派来学徒学习“{action.get('label', '学徒交换')}”，双方关系更稳。", player_id, {"kind": "apprentice_exchange", "otherTribeId": tribe_id, "actionKey": focus_key})

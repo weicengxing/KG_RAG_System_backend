@@ -2632,6 +2632,13 @@ class GameTribeProgressionMixin:
             reward_parts.append(f"贸易信誉+{trade_rep}")
         if food_cost:
             reward_parts.append(f"食物-{food_cost}")
+        law_event_key = f"boundary_{action_key}"
+        law_bonus_parts = self.apply_tribe_law_event_bonus(tribe, law_event_key, action.get("label", "边界行动"))
+        if law_bonus_parts:
+            reward_parts.extend(law_bonus_parts)
+        law_violation_parts = self.apply_tribe_law_violation(tribe, player_id, law_event_key, action.get("label", "边界行动"))
+        if law_violation_parts:
+            reward_parts.extend(law_violation_parts)
 
         boundary_progress = {}
         affected_tribe_ids = set()
