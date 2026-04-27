@@ -22,10 +22,14 @@ router = APIRouter()
 
 from game_config import *
 from game_world_logic import GameWorldLogicMixin
+from game_emergency_choices import GameEmergencyChoiceMixin
+from game_story_events import GameStoryEventsMixin
+from game_myths import GameMythMixin
+from game_season_taboo import GameSeasonTabooMixin
 from game_tribe_progression import GameTribeProgressionMixin
 from game_conflict import GameConflictMixin
 
-class ConnectionManager(GameConflictMixin, GameTribeProgressionMixin, GameWorldLogicMixin):
+class ConnectionManager(GameConflictMixin, GameEmergencyChoiceMixin, GameStoryEventsMixin, GameSeasonTabooMixin, GameMythMixin, GameTribeProgressionMixin, GameWorldLogicMixin):
     def __init__(self):
         # 活跃连接：{player_id: websocket}
         self.active_connections: Dict[str, WebSocket] = {}
@@ -1041,6 +1045,12 @@ class ConnectionManager(GameConflictMixin, GameTribeProgressionMixin, GameWorldL
             "regionEventBonuses": self._active_region_event_bonus_summaries(tribe),
             "worldEventActions": self._world_event_action_options(tribe),
             "worldEventRemnants": self._active_world_event_remnants(tribe),
+            "mapMemories": self._active_map_memories(tribe),
+            "mythClaims": self._active_myth_claims(tribe),
+            "dominantMyths": self._active_dominant_myths(tribe),
+            "emergencyChoice": self._active_emergency_choice(tribe),
+            "emergencyChoiceActions": TRIBE_EMERGENCY_CHOICE_ACTIONS,
+            "emergencyFollowupTasks": self._public_emergency_followup_tasks(tribe),
             "tamedBeasts": int(tribe.get("tamed_beasts", 0) or 0),
             "beastGrowth": self._beast_growth_state(tribe),
             "beastTaskConfig": TRIBE_BEAST_TASK_REWARDS,
@@ -1053,6 +1063,20 @@ class ConnectionManager(GameConflictMixin, GameTribeProgressionMixin, GameWorldL
                 "celebrationFood": SEASON_CELEBRATION_FOOD_BONUS,
                 "pendingCelebration": tribe.get("pending_celebration"),
                 "celebrationChoices": SEASON_CELEBRATION_CHOICES
+            },
+            "seasonTaboo": self._public_season_taboo(tribe),
+            "seasonTabooOptions": {} if self._active_season_taboo(tribe) else TRIBE_SEASON_TABOO_OPTIONS,
+            "seasonTabooConfig": {
+                "target": TRIBE_SEASON_TABOO_PROGRESS_TARGET,
+                "minutes": TRIBE_SEASON_TABOO_ACTIVE_MINUTES
+            },
+            "seasonTabooRemedies": self._public_season_taboo_remedies(tribe),
+            "oralChain": self._public_oral_chain(tribe),
+            "oralChainConfig": {
+                "lineTarget": TRIBE_ORAL_CHAIN_LINE_TARGET,
+                "maxLines": TRIBE_ORAL_CHAIN_MAX_LINES,
+                "lineRenown": TRIBE_ORAL_CHAIN_LINE_RENOWN,
+                "completeRenown": TRIBE_ORAL_CHAIN_COMPLETE_RENOWN
             },
             "oralEpics": list(tribe.get("oral_epics", []) or [])[-3:],
             "oralEpicConfig": {
@@ -2241,6 +2265,16 @@ class ConnectionManager(GameConflictMixin, GameTribeProgressionMixin, GameWorldL
         detail = f"{member.get('name', '成员')} 完成了 {safe_label} 远征：深度 {safe_depth}，收获 {safe_finds}。{food_detail}"
         if discovery_unlocked:
             detail += " 远征队发现了幽洞回声，可尝试刻写稀有铭文。"
+        self._record_map_memory(
+            tribe,
+            "cave_first",
+            f"{safe_label}远征记号",
+            f"{member.get('name', '成员')}带队深入{safe_label}，在洞口附近留下可供后来者辨认的路线记号。",
+            float(self.players.get(player_id, {}).get("x", 0) or 0),
+            float(self.players.get(player_id, {}).get("z", 0) or 0),
+            f"cave:{safe_label}:{safe_route_key}",
+            member.get("name", "成员")
+        )
         self._add_tribe_history(
             tribe,
             "cave",
@@ -2367,6 +2401,18 @@ class ConnectionManager(GameConflictMixin, GameTribeProgressionMixin, GameWorldL
         remnant = self._build_world_event_remnant(tribe, event, event_action_key, action_plan, member)
         if remnant:
             detail += f" {remnant.get('label', '事件余迹')}留在附近，成员可再次整理。"
+        myth_claim = self._open_myth_claim(
+            tribe,
+            "world_event",
+            event_action_label or title,
+            f"{region_label}的{title}已经被处理，族人可以争论它究竟预示着火种、旧路、互市还是守边。",
+            float(event.get("x", 0) or 0),
+            float(event.get("z", 0) or 0),
+            f"{event.get('id')}:{event_action_key or 'default'}",
+            member.get("name", "成员")
+        )
+        if myth_claim:
+            detail += " 这件事开始产生神话解释权。"
 
         env["worldEvents"] = [item for item in events if item.get("id") != event_id]
         rare_spawned = False
@@ -2841,6 +2887,45 @@ class ConnectionManager(GameConflictMixin, GameTribeProgressionMixin, GameWorldL
     def _personal_fatigue_recovery_seconds(self, player: dict) -> int:
         return max(60, PLAYER_CONFLICT_FATIGUE_DECAY_SECONDS - self._personal_title_bonus(player, "fatigueRecoveryBonusSeconds"))
 
+    def _active_personal_identity_cooldown(self, player: dict) -> str:
+        cooldown_until = player.get("personal_identity_cooldown_until")
+        if not cooldown_until:
+            return ""
+        try:
+            if datetime.fromisoformat(cooldown_until).timestamp() <= datetime.now().timestamp():
+                player.pop("personal_identity_cooldown_until", None)
+                return ""
+        except (TypeError, ValueError):
+            player.pop("personal_identity_cooldown_until", None)
+            return ""
+        return cooldown_until
+
+    def _personal_identity_state(self, player: dict, personal_renown: Optional[int] = None) -> dict:
+        identity_key = player.get("personal_identity")
+        identity = PLAYER_IDENTITY_OPTIONS.get(identity_key)
+        renown = int(personal_renown if personal_renown is not None else player.get("personal_renown", 0) or 0)
+        options = []
+        for key, option in PLAYER_IDENTITY_OPTIONS.items():
+            min_renown = int(option.get("minRenown", PLAYER_IDENTITY_MIN_RENOWN) or 0)
+            options.append({
+                "key": key,
+                "label": option.get("label", key),
+                "actionLabel": option.get("actionLabel", option.get("label", key)),
+                "summary": option.get("summary", ""),
+                "minRenown": min_renown,
+                "available": renown >= min_renown
+            })
+        return {
+            "key": identity_key if identity else "",
+            "label": identity.get("label") if identity else "",
+            "actionLabel": identity.get("actionLabel") if identity else "",
+            "summary": identity.get("summary") if identity else "",
+            "options": options,
+            "cooldownUntil": self._active_personal_identity_cooldown(player),
+            "cooldownSeconds": PLAYER_IDENTITY_ACTION_COOLDOWN_SECONDS,
+            "minRenown": PLAYER_IDENTITY_MIN_RENOWN
+        }
+
     def _public_personal_conflict_status(self, player: dict) -> dict:
         fatigue = self._active_player_fatigue(player)
         guard = self._active_personal_guard(player)
@@ -2865,8 +2950,144 @@ class ConnectionManager(GameConflictMixin, GameTribeProgressionMixin, GameWorldL
             "sparTrainingBonus": int(renown_title.get("sparTrainingBonus", 0) or 0),
             "skirmishContributionBonus": int(renown_title.get("skirmishContributionBonus", 0) or 0),
             "guardSeconds": PLAYER_CONFLICT_GUARD_SECONDS,
-            "inspireSeconds": PLAYER_CONFLICT_INSPIRE_SECONDS
+            "inspireSeconds": PLAYER_CONFLICT_INSPIRE_SECONDS,
+            "identity": self._personal_identity_state(player, personal_renown)
         }
+
+    async def choose_personal_identity(self, player_id: str, identity_key: str):
+        player = self.players.get(player_id)
+        option = PLAYER_IDENTITY_OPTIONS.get(identity_key)
+        if not player or not option:
+            await self.send_personal_message(player_id, {"type": "personal_identity_error", "message": "没有找到这个身份"})
+            return
+        personal_renown = int(player.get("personal_renown", 0) or 0)
+        min_renown = int(option.get("minRenown", PLAYER_IDENTITY_MIN_RENOWN) or 0)
+        if personal_renown < min_renown:
+            await self.send_personal_message(player_id, {"type": "personal_identity_error", "message": f"个人声望至少需要 {min_renown} 才能选择身份"})
+            return
+        player["personal_identity"] = identity_key
+        status = self._public_personal_conflict_status(player)
+        await self.send_personal_message(player_id, {
+            "type": "personal_identity_result",
+            "action": "choose",
+            "identity": status.get("identity"),
+            "message": f"已选择身份：{option.get('label', '身份')}",
+            "status": status
+        })
+        await self.send_personal_conflict_status(player_id)
+
+    def _apply_identity_task_discount(self, tribe: dict, discount: int) -> str:
+        if discount <= 0:
+            return ""
+        task_groups = [
+            ("war_repair_tasks", ("woodCost", "stoneCost")),
+            ("war_revival_tasks", ("woodCost",))
+        ]
+        for group_key, cost_keys in task_groups:
+            for task in tribe.get(group_key, []) or []:
+                if not isinstance(task, dict) or task.get("status") != "pending":
+                    continue
+                changed = []
+                for key in cost_keys:
+                    before = int(task.get(key, 0) or 0)
+                    if before <= 0:
+                        continue
+                    after = max(0, before - discount)
+                    task[key] = after
+                    if after != before:
+                        changed.append(key)
+                if changed:
+                    task["identityBonusLabel"] = "石匠整修降低了后续消耗"
+                    return task.get("title", "战后任务")
+        return ""
+
+    async def perform_personal_identity_action(self, player_id: str):
+        player = self.players.get(player_id)
+        tribe_id = self.player_tribes.get(player_id)
+        tribe = self.tribes.get(tribe_id)
+        if not player or not tribe:
+            await self.send_personal_message(player_id, {"type": "personal_identity_error", "message": "请先加入一个部落"})
+            return
+        identity_key = player.get("personal_identity")
+        option = PLAYER_IDENTITY_OPTIONS.get(identity_key)
+        if not option:
+            await self.send_personal_message(player_id, {"type": "personal_identity_error", "message": "先选择一个身份"})
+            return
+        cooldown_until = self._active_personal_identity_cooldown(player)
+        if cooldown_until:
+            await self.send_personal_message(player_id, {"type": "personal_identity_error", "message": "身份动作还在冷却"})
+            return
+        if int(option.get("requiresHistory", 0) or 0) and len(tribe.get("history", []) or []) < int(option.get("requiresHistory", 0) or 0):
+            await self.send_personal_message(player_id, {"type": "personal_identity_error", "message": "部落历史还不够讲述者复述"})
+            return
+
+        storage = tribe.setdefault("storage", {"wood": 0, "stone": 0})
+        reward_parts = []
+        for key, label in (("wood", "木材"), ("stone", "石块")):
+            amount = int(option.get(key, 0) or 0)
+            if amount:
+                storage[key] = int(storage.get(key, 0) or 0) + amount
+                reward_parts.append(f"{label}+{amount}")
+        discovery = int(option.get("discoveryProgress", 0) or 0)
+        if discovery:
+            tribe["discovery_progress"] = int(tribe.get("discovery_progress", 0) or 0) + discovery
+            reward_parts.append(f"发现进度+{discovery}")
+        renown = int(option.get("renown", 0) or 0)
+        if renown:
+            tribe["renown"] = int(tribe.get("renown", 0) or 0) + renown
+            reward_parts.append(f"部落声望+{renown}")
+        personal_renown = int(option.get("personalRenown", 0) or 0)
+        if personal_renown:
+            player["personal_renown"] = int(player.get("personal_renown", 0) or 0) + personal_renown
+            reward_parts.append(f"个人声望+{personal_renown}")
+        discounted_task = self._apply_identity_task_discount(tribe, int(option.get("taskDiscount", 0) or 0))
+        if discounted_task:
+            reward_parts.append(f"{discounted_task}消耗降低")
+
+        now_text = datetime.now().isoformat()
+        player["personal_identity_cooldown_until"] = datetime.fromtimestamp(datetime.now().timestamp() + PLAYER_IDENTITY_ACTION_COOLDOWN_SECONDS).isoformat()
+        member = tribe.get("members", {}).get(player_id, {})
+        detail = f"{member.get('name', player.get('name', '成员'))} 以{option.get('label', '身份')}身份执行{option.get('actionLabel', '身份动作')}。"
+        if reward_parts:
+            detail += f" {'、'.join(reward_parts)}。"
+        self._add_tribe_history(
+            tribe,
+            "ritual",
+            option.get("actionLabel", "身份动作"),
+            detail,
+            player_id,
+            {
+                "kind": "personal_identity",
+                "identityKey": identity_key,
+                "identityLabel": option.get("label"),
+                "actionLabel": option.get("actionLabel"),
+                "rewardParts": reward_parts,
+                "memberName": member.get("name", player.get("name", "成员"))
+            }
+        )
+        tribe.setdefault("personal_conflicts", []).append({
+            "actionLabel": option.get("actionLabel", "身份动作"),
+            "actorName": member.get("name", player.get("name", "成员")),
+            "targetName": tribe.get("name", "部落"),
+            "winnerName": option.get("label", "身份"),
+            "identityLabel": option.get("label"),
+            "identityActionLabel": option.get("actionLabel"),
+            "identityRewardParts": reward_parts,
+            "createdAt": now_text
+        })
+        tribe["personal_conflicts"] = tribe["personal_conflicts"][-8:]
+        status = self._public_personal_conflict_status(player)
+        await self.send_personal_message(player_id, {
+            "type": "personal_identity_result",
+            "action": "perform",
+            "identity": status.get("identity"),
+            "message": detail,
+            "rewardParts": reward_parts,
+            "status": status
+        })
+        await self._notify_tribe(tribe_id, detail)
+        await self.broadcast_tribe_state(tribe_id)
+        await self.send_personal_conflict_status(player_id)
 
     def _find_personal_guardian(self, actor_id: str, target_id: str, target_tribe_id: str):
         if not actor_id or not target_id or not target_tribe_id:
@@ -3293,6 +3514,15 @@ async def game_websocket(
                         message.get("actionKey", "challenge")
                     )
 
+                elif message_type == "personal_identity_choose":
+                    await manager.choose_personal_identity(
+                        player_id,
+                        message.get("identityKey", "")
+                    )
+
+                elif message_type == "personal_identity_action":
+                    await manager.perform_personal_identity_action(player_id)
+
                 elif message_type == "tribe_start_skirmish":
                     await manager.start_small_conflict(
                         player_id,
@@ -3567,6 +3797,50 @@ async def game_websocket(
                         message.get("remnantId", "")
                     )
 
+                elif message_type == "tribe_revisit_map_memory":
+                    await manager.revisit_map_memory(
+                        player_id,
+                        message.get("memoryId", "")
+                    )
+
+                elif message_type == "tribe_support_myth_claim":
+                    await manager.support_myth_claim(
+                        player_id,
+                        message.get("claimId", ""),
+                        message.get("interpretationKey", "")
+                    )
+
+                elif message_type == "tribe_resolve_emergency_choice":
+                    await manager.resolve_emergency_choice(
+                        player_id,
+                        message.get("choiceId", ""),
+                        message.get("actionKey", "")
+                    )
+
+                elif message_type == "tribe_complete_emergency_followup":
+                    await manager.complete_emergency_followup_task(
+                        player_id,
+                        message.get("taskId", "")
+                    )
+
+                elif message_type == "tribe_choose_season_taboo":
+                    await manager.choose_season_taboo(
+                        player_id,
+                        message.get("tabooKey", "")
+                    )
+
+                elif message_type == "tribe_observe_season_taboo":
+                    await manager.observe_season_taboo(player_id)
+
+                elif message_type == "tribe_break_season_taboo":
+                    await manager.break_season_taboo(player_id)
+
+                elif message_type == "tribe_complete_season_taboo_remedy":
+                    await manager.complete_season_taboo_remedy(
+                        player_id,
+                        message.get("remedyId", "")
+                    )
+
                 elif message_type == "tribe_patrol_controlled_site":
                     await manager.patrol_controlled_resource_site(
                         player_id,
@@ -3581,6 +3855,15 @@ async def game_websocket(
 
                 elif message_type == "tribe_compose_epic":
                     await manager.compose_oral_epic(player_id)
+
+                elif message_type == "tribe_add_oral_chain_line":
+                    await manager.add_oral_chain_line(
+                        player_id,
+                        message.get("text", "")
+                    )
+
+                elif message_type == "tribe_complete_oral_chain":
+                    await manager.complete_oral_chain(player_id)
 
                 elif message_type == "tribe_choose_oath":
                     await manager.choose_tribe_oath(

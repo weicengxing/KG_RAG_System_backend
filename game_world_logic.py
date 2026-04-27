@@ -753,6 +753,21 @@ class GameWorldLogicMixin:
                     "claimedAt": remnant.get("createdAt"),
                     "activeUntil": remnant.get("activeUntil")
                 })
+            for memory in self._active_map_memories(tribe):
+                landmarks.append({
+                    "id": memory.get("id"),
+                    "tribeId": tribe_id,
+                    "label": memory.get("label", "活地图记忆"),
+                    "x": memory.get("x", 0),
+                    "z": memory.get("z", 0),
+                    "type": "map_memory_trace",
+                    "memoryKind": memory.get("kind"),
+                    "summary": memory.get("summary"),
+                    "rewardLabel": memory.get("rewardLabel"),
+                    "claimedBy": memory.get("actorName"),
+                    "claimedAt": memory.get("createdAt"),
+                    "activeUntil": memory.get("activeUntil")
+                })
         return landmarks
 
     def _compose_map_data(self, map_name: Optional[str] = None) -> Optional[dict]:

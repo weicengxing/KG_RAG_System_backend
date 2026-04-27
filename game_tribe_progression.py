@@ -224,6 +224,18 @@ class GameTribeProgressionMixin:
         detail = f"{member.get('name', '成员')} 整理了{remnant.get('regionLabel', '附近区域')}的{remnant.get('label', '事件余迹')}。"
         if reward_parts:
             detail += f" 收获：{'、'.join(reward_parts)}。"
+        memory = self._record_map_memory(
+            tribe,
+            "event_trace",
+            remnant.get("label", "事件余迹"),
+            f"{member.get('name', '成员')}整理过这里，{remnant.get('sourceEventTitle', '世界事件')}留下的痕迹仍可被后来者辨认。",
+            float(remnant.get("x", 0) or 0),
+            float(remnant.get("z", 0) or 0),
+            remnant.get("id"),
+            member.get("name", "成员")
+        )
+        if memory:
+            detail += " 这里被记入活地图。"
         self._add_tribe_history(
             tribe,
             "world_event",
@@ -242,6 +254,111 @@ class GameTribeProgressionMixin:
                 "reward": rewards,
                 "rewardParts": reward_parts
             }
+        )
+        await self._notify_tribe(tribe_id, detail)
+        await self.broadcast_tribe_state(tribe_id)
+        await self._broadcast_current_map()
+
+    def _active_map_memories(self, tribe: dict) -> list:
+        active = []
+        now = datetime.now()
+        for memory in tribe.get("map_memories", []) or []:
+            if not isinstance(memory, dict) or memory.get("status") == "resolved":
+                continue
+            active_until = memory.get("activeUntil")
+            if active_until:
+                try:
+                    if datetime.fromisoformat(active_until) <= now:
+                        continue
+                except (TypeError, ValueError):
+                    pass
+            active.append(memory)
+        if len(active) != len(tribe.get("map_memories", []) or []):
+            tribe["map_memories"] = active[-TRIBE_MAP_MEMORY_LIMIT:]
+        return active[-TRIBE_MAP_MEMORY_LIMIT:]
+
+    def _record_map_memory(self, tribe: dict, memory_kind: str, label: str, summary: str, x: float, z: float, source_id: str = "", actor_name: str = "") -> Optional[dict]:
+        if not tribe:
+            return None
+        active = self._active_map_memories(tribe)
+        dedupe_id = f"{memory_kind}:{source_id}" if source_id else ""
+        if dedupe_id and any(item.get("dedupeId") == dedupe_id for item in active):
+            return None
+        now = datetime.now()
+        reward = dict(TRIBE_MAP_MEMORY_REWARDS.get(memory_kind, TRIBE_MAP_MEMORY_REWARDS["event_trace"]))
+        memory = {
+            "id": f"map_memory_{tribe.get('id')}_{int(now.timestamp() * 1000)}_{random.randint(100, 999)}",
+            "type": "map_memory_trace",
+            "status": "active",
+            "kind": memory_kind,
+            "label": label or "活地图记忆",
+            "summary": summary or "这里留下了可被后来者重新读取的痕迹。",
+            "x": max(-490, min(490, float(x or 0))),
+            "z": max(-490, min(490, float(z or 0))),
+            "sourceId": source_id,
+            "dedupeId": dedupe_id,
+            "actorName": actor_name,
+            "reward": reward,
+            "rewardLabel": self._reward_summary_text(reward),
+            "createdAt": now.isoformat(),
+            "activeUntil": datetime.fromtimestamp(now.timestamp() + TRIBE_MAP_MEMORY_ACTIVE_MINUTES * 60).isoformat()
+        }
+        tribe["map_memories"] = [*active, memory][-TRIBE_MAP_MEMORY_LIMIT:]
+        return memory
+
+    def _apply_map_memory_reward(self, tribe: dict, rewards: dict) -> list:
+        reward_parts = []
+        storage = tribe.setdefault("storage", {"wood": 0, "stone": 0})
+        for key, label in (("wood", "木材"), ("stone", "石块")):
+            amount = int((rewards or {}).get(key, 0) or 0)
+            if amount:
+                storage[key] = int(storage.get(key, 0) or 0) + amount
+                reward_parts.append(f"{label}+{amount}")
+        food = int((rewards or {}).get("food", 0) or 0)
+        if food:
+            tribe["food"] = int(tribe.get("food", 0) or 0) + food
+            reward_parts.append(f"食物+{food}")
+        discovery = int((rewards or {}).get("discoveryProgress", 0) or 0)
+        if discovery:
+            tribe["discovery_progress"] = int(tribe.get("discovery_progress", 0) or 0) + discovery
+            reward_parts.append(f"发现进度+{discovery}")
+        trade = int((rewards or {}).get("tradeReputation", 0) or 0)
+        if trade:
+            tribe["trade_reputation"] = int(tribe.get("trade_reputation", 0) or 0) + trade
+            reward_parts.append(f"贸易信誉+{trade}")
+        renown = int((rewards or {}).get("renown", 0) or 0)
+        if renown:
+            tribe["renown"] = int(tribe.get("renown", 0) or 0) + renown
+            reward_parts.append(f"声望+{renown}")
+        return reward_parts
+
+    async def revisit_map_memory(self, player_id: str, memory_id: str):
+        tribe_id = self.player_tribes.get(player_id)
+        tribe = self.tribes.get(tribe_id)
+        if not tribe:
+            await self._send_tribe_error(player_id, "请先加入一个部落")
+            return
+        memories = self._active_map_memories(tribe)
+        memory = next((item for item in memories if item.get("id") == memory_id), None)
+        if not memory:
+            await self._send_tribe_error(player_id, "这处地图记忆已经淡去")
+            return
+        member = tribe.get("members", {}).get(player_id, {})
+        reward_parts = self._apply_map_memory_reward(tribe, memory.get("reward") or {})
+        memory["status"] = "resolved"
+        memory["revisitedBy"] = member.get("name", "成员")
+        memory["revisitedAt"] = datetime.now().isoformat()
+        tribe["map_memories"] = [item for item in memories if item.get("id") != memory_id]
+        detail = f"{member.get('name', '成员')} 重访了{memory.get('label', '活地图记忆')}，把旧痕迹重新读进部落路线。"
+        if reward_parts:
+            detail += f" 收获：{'、'.join(reward_parts)}。"
+        self._add_tribe_history(
+            tribe,
+            "world_event",
+            "重访活地图记忆",
+            detail,
+            player_id,
+            {"kind": "map_memory", **memory, "rewardParts": reward_parts}
         )
         await self._notify_tribe(tribe_id, detail)
         await self.broadcast_tribe_state(tribe_id)
@@ -388,6 +505,26 @@ class GameTribeProgressionMixin:
                 progress["lastAction"] = "border_market_open"
                 progress["lastActionAt"] = now.isoformat()
             self._append_trade_route_market_task(target_tribe, route_site, now.isoformat())
+            self._record_map_memory(
+                target_tribe,
+                "border_market",
+                "旧边市火圈",
+                f"与{route_site.get('partnerTribeName', '邻近部落')}的短时边市曾在这里开张，路线仍带着互市口信。",
+                float(route_site.get("x", 0) or 0),
+                float(route_site.get("z", 0) or 0),
+                f"market:{shared_id}:{target_tribe.get('id')}",
+                "边市"
+            )
+            self._open_myth_claim(
+                target_tribe,
+                "border_market",
+                "边市开张",
+                f"与{route_site.get('partnerTribeName', '邻近部落')}的边市开张后，族人可以争论这是互市佳兆、旧路显现还是守边誓言。",
+                float(route_site.get("x", 0) or 0),
+                float(route_site.get("z", 0) or 0),
+                f"market:{shared_id}:{target_tribe.get('id')}",
+                "边市"
+            )
             activated.append(target_tribe.get("id"))
         return activated
 
@@ -2050,7 +2187,6 @@ class GameTribeProgressionMixin:
         await self.broadcast_tribe_state(tribe_id)
         await self._broadcast_current_map()
 
-
     async def compose_oral_epic(self, player_id: str):
         tribe_id = self.player_tribes.get(player_id)
         tribe = self.tribes.get(tribe_id)
@@ -2061,6 +2197,11 @@ class GameTribeProgressionMixin:
         member = tribe.get("members", {}).get(player_id, {})
         if member.get("role") not in ("leader", "elder"):
             await self._send_tribe_error(player_id, "只有首领或长老可以整理部落史诗")
+            return
+
+        chain = tribe.get("oral_chain")
+        if isinstance(chain, dict) and len(chain.get("lines", []) or []) >= TRIBE_ORAL_CHAIN_LINE_TARGET:
+            await self.complete_oral_chain(player_id)
             return
 
         history = [item for item in (tribe.get("history", []) or []) if isinstance(item, dict)]
@@ -2081,6 +2222,17 @@ class GameTribeProgressionMixin:
         tribe.setdefault("oral_epics", []).append(epic)
         tribe["oral_epics"] = tribe["oral_epics"][-8:]
         tribe["renown"] = int(tribe.get("renown", 0) or 0) + TRIBE_ORAL_EPIC_RENOWN_BONUS
+        camp_center = (tribe.get("camp") or {}).get("center") or {}
+        self._record_map_memory(
+            tribe,
+            "oral_epic",
+            "口述史火痕",
+            f"《{epic['title']}》把近期部落历史编成故事，营火旁留下可被重读的记忆。",
+            float(camp_center.get("x", 0) or 0),
+            float(camp_center.get("z", 0) or 0),
+            epic["id"],
+            member.get("name", "管理者")
+        )
         detail = f"{epic['composedBy']} 整理了《{epic['title']}》：{epic['summary']} 声望 +{TRIBE_ORAL_EPIC_RENOWN_BONUS}。"
         self._add_tribe_history(tribe, "ritual", "整理部落史诗", detail, player_id, {"kind": "oral_epic", **epic})
         await self._publish_world_rumor(
@@ -2090,6 +2242,7 @@ class GameTribeProgressionMixin:
             {"tribeId": tribe_id, "epicId": epic["id"], "renownBonus": TRIBE_ORAL_EPIC_RENOWN_BONUS}
         )
         await self.broadcast_tribe_state(tribe_id)
+        await self._broadcast_current_map()
 
 
     async def choose_tribe_oath(self, player_id: str, oath_key: str):

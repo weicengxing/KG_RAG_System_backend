@@ -2168,9 +2168,30 @@ class GameConflictMixin:
         if discovery_reward:
             reward_bits.append(f"发现进度+{discovery_reward}")
         detail = f"{member.get('name', '成员')} 处理{task.get('title', '战后余波')}，消耗食物{food_cost}，{ '、'.join(reward_bits) }。"
+        self._record_map_memory(
+            tribe,
+            "war_aftermath",
+            f"{task.get('title', '战后余波')}旧痕",
+            f"与{task.get('otherTribeName', '其他部落')}的战后余波曾在这里被整理，边界故事还可被后来者重读。",
+            float(self.players.get(player_id, {}).get("x", 0) or 0),
+            float(self.players.get(player_id, {}).get("z", 0) or 0),
+            f"war_after:{aftermath_id}",
+            member.get("name", "成员")
+        )
+        self._open_myth_claim(
+            tribe,
+            "war_aftermath",
+            task.get("title", "战后余波"),
+            f"与{task.get('otherTribeName', '其他部落')}的战后余波被整理后，族人可以争论这段旧事该成为守边誓言、互市佳兆还是火种护佑。",
+            float(self.players.get(player_id, {}).get("x", 0) or 0),
+            float(self.players.get(player_id, {}).get("z", 0) or 0),
+            f"war_after:{aftermath_id}",
+            member.get("name", "成员")
+        )
         self._add_tribe_history(tribe, "governance", "战后余波", detail, player_id, {"kind": "war_aftermath", "aftermathId": aftermath_id, "otherTribeId": other_tribe_id})
         await self._notify_tribe(tribe_id, detail)
         await self.broadcast_tribe_state(tribe_id)
+        await self._broadcast_current_map()
 
     async def complete_war_ally_task(self, player_id: str, task_id: str, action: str = ""):
         tribe_id = self.player_tribes.get(player_id)

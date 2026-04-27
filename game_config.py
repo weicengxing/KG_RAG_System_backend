@@ -295,6 +295,65 @@ TRIBE_NEWCOMER_KEY_MOMENTS = [
 ]
 TRIBE_ORAL_EPIC_RENOWN_BONUS = 7
 TRIBE_ORAL_EPIC_MIN_HISTORY = 3
+TRIBE_ORAL_CHAIN_LINE_TARGET = 3
+TRIBE_ORAL_CHAIN_MAX_LINES = 6
+TRIBE_ORAL_CHAIN_LINE_RENOWN = 1
+TRIBE_ORAL_CHAIN_COMPLETE_RENOWN = 4
+TRIBE_ORAL_CHAIN_KEYWORDS = {
+    "hearth": {
+        "label": "火种",
+        "keywords": ["火", "篝火", "营火", "暖", "灶", "宴"],
+        "summary": "接龙里反复提到火与营地，新的传闻更像一段守住家园的火边歌。",
+        "runeCandidate": "火种铭文候选",
+        "reward": {"renown": 2, "food": 3}
+    },
+    "cave": {
+        "label": "洞穴",
+        "keywords": ["洞", "洞穴", "石", "回声", "深处", "遗迹", "旧"],
+        "summary": "接龙把旧石、洞穴和回声连在一起，部落更容易把故事指向新发现。",
+        "runeCandidate": "幽洞回声候选",
+        "reward": {"renown": 1, "discoveryProgress": 2}
+    },
+    "trade": {
+        "label": "互市",
+        "keywords": ["贸易", "边市", "交换", "礼", "赠", "商", "路"],
+        "summary": "接龙把交换和礼物讲成荣耀，外部部落更愿意听见友好的版本。",
+        "runeCandidate": "行路信物候选",
+        "reward": {"renown": 1, "tradeReputation": 1}
+    },
+    "guard": {
+        "label": "守边",
+        "keywords": ["守", "边", "旗", "战", "巡", "护", "敌"],
+        "summary": "接龙把边界压力改写成守望故事，让营地暂时少一些战意翻涌。",
+        "runeCandidate": "守边纹候选",
+        "reward": {"renown": 2, "warPressureRelief": 1}
+    }
+}
+TRIBE_EMERGENCY_CHOICE_MINUTES = 12
+TRIBE_EMERGENCY_CHOICE_LIMIT = 4
+TRIBE_EMERGENCY_FOLLOWUP_LIMIT = 5
+TRIBE_EMERGENCY_CHOICE_ACTIONS = {
+    "rescue": {
+        "label": "先救援",
+        "summary": "优先处理灾情、兽群或遗迹险情，稳定营地情绪，但争夺一侧会留下余怨。",
+        "renown": 3,
+        "food": 5,
+        "discoveryProgress": 1,
+        "abandonedTitle": "争夺余怨",
+        "abandonedSummary": "部落选择先救援后，边境争夺没有立刻回应。成员可以补巡边界，避免余怨继续积累。",
+        "followup": {"renownReward": 2, "pressureRelief": 1}
+    },
+    "contest": {
+        "label": "先争夺",
+        "summary": "优先压住边界或资源点争夺，给成员明确的集结方向，但救援一侧需要事后安抚。",
+        "renown": 4,
+        "tradeReputation": 1,
+        "pressureRelief": 1,
+        "abandonedTitle": "救援补救",
+        "abandonedSummary": "部落选择先争夺后，救援没有第一时间赶到。成员可以补送食物和人手，把错过的善意补回来。",
+        "followup": {"foodCost": 2, "renownReward": 3, "foodReward": 4, "discoveryReward": 1}
+    }
+}
 TRIBE_OATH_RENOWN_BONUS = 5
 TRIBE_SCOUT_SITE_REWARDS = {
     "region_forest": {"wood": 12, "renown": 2, "label": "林缘木料点"},
@@ -555,6 +614,41 @@ WORLD_EVENT_RARE_RUIN_DURATION_MINUTES = 10
 WORLD_EVENT_RUIN_CHAIN_THRESHOLD = 3
 WORLD_EVENT_REMNANT_ACTIVE_MINUTES = 8
 WORLD_EVENT_REMNANT_LIMIT = 6
+TRIBE_MAP_MEMORY_ACTIVE_MINUTES = 40
+TRIBE_MAP_MEMORY_LIMIT = 8
+TRIBE_MAP_MEMORY_REWARDS = {
+    "event_trace": {"renown": 1, "discoveryProgress": 1},
+    "cave_first": {"renown": 2, "discoveryProgress": 1},
+    "war_aftermath": {"renown": 2},
+    "border_market": {"tradeReputation": 1, "renown": 1},
+    "oral_epic": {"renown": 2}
+}
+TRIBE_MYTH_CLAIM_ACTIVE_MINUTES = 45
+TRIBE_MYTH_CLAIM_LIMIT = 6
+TRIBE_DOMINANT_MYTH_LIMIT = 5
+TRIBE_MYTH_INFLUENCE_TARGET = 3
+TRIBE_MYTH_INTERPRETATIONS = {
+    "hearth": {
+        "label": "火种护佑",
+        "summary": "把这件事解释为营火、食物与部落守护的征兆。",
+        "reward": {"food": 4, "renown": 2}
+    },
+    "trail": {
+        "label": "旧路显现",
+        "summary": "把这件事解释为旧路重新露面，适合继续探索。",
+        "reward": {"discoveryProgress": 1, "renown": 2}
+    },
+    "trade": {
+        "label": "互市佳兆",
+        "summary": "把这件事解释为交换与信任正在靠近。",
+        "reward": {"tradeReputation": 1, "renown": 1}
+    },
+    "border": {
+        "label": "守边誓言",
+        "summary": "把这件事解释为守住边界、整理标记的誓言。",
+        "reward": {"wood": 4, "renown": 2}
+    }
+}
 SEASON_OBJECTIVE_DURATION_MINUTES = 12
 SEASON_CHAIN_TARGET = 3
 SEASON_CELEBRATION_RENOWN_BONUS = 14
@@ -565,6 +659,45 @@ SEASON_CELEBRATION_CHOICES = {
     "market": {"label": "集市", "summary": "把庆典变成跨部落交换日。", "wood": 14, "stone": 14, "tradeReputation": 1, "renown": 8, "buff": {"type": "market", "title": "集市余韵", "tradeRenownBonus": 2}}
 }
 SEASON_CELEBRATION_BUFF_MINUTES = 10
+TRIBE_SEASON_TABOO_ACTIVE_MINUTES = 30
+TRIBE_SEASON_TABOO_PROGRESS_TARGET = 3
+TRIBE_SEASON_TABOO_LIMIT = 4
+TRIBE_SEASON_TABOO_REMEDY_LIMIT = 5
+TRIBE_SEASON_TABOO_OPTIONS = {
+    "no_hunt": {
+        "label": "禁猎季",
+        "summary": "短时间不主动追猎，把兽群动向交给祭司和寻路者记录。",
+        "observeLabel": "守禁猎",
+        "observeReward": {"renown": 1, "discoveryProgress": 1},
+        "blessing": {"renown": 5, "food": 4},
+        "breakLabel": "急猎破戒",
+        "breakSummary": "为了应急追猎兽群，立刻获得食物，但需要公开补偿禁猎承诺。",
+        "breakReward": {"food": 8},
+        "remedy": {"title": "兽骨赔礼", "summary": "把急猎所得的一部分送回图腾旁，重新解释禁猎季的意义。", "foodCost": 2, "renownReward": 3, "discoveryReward": 1}
+    },
+    "guard_fire": {
+        "label": "护火季",
+        "summary": "优先守住营火和遮蔽，不把公共木材随意拆走。",
+        "observeLabel": "添柴守火",
+        "observeReward": {"renown": 2},
+        "blessing": {"renown": 4, "wood": 4},
+        "breakLabel": "拆火取木",
+        "breakSummary": "临时拆用护火木材，立刻得到木材，但营火边会留下责问。",
+        "breakReward": {"wood": 8},
+        "remedy": {"title": "补火赎誓", "summary": "补回被拆走的护火木材，让营地重新承认这条禁忌。", "woodCost": 3, "renownReward": 4}
+    },
+    "harvest_dance": {
+        "label": "丰收舞",
+        "summary": "成员轮流跳丰收舞，把采集收成转成共同庆典。",
+        "observeLabel": "跳丰收舞",
+        "observeReward": {"food": 2, "renown": 1},
+        "blessing": {"food": 10, "renown": 3, "tradeReputation": 1},
+        "breakLabel": "停舞抢收",
+        "breakSummary": "中断丰收舞去抢收近处物资，立刻补给营地，但庆典情绪需要补救。",
+        "breakReward": {"food": 4, "wood": 4},
+        "remedy": {"title": "补跳丰收舞", "summary": "把被中断的舞步补完，让这次抢收重新回到共同庆典里。", "foodCost": 1, "renownReward": 3, "tradeReward": 1}
+    }
+}
 SEASON_OBJECTIVES = {
     "region_forest": {"title": "林地采种", "summary": "采集迁徙季节留下的坚果与嫩枝。", "food": 8, "wood": 10, "renown": 4},
     "region_mountain": {"title": "山地试炼", "summary": "沿山脊寻找新露出的石脉。", "stone": 16, "renown": 5},
