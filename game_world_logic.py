@@ -463,6 +463,8 @@ class GameWorldLogicMixin:
                 decorations.extend(self._active_caravan_routes(tribe))
             if hasattr(self, "_active_nomad_visitors"):
                 decorations.extend(self._active_nomad_visitors(tribe))
+            if hasattr(self, "_active_alliance_signals"):
+                decorations.extend(self._active_alliance_signals(tribe))
             decorations.extend(self._active_diplomacy_council_sites(tribe))
             decorations.extend(self._active_world_event_remnants(tribe))
             if hasattr(self, "_active_map_memories"):
@@ -473,6 +475,10 @@ class GameWorldLogicMixin:
                 decorations.extend(self._active_trial_grounds(tribe))
             if hasattr(self, "_active_forbidden_edges"):
                 decorations.extend(self._active_forbidden_edges(tribe))
+            if hasattr(self, "_active_fog_trails"):
+                decorations.extend(self._active_fog_trails(tribe))
+            if hasattr(self, "_active_disaster_coop_tasks"):
+                decorations.extend(self._active_disaster_coop_tasks(tribe))
             if hasattr(self, "_active_cave_races"):
                 for race in self._active_cave_races(tribe):
                     race_marker = dict(race)
@@ -809,6 +815,28 @@ class GameWorldLogicMixin:
                         "activeUntil": alert.get("activeUntil"),
                         "claimedAt": alert.get("createdAt")
                     })
+            if hasattr(self, "_active_alliance_signals"):
+                for signal in self._active_alliance_signals(tribe):
+                    landmarks.append({
+                        "id": signal.get("id"),
+                        "tribeId": tribe_id,
+                        "label": signal.get("title", "联盟旗语"),
+                        "x": signal.get("x", 0),
+                        "z": signal.get("z", 0),
+                        "type": "alliance_signal",
+                        "summary": signal.get("summary"),
+                        "direction": signal.get("direction"),
+                        "actionLabel": signal.get("actionLabel"),
+                        "sourceTribeId": signal.get("sourceTribeId"),
+                        "sourceTribeName": signal.get("sourceTribeName"),
+                        "targetTribeId": signal.get("targetTribeId"),
+                        "targetTribeName": signal.get("targetTribeName"),
+                        "otherTribeId": signal.get("otherTribeId"),
+                        "otherTribeName": signal.get("otherTribeName"),
+                        "anchorLabel": signal.get("anchorLabel"),
+                        "activeUntil": signal.get("activeUntil"),
+                        "claimedAt": signal.get("createdAt")
+                    })
             for site in self._active_diplomacy_council_sites(tribe):
                 landmarks.append({
                     "id": site.get("id"),
@@ -839,6 +867,23 @@ class GameWorldLogicMixin:
                         "participantCount": len(theater.get("participants", []) or []),
                         "claimedAt": theater.get("createdAt"),
                         "activeUntil": theater.get("activeUntil")
+                    })
+            if hasattr(self, "_public_dispute_witness_stones"):
+                for stone in self._public_dispute_witness_stones(tribe):
+                    landmarks.append({
+                        "id": stone.get("id"),
+                        "tribeId": tribe_id,
+                        "label": stone.get("label", "争端见证石"),
+                        "x": stone.get("x", 0),
+                        "z": stone.get("z", 0),
+                        "type": "dispute_witness_stone",
+                        "summary": stone.get("summary"),
+                        "sourceLabel": stone.get("sourceLabel"),
+                        "progress": int(stone.get("progress", 0) or 0),
+                        "target": int(stone.get("target", TRIBE_DISPUTE_WITNESS_STONE_TARGET) or TRIBE_DISPUTE_WITNESS_STONE_TARGET),
+                        "participantCount": len(stone.get("participants", []) or []),
+                        "claimedAt": stone.get("createdAt"),
+                        "activeUntil": stone.get("activeUntil")
                     })
             for remnant in self._active_world_event_remnants(tribe):
                 landmarks.append({
@@ -952,6 +997,37 @@ class GameWorldLogicMixin:
                         "lastOutcome": edge.get("lastOutcome"),
                         "claimedAt": edge.get("createdAt"),
                         "activeUntil": edge.get("activeUntil")
+                    })
+            if hasattr(self, "_active_fog_trails"):
+                for trail in self._active_fog_trails(tribe):
+                    landmarks.append({
+                        "id": trail.get("id"),
+                        "tribeId": tribe_id,
+                        "label": trail.get("label", "雾区探路"),
+                        "x": trail.get("x", 0),
+                        "z": trail.get("z", 0),
+                        "type": "fog_trail",
+                        "summary": trail.get("summary"),
+                        "sourceLabel": trail.get("sourceLabel"),
+                        "participantCount": len(trail.get("participants", []) or []),
+                        "claimedAt": trail.get("createdAt"),
+                        "activeUntil": trail.get("activeUntil")
+                    })
+            if hasattr(self, "_active_disaster_coop_tasks"):
+                for task in self._active_disaster_coop_tasks(tribe):
+                    landmarks.append({
+                        "id": task.get("id"),
+                        "tribeId": tribe_id,
+                        "label": task.get("label", "大灾协作"),
+                        "x": task.get("x", 0),
+                        "z": task.get("z", 0),
+                        "type": "disaster_coop_site",
+                        "summary": task.get("summary"),
+                        "progress": int(task.get("progress", 0) or 0),
+                        "target": int(task.get("target", 0) or 0),
+                        "participantCount": len(task.get("participants", []) or []),
+                        "claimedAt": task.get("createdAt"),
+                        "activeUntil": task.get("activeUntil")
                     })
             if hasattr(self, "_active_old_camp_echoes"):
                 for echo in self._active_old_camp_echoes(tribe):

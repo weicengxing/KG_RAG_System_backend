@@ -50,9 +50,33 @@ class GameTravelerSongMixin:
                     continue
             except (TypeError, ValueError):
                 pass
+            self._active_traveler_tune_lineage_bonus(tune, now)
             tunes.append(tune)
         tribe["traveler_song_tunes"] = tunes[-TRIBE_TRAVELER_SONG_TUNE_LIMIT:]
         return tribe["traveler_song_tunes"]
+
+    def _active_traveler_tune_lineage_bonus(self, tune: dict, now: datetime | None = None) -> dict | None:
+        bonus = tune.get("lineageBonus")
+        if not isinstance(bonus, dict) or bonus.get("status", "active") != "active":
+            return None
+        active_until = bonus.get("activeUntil")
+        if active_until:
+            try:
+                if datetime.fromisoformat(active_until) <= (now or datetime.now()):
+                    bonus["status"] = "expired"
+                    bonus["expiredAt"] = (now or datetime.now()).isoformat()
+                    return None
+            except (TypeError, ValueError):
+                return bonus
+        return bonus
+
+    def _active_traveler_tune_lineage_bonuses(self, tribe: dict) -> list:
+        bonuses = []
+        for tune in self._active_traveler_song_tunes(tribe):
+            bonus = self._active_traveler_tune_lineage_bonus(tune)
+            if bonus:
+                bonuses.append({**bonus, "tuneId": tune.get("id"), "tuneLabel": tune.get("label", "公开曲牌")})
+        return bonuses
 
     def _public_traveler_songs(self, tribe: dict) -> list:
         return self._active_traveler_songs(tribe)
@@ -64,7 +88,30 @@ class GameTravelerSongMixin:
         return self._active_traveler_song_hints(tribe)
 
     def _public_traveler_song_tunes(self, tribe: dict) -> list:
-        return self._active_traveler_song_tunes(tribe)
+        public = []
+        for tune in self._active_traveler_song_tunes(tribe):
+            bonus = self._active_traveler_tune_lineage_bonus(tune)
+            refs = [item for item in tune.get("lineageRefs", []) or [] if isinstance(item, dict)]
+            item = {
+                **tune,
+                "lineageRefs": refs[-4:],
+                "lineageCount": len(refs),
+                "lineageTarget": TRIBE_TRAVELER_TUNE_LINEAGE_TARGET,
+                "lineageLabels": [ref.get("actionLabel", "引用") for ref in refs[-4:]]
+            }
+            if bonus:
+                item["lineageBonus"] = bonus
+                item["lineageBonusLabel"] = bonus.get("label", "传唱加成")
+                item["lineageBonusSummary"] = bonus.get("summary", "")
+                item["lineageBonusActiveUntil"] = bonus.get("activeUntil")
+            public.append(item)
+        return public
+
+    def _public_traveler_tune_lineage_records(self, tribe: dict) -> list:
+        return [
+            item for item in tribe.get("traveler_tune_lineage_records", []) or []
+            if isinstance(item, dict)
+        ][-TRIBE_TRAVELER_TUNE_LINEAGE_RECORD_LIMIT:]
 
     def _traveler_song_reward_parts(self, tribe: dict, action: dict, other_tribe_id: str = "") -> list:
         parts = []
@@ -100,6 +147,67 @@ class GameTravelerSongMixin:
                 relation["lastTemperatureAction"] = f"traveler_song_{action.get('key', 'song')}"
                 parts.append("边界口风改变")
         return parts
+
+    def _traveler_tune_lineage_reward_parts(self, tribe: dict, action: dict, other_tribe_id: str = "") -> list:
+        parts = self._traveler_song_reward_parts(tribe, action, other_tribe_id)
+        food = int((action or {}).get("food", 0) or 0)
+        if food:
+            tribe["food"] = int(tribe.get("food", 0) or 0) + food
+            parts.append(f"食物+{food}")
+        return parts
+
+    def _traveler_tune_lineage_bonus_summary_parts(self, bonus: dict) -> list:
+        parts = []
+        for key, label in (
+            ("ritualGatherBonus", "采集"),
+            ("tradeReputationBonus", "外交"),
+            ("rumorTruthBonus", "辨认"),
+            ("borderTheaterScoreBonus", "戏台声势")
+        ):
+            value = int((bonus or {}).get(key, 0) or 0)
+            if value:
+                parts.append(f"{label}+{value}")
+        visitor_weight = float((bonus or {}).get("visitorWeight", 0) or 0)
+        if visitor_weight:
+            parts.append(f"来访牵引+{round(visitor_weight * 100)}%")
+        return parts
+
+    def _unlock_traveler_tune_lineage_bonus(self, tune: dict, action_key: str, action: dict, now: datetime) -> dict | None:
+        refs = [item for item in tune.get("lineageRefs", []) or [] if isinstance(item, dict)]
+        if len(refs) < TRIBE_TRAVELER_TUNE_LINEAGE_TARGET:
+            return None
+        bonus = {
+            "id": f"traveler_tune_lineage_bonus_{tune.get('id')}_{action_key}_{int(now.timestamp() * 1000)}",
+            "status": "active",
+            "type": action.get("bonusType", action_key),
+            "label": action.get("bonusLabel", "传唱加成"),
+            "summary": action.get("bonusSummary", "多次引用后，这段曲牌短时影响后续行动。"),
+            "sourceActionKey": action_key,
+            "sourceActionLabel": action.get("label", "引用"),
+            "createdAt": now.isoformat(),
+            "activeUntil": datetime.fromtimestamp(now.timestamp() + TRIBE_TRAVELER_TUNE_LINEAGE_BONUS_MINUTES * 60).isoformat()
+        }
+        for key in ("ritualGatherBonus", "tradeReputationBonus", "rumorTruthBonus", "borderTheaterScoreBonus"):
+            amount = int(action.get(key, 0) or 0)
+            if amount:
+                bonus[key] = amount
+        visitor_weight = float(action.get("lineageVisitorWeight", 0) or 0)
+        if visitor_weight:
+            bonus["visitorWeight"] = visitor_weight
+        tune["lineageBonus"] = bonus
+        return bonus
+
+    def _traveler_song_lineage_ritual_gather_bonus(self, tribe: dict) -> int:
+        return sum(int(bonus.get("ritualGatherBonus", 0) or 0) for bonus in self._active_traveler_tune_lineage_bonuses(tribe))
+
+    def _traveler_song_lineage_trade_reputation_bonus(self, tribe: dict) -> int:
+        return sum(int(bonus.get("tradeReputationBonus", 0) or 0) for bonus in self._active_traveler_tune_lineage_bonuses(tribe))
+
+    def _traveler_song_lineage_rumor_truth_bonus(self, tribe: dict) -> int:
+        return sum(int(bonus.get("rumorTruthBonus", 0) or 0) for bonus in self._active_traveler_tune_lineage_bonuses(tribe))
+
+    def _traveler_song_lineage_border_theater_score_bonus(self, tribe: dict) -> int:
+        return sum(int(bonus.get("borderTheaterScoreBonus", 0) or 0) for bonus in self._active_traveler_tune_lineage_bonuses(tribe))
 
     def _schedule_traveler_song(self, tribe: dict, source_kind: str, source_id: str, source_label: str, summary: str = "", other_tribe_id: str = "") -> dict | None:
         if not tribe or not source_id:
@@ -159,7 +267,8 @@ class GameTravelerSongMixin:
     def _traveler_song_visitor_bonus(self, tribe: dict) -> float:
         hint_bonus = sum(float(hint.get("visitorWeight", 0) or 0) for hint in self._active_traveler_song_hints(tribe))
         tune_bonus = sum(float(tune.get("visitorWeight", 0) or 0) for tune in self._active_traveler_song_tunes(tribe))
-        return min(0.28, hint_bonus + tune_bonus)
+        lineage_bonus = sum(float(bonus.get("visitorWeight", 0) or 0) for bonus in self._active_traveler_tune_lineage_bonuses(tribe))
+        return min(0.32, hint_bonus + tune_bonus + lineage_bonus)
 
     def _mark_traveler_song_visitor_hint_used(self, tribe: dict, label: str = "来访权重") -> bool:
         for hint in self._active_traveler_song_hints(tribe):
@@ -241,6 +350,84 @@ class GameTravelerSongMixin:
             })
         return sources
 
+    async def reference_traveler_song_tune(self, player_id: str, tune_id: str, action_key: str):
+        tribe_id = self.player_tribes.get(player_id)
+        tribe = self.tribes.get(tribe_id)
+        if not tribe:
+            await self._send_tribe_error(player_id, "请先加入一个部落")
+            return
+        action = TRIBE_TRAVELER_TUNE_LINEAGE_ACTIONS.get(action_key)
+        if not action:
+            await self._send_tribe_error(player_id, "未知曲牌引用方式")
+            return
+        tune = next((item for item in self._active_traveler_song_tunes(tribe) if item.get("id") == tune_id), None)
+        if not tune:
+            await self._send_tribe_error(player_id, "这段公开曲牌已经散去")
+            return
+        refs = [item for item in tune.get("lineageRefs", []) or [] if isinstance(item, dict)]
+        if any(ref.get("memberId") == player_id and ref.get("actionKey") == action_key for ref in refs):
+            await self._send_tribe_error(player_id, "你已经用这种方式引用过这段曲牌")
+            return
+
+        member = tribe.get("members", {}).get(player_id, {})
+        member_name = member.get("name", "成员")
+        now = datetime.now()
+        action = {"key": action_key, **action}
+        reward_parts = self._traveler_tune_lineage_reward_parts(tribe, action, tune.get("otherTribeId", ""))
+        ref = {
+            "id": f"traveler_tune_ref_{tune_id}_{action_key}_{player_id}_{int(now.timestamp() * 1000)}",
+            "memberId": player_id,
+            "memberName": member_name,
+            "actionKey": action_key,
+            "actionLabel": action.get("label", "引用"),
+            "sourceLabel": action.get("bonusLabel", action.get("label", "引用")),
+            "summary": action.get("summary", ""),
+            "rewardParts": reward_parts,
+            "createdAt": now.isoformat()
+        }
+        refs.append(ref)
+        tune["lineageRefs"] = refs[-TRIBE_TRAVELER_TUNE_LINEAGE_RECORD_LIMIT:]
+        tune["lineageCount"] = len(refs)
+        tune["lineageTarget"] = TRIBE_TRAVELER_TUNE_LINEAGE_TARGET
+        bonus = self._unlock_traveler_tune_lineage_bonus(tune, action_key, action, now)
+        bonus_parts = self._traveler_tune_lineage_bonus_summary_parts(bonus or {})
+        if bonus:
+            reward_parts.append(f"解锁{bonus.get('label', '传唱加成')}")
+            if bonus_parts:
+                reward_parts.extend(bonus_parts)
+
+        record = {
+            "id": f"traveler_tune_lineage_record_{tribe_id}_{int(now.timestamp() * 1000)}_{random.randint(100, 999)}",
+            "tuneId": tune.get("id"),
+            "tuneLabel": tune.get("label", "公开曲牌"),
+            "styleLabel": tune.get("styleLabel", "公开曲牌"),
+            "actionKey": action_key,
+            "actionLabel": action.get("label", "引用"),
+            "memberName": member_name,
+            "lineageCount": len(refs),
+            "lineageTarget": TRIBE_TRAVELER_TUNE_LINEAGE_TARGET,
+            "bonusLabel": (bonus or {}).get("label", ""),
+            "bonusSummary": (bonus or {}).get("summary", ""),
+            "rewardParts": reward_parts,
+            "createdAt": now.isoformat()
+        }
+        tribe.setdefault("traveler_tune_lineage_records", []).append(record)
+        tribe["traveler_tune_lineage_records"] = tribe["traveler_tune_lineage_records"][-TRIBE_TRAVELER_TUNE_LINEAGE_RECORD_LIMIT:]
+
+        detail = f"{member_name}把“{tune.get('label', '公开曲牌')}”用于{action.get('label', '引用')}，传唱谱系 {len(refs)}/{TRIBE_TRAVELER_TUNE_LINEAGE_TARGET}。"
+        if reward_parts:
+            detail += f" {'、'.join(reward_parts)}。"
+        self._add_tribe_history(tribe, "culture", "曲牌传承", detail, player_id, {"kind": "traveler_tune_lineage", "record": record, "tune": tune})
+        if bonus:
+            await self._publish_world_rumor(
+                "traveler_tune_lineage",
+                "曲牌传承",
+                f"{tribe.get('name', '部落')}把一段公开曲牌唱出了{bonus.get('label', '传唱加成')}，后来者开始继续引用它。",
+                {"tribeId": tribe_id, "tuneId": tune.get("id"), "bonusType": bonus.get("type")}
+            )
+        await self._notify_tribe(tribe_id, detail)
+        await self.broadcast_tribe_state(tribe_id)
+
     async def promote_traveler_song_tune(self, player_id: str, record_id: str):
         tribe_id = self.player_tribes.get(player_id)
         tribe = self.tribes.get(tribe_id)
@@ -273,6 +460,8 @@ class GameTravelerSongMixin:
             "sourceSongId": record.get("songId"),
             "sourceKind": record.get("sourceKind"),
             "sourceLabel": record.get("sourceLabel", "旅人谣曲"),
+            "otherTribeId": record.get("otherTribeId", ""),
+            "otherTribeName": record.get("otherTribeName", ""),
             "label": f"{record.get('sourceLabel', '旅人谣曲')}·{style.get('label', '公开曲牌')}",
             "styleKey": style_key,
             "styleLabel": style.get("label", "公开曲牌"),

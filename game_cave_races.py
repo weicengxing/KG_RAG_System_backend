@@ -306,6 +306,10 @@ class GameCaveRaceMixin:
                 add_bonus("活路标参照", {"discoveryProgress": 1})
             if self._mentorship_trail_bonus_active(tribe):
                 add_bonus("导师探路记号", {"renown": 1})
+        if hasattr(self, "_oral_map_lineage_rescue_bonus"):
+            lineage_progress, lineage_reward, lineage_label = self._oral_map_lineage_rescue_bonus(tribe)
+            if lineage_progress and lineage_label:
+                add_bonus(lineage_label, lineage_reward)
 
         return method, bonuses, min(2, len(bonuses)), reward_bonus
 
@@ -385,6 +389,11 @@ class GameCaveRaceMixin:
         if int(tribe.get("tamed_beasts", 0) or 0) > 0:
             supports.append({"label": "幼兽嗅探", "bonus": 1})
             bonus += 1
+        if hasattr(self, "_oral_map_context_support"):
+            oral_bonus, oral_labels, _, _ = self._oral_map_context_support(tribe, "cave_race")
+            for label in oral_labels:
+                supports.append({"label": label, "bonus": 1})
+            bonus += oral_bonus
         return supports, bonus
 
     async def _maybe_open_rare_cave_race(self, tribe: dict, player_id: str, cave_label: str, route_key: str, depth: int, finds: int) -> dict | None:
@@ -471,10 +480,21 @@ class GameCaveRaceMixin:
         rng = getattr(self, "_weather_rng", None) or random
         roll = rng.randint(1, 6)
         supports, support_bonus = self._cave_race_supports(tribe)
+        route_experience = None
+        if hasattr(self, "_consume_forbidden_edge_route_experience"):
+            route_experience = self._consume_forbidden_edge_route_experience(tribe, "cave_race_first")
+            if route_experience:
+                safety_bonus = int(route_experience.get("safetyBonus", TRIBE_FORBIDDEN_EDGE_ROUTE_EXPERIENCE_SAFETY) or 0)
+                support_bonus += safety_bonus
+                supports.append({"label": route_experience.get("label", "禁地回撤经验"), "bonus": safety_bonus})
         member = tribe.get("members", {}).get(player_id, {})
         member_name = member.get("name") or self._get_player_name(player_id)
         total = roll + support_bonus
         if total >= TRIBE_CAVE_RACE_FIRST_TARGET:
+            oral_reference = None
+            oral_lineage = None
+            if hasattr(self, "_record_oral_map_context_reference"):
+                oral_reference, oral_lineage = self._record_oral_map_context_reference(tribe, "cave_race", race.get("label", "稀有洞穴首探"), member_name, "首探成功")
             reward_parts = self._apply_cave_race_reward(tribe, TRIBE_CAVE_RACE_FIRST_REWARD)
             self._sync_cave_race_first_result(race_id, tribe, member_name)
             self._record_map_memory(
@@ -488,7 +508,11 @@ class GameCaveRaceMixin:
                 member_name
             )
             detail = f"{member_name}抢下{race.get('label', '稀有洞穴')}首探：掷出{roll}+支撑{support_bonus}，{'、'.join(reward_parts)}。"
-            self._add_tribe_history(tribe, "cave", "稀有洞穴首探", detail, player_id, {"kind": "cave_race_first", "raceId": race_id, "rewardParts": reward_parts, "supports": supports})
+            if oral_reference:
+                detail += f" 引用了{oral_reference.get('actionLabel', '口述地图')}。"
+            if oral_lineage:
+                detail += f" 沉淀出{oral_lineage.get('label', '路线讲述谱系')}。"
+            self._add_tribe_history(tribe, "cave", "稀有洞穴首探", detail, player_id, {"kind": "cave_race_first", "raceId": race_id, "rewardParts": reward_parts, "supports": supports, "oralMapReference": oral_reference, "oralMapLineage": oral_lineage})
             await self._publish_world_rumor("cave", "稀有洞穴首探", f"{tribe.get('name', '部落')}由{member_name}抢下{race.get('caveLabel', '洞穴')}短时岔洞首探。", {"raceId": race_id, "tribeId": tribe_id})
             await self._notify_tribe(tribe_id, detail)
             await self._broadcast_all_cave_race_states()
@@ -508,8 +532,16 @@ class GameCaveRaceMixin:
             "supportLabels": [item.get("label") for item in supports],
             "createdAt": datetime.now().isoformat()
         }
+        oral_reference = None
+        oral_lineage = None
+        if hasattr(self, "_record_oral_map_context_reference"):
+            oral_reference, oral_lineage = self._record_oral_map_context_reference(tribe, "cave_race", race.get("label", "稀有洞穴首探"), member_name, "失踪线索")
         detail = f"{member_name}抢探{race.get('label', '稀有洞穴')}失手：掷出{roll}+支撑{support_bonus}，没有重伤，只在洞口留下失踪线索，需要{target}步营救。"
-        self._add_tribe_history(tribe, "cave", "洞穴失踪线索", detail, player_id, {"kind": "cave_race_missing", "raceId": race_id, "supports": supports})
+        if oral_reference:
+            detail += f" 失踪线索旁引用了{oral_reference.get('actionLabel', '口述地图')}。"
+        if oral_lineage:
+            detail += f" 沉淀出{oral_lineage.get('label', '路线讲述谱系')}。"
+        self._add_tribe_history(tribe, "cave", "洞穴失踪线索", detail, player_id, {"kind": "cave_race_missing", "raceId": race_id, "supports": supports, "oralMapReference": oral_reference, "oralMapLineage": oral_lineage})
         await self._notify_tribe(tribe_id, detail)
         await self.broadcast_tribe_state(tribe_id)
 
@@ -532,9 +564,24 @@ class GameCaveRaceMixin:
         if pay_error:
             await self._send_tribe_error(player_id, pay_error)
             return
+        route_experience = None
+        if int(rescue.get("progress", 0) or 0) <= 0 and hasattr(self, "_consume_forbidden_edge_route_experience"):
+            route_experience = self._consume_forbidden_edge_route_experience(tribe, "cave_rescue")
+            if route_experience:
+                progress_bonus += 1
+                bonuses.append({"label": route_experience.get("label", "禁地回撤经验")})
+        if hasattr(self, "_oral_map_context_support"):
+            oral_bonus, oral_labels, _, _ = self._oral_map_context_support(tribe, "cave_rescue")
+            if oral_bonus:
+                progress_bonus += oral_bonus
+                bonuses.extend({"label": label} for label in oral_labels)
 
         member = tribe.get("members", {}).get(player_id, {})
         member_name = member.get("name") or self._get_player_name(player_id)
+        oral_reference = None
+        oral_lineage = None
+        if hasattr(self, "_record_oral_map_context_reference"):
+            oral_reference, oral_lineage = self._record_oral_map_context_reference(tribe, "cave_rescue", race.get("label", "洞穴营救"), member_name, method.get("label", "营救"))
         paid_parts = self._apply_cave_rescue_method_cost(tribe, method)
         rescue.setdefault("helperIds", []).append(player_id)
         rescue.setdefault("helperNames", []).append(member_name)
@@ -553,7 +600,9 @@ class GameCaveRaceMixin:
         if rescue["progress"] < target:
             bonus_text = f"（{ '、'.join(item.get('label') for item in bonuses) }）" if bonuses else ""
             detail = f"{member_name}用{method.get('label', '营救方式')}推进{race.get('label', '稀有洞穴')}营救{bonus_text}，进度 {rescue['progress']} / {target}。"
-            self._add_tribe_history(tribe, "cave", "推进洞穴营救", detail, player_id, {"kind": "cave_rescue_step", "raceId": race_id, "progress": rescue["progress"], "target": target, "methodKey": method.get("key"), "bonuses": bonuses})
+            if oral_lineage:
+                detail += f" 形成{oral_lineage.get('label', '路线讲述谱系')}。"
+            self._add_tribe_history(tribe, "cave", "推进洞穴营救", detail, player_id, {"kind": "cave_rescue_step", "raceId": race_id, "progress": rescue["progress"], "target": target, "methodKey": method.get("key"), "bonuses": bonuses, "oralMapReference": oral_reference, "oralMapLineage": oral_lineage})
             await self._notify_tribe(tribe_id, detail)
             await self.broadcast_tribe_state(tribe_id)
             return
@@ -586,7 +635,11 @@ class GameCaveRaceMixin:
             detail += " 洞穴旧物可进入收藏墙。"
         if return_mark:
             detail += " 洞口同时留下了可整理的归路标记。"
-        self._add_tribe_history(tribe, "cave", "完成洞穴营救", detail, player_id, {"kind": "cave_rescue_complete", "raceId": race_id, "rewardParts": reward_parts, "memoryId": memory.get("id") if memory else "", "methodKey": method.get("key"), "record": record, "returnMark": return_mark})
+        if oral_reference:
+            detail += f" 营救复盘引用了{oral_reference.get('actionLabel', '口述地图')}。"
+        if oral_lineage:
+            detail += f" 形成{oral_lineage.get('label', '路线讲述谱系')}。"
+        self._add_tribe_history(tribe, "cave", "完成洞穴营救", detail, player_id, {"kind": "cave_rescue_complete", "raceId": race_id, "rewardParts": reward_parts, "memoryId": memory.get("id") if memory else "", "methodKey": method.get("key"), "record": record, "returnMark": return_mark, "oralMapReference": oral_reference, "oralMapLineage": oral_lineage})
         await self._publish_world_rumor("cave", "洞穴营救完成", f"{tribe.get('name', '部落')}循着短时岔洞的失踪线索救回了队友。", {"raceId": race_id, "tribeId": tribe_id})
         await self._notify_tribe(tribe_id, detail)
         await self.broadcast_tribe_state(tribe_id)

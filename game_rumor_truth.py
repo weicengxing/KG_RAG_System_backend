@@ -80,6 +80,10 @@ class GameRumorTruthMixin:
             song_sources = self._traveler_song_tune_sources(tribe)
             if song_sources:
                 return song_sources[-1]
+        if hasattr(self, "_oral_map_lineage_rumor_source"):
+            oral_source = self._oral_map_lineage_rumor_source(tribe)
+            if oral_source:
+                return oral_source
         if self.world_rumors:
             rumor = self.world_rumors[-1]
             return {
@@ -214,6 +218,14 @@ class GameRumorTruthMixin:
         else:
             reward_parts.extend(self._apply_rumor_truth_reward(tribe, action.get("uncertainBonus", {})))
         reward_parts.extend(self._apply_rumor_pressure_relief(tribe, action.get("pressureRelief", 0)))
+        tune_truth_bonus = self._traveler_song_lineage_rumor_truth_bonus(tribe) if hasattr(self, "_traveler_song_lineage_rumor_truth_bonus") else 0
+        if tune_truth_bonus:
+            tribe["discovery_progress"] = int(tribe.get("discovery_progress", 0) or 0) + tune_truth_bonus
+            reward_parts.append(f"曲牌辨认+{tune_truth_bonus}")
+        oral_truth_bonus, oral_truth_label = self._oral_map_lineage_rumor_bonus(tribe) if hasattr(self, "_oral_map_lineage_rumor_bonus") else (0, "")
+        if oral_truth_bonus:
+            tribe["discovery_progress"] = int(tribe.get("discovery_progress", 0) or 0) + oral_truth_bonus
+            reward_parts.append(f"{oral_truth_label or '路线讲述'}+{oral_truth_bonus}")
 
         now = datetime.now()
         outcome_label = "坐实" if truth_state == "true" else ("存疑" if truth_state == "uncertain" else "走偏")

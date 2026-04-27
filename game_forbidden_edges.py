@@ -75,6 +75,58 @@ class GameForbiddenEdgeMixin:
             if isinstance(record, dict)
         ][-TRIBE_FORBIDDEN_EDGE_RECORD_LIMIT:]
 
+    def _active_forbidden_edge_route_experiences(self, tribe: dict) -> list:
+        active = []
+        for experience in tribe.get("forbidden_edge_route_experiences", []) or []:
+            if isinstance(experience, dict) and experience.get("status", "active") == "active":
+                active.append(experience)
+        tribe["forbidden_edge_route_experiences"] = active[-TRIBE_FORBIDDEN_EDGE_ROUTE_EXPERIENCE_LIMIT:]
+        return tribe["forbidden_edge_route_experiences"]
+
+    def _public_forbidden_edge_route_experiences(self, tribe: dict) -> list:
+        return [
+            {
+                "id": item.get("id"),
+                "label": item.get("label", "禁地回撤经验"),
+                "summary": item.get("summary", ""),
+                "safetyBonus": int(item.get("safetyBonus", TRIBE_FORBIDDEN_EDGE_ROUTE_EXPERIENCE_SAFETY) or 0),
+                "sourceLabels": list(item.get("sourceLabels", []) or []),
+                "createdAt": item.get("createdAt")
+            }
+            for item in self._active_forbidden_edge_route_experiences(tribe)
+        ]
+
+    def _consume_forbidden_edge_route_experience(self, tribe: dict, use_key: str = "forbidden_edge") -> dict | None:
+        experiences = self._active_forbidden_edge_route_experiences(tribe)
+        if not experiences:
+            return None
+        experience = experiences[0]
+        experience["status"] = "used"
+        experience["usedFor"] = use_key
+        experience["usedAt"] = datetime.now().isoformat()
+        tribe["forbidden_edge_route_experiences"] = [
+            item for item in experiences[1:]
+            if isinstance(item, dict) and item.get("status", "active") == "active"
+        ]
+        return experience
+
+    def _create_forbidden_edge_route_experience(self, tribe: dict, edge: dict, record: dict, source_labels: list) -> dict:
+        now = datetime.now()
+        experience = {
+            "id": f"forbidden_edge_route_{tribe.get('id')}_{int(now.timestamp() * 1000)}_{random.randint(100, 999)}",
+            "status": "active",
+            "label": "禁地回撤经验",
+            "summary": f"{record.get('memberName', '成员')}连续安全回撤，把{edge.get('label', '禁地边缘')}的风向、火光和回路记成下一次高风险行动的经验。",
+            "edgeId": edge.get("id"),
+            "edgeLabel": edge.get("label", "禁地边缘"),
+            "safetyBonus": TRIBE_FORBIDDEN_EDGE_ROUTE_EXPERIENCE_SAFETY,
+            "sourceLabels": list(source_labels or []),
+            "createdAt": now.isoformat()
+        }
+        experiences = self._active_forbidden_edge_route_experiences(tribe)
+        tribe["forbidden_edge_route_experiences"] = [*experiences, experience][-TRIBE_FORBIDDEN_EDGE_ROUTE_EXPERIENCE_LIMIT:]
+        return experience
+
     def _public_forbidden_edge_actions(self, tribe: dict) -> dict:
         actions = {}
         for key, action in TRIBE_FORBIDDEN_EDGE_ACTIONS.items():
@@ -83,10 +135,13 @@ class GameForbiddenEdgeMixin:
             if int(action.get("requiresMembers", 0) or 0) > len(tribe.get("members", {}) or {}):
                 available = False
                 reason = f"需要至少 {action.get('requiresMembers')} 名成员"
+            support_bonus, support_labels = self._forbidden_edge_support_bonus(tribe, key)
             actions[key] = {
                 **action,
                 "available": available,
                 "reason": reason,
+                "supportBonus": support_bonus,
+                "supportLabels": support_labels,
                 "rewardLabel": self._reward_summary_text(action.get("reward", {})) if hasattr(self, "_reward_summary_text") else ""
             }
         return actions
@@ -111,17 +166,69 @@ class GameForbiddenEdgeMixin:
                 parts.append(f"{label}+{amount}")
         return parts
 
+    def _forbidden_edge_sacred_fire_active(self, tribe: dict) -> bool:
+        relay = self._active_sacred_fire_relay(tribe) if hasattr(self, "_active_sacred_fire_relay") else None
+        if relay:
+            return True
+        for record in reversed(tribe.get("sacred_fire_history", []) or []):
+            if isinstance(record, dict):
+                return True
+        return False
+
+    def _forbidden_edge_mentorship_active(self, tribe: dict) -> bool:
+        mentorship = self._active_mentorship(tribe) if hasattr(self, "_active_mentorship") else None
+        if mentorship and mentorship.get("focusKey") in {"trail", "cave", "gather"}:
+            return True
+        for record in reversed(tribe.get("mentorship_history", []) or []):
+            if isinstance(record, dict) and record.get("focusKey") in {"trail", "cave", "gather"}:
+                return True
+        return False
+
+    def _forbidden_edge_oral_map_active(self, tribe: dict) -> bool:
+        bonuses = self._active_cave_route_bonuses(tribe) if hasattr(self, "_active_cave_route_bonuses") else tribe.get("cave_route_bonuses", []) or []
+        if any(
+            isinstance(item, dict)
+            and item.get("status", "active") == "active"
+            and (item.get("sourceActionKey") == "cave_route" or str(item.get("id", "")).startswith("oral_map"))
+            for item in bonuses
+        ):
+            return True
+        return any(
+            isinstance(record, dict) and record.get("actionKey") == "cave_route"
+            for record in (tribe.get("oral_map_records", []) or [])[-3:]
+        )
+
     def _forbidden_edge_support_bonus(self, tribe: dict, action_key: str) -> tuple[int, list]:
         labels = []
         bonus = 0
-        if action_key == "torch_probe" and self._has_tribe_structure_type(tribe, "campfire"):
+        if action_key == "torch_probe" and self._forbidden_edge_sacred_fire_active(tribe):
+            labels.append("圣火余烬")
+            bonus += 1
+        elif action_key == "torch_probe" and self._has_tribe_structure_type(tribe, "campfire"):
             labels.append("营火旧光")
             bonus += 1
         if action_key == "trail_probe" and (tribe.get("trail_markers") or tribe.get("trail_marker_history")):
             labels.append("活路标")
             bonus += 1
+        if action_key in {"trail_probe", "linger"}:
+            if hasattr(self, "_oral_map_context_support"):
+                oral_bonus, oral_labels, _, _ = self._oral_map_context_support(tribe, "forbidden_edge")
+                if oral_bonus:
+                    bonus += oral_bonus
+                    labels.extend(oral_labels)
+            elif self._forbidden_edge_oral_map_active(tribe):
+                labels.append("口述归路图")
+                bonus += 1
+        if action_key in {"trail_probe", "companion_probe", "linger"} and hasattr(self, "_oral_map_lineage_forbidden_bonus"):
+            lineage_bonus, lineage_label = self._oral_map_lineage_forbidden_bonus(tribe)
+            if lineage_bonus and lineage_label:
+                labels.append(lineage_label)
+                bonus += lineage_bonus
         if action_key == "companion_probe" and len(tribe.get("members", {}) or {}) >= 3:
             labels.append("多人照应")
+            bonus += 1
+        if action_key in {"companion_probe", "linger"} and self._forbidden_edge_mentorship_active(tribe):
+            labels.append("导师探路")
             bonus += 1
         if int(tribe.get("tamed_beasts", 0) or 0) > 0:
             labels.append("幼兽预警")
@@ -199,10 +306,20 @@ class GameForbiddenEdgeMixin:
         member = tribe.get("members", {}).get(player_id, {})
         member_name = member.get("name", self.players.get(player_id, {}).get("name", "成员"))
         support_bonus, support_labels = self._forbidden_edge_support_bonus(tribe, action_key)
+        consumed_experience = None
+        if int(action.get("safety", 0) or 0) < 1:
+            consumed_experience = self._consume_forbidden_edge_route_experience(tribe, "forbidden_edge_probe")
+            if consumed_experience:
+                support_bonus += int(consumed_experience.get("safetyBonus", TRIBE_FORBIDDEN_EDGE_ROUTE_EXPERIENCE_SAFETY) or 0)
+                support_labels.append(consumed_experience.get("label", "禁地回撤经验"))
         roll = rng.randint(1, 6)
         total = roll + int(action.get("safety", 0) or 0) + support_bonus
         lost = total < TRIBE_FORBIDDEN_EDGE_DANGER_TARGET
         reward_parts = [] if lost else self._apply_forbidden_edge_reward(tribe, action.get("reward", {}))
+        if lost:
+            tribe["forbidden_edge_safe_streak"] = 0
+        else:
+            tribe["forbidden_edge_safe_streak"] = int(tribe.get("forbidden_edge_safe_streak", 0) or 0) + 1
         participant = {
             "memberId": player_id,
             "memberName": member_name,
@@ -213,6 +330,7 @@ class GameForbiddenEdgeMixin:
             "lost": lost,
             "supportLabels": support_labels,
             "rewardParts": reward_parts,
+            "routeExperienceLabel": consumed_experience.get("label") if consumed_experience else "",
             "createdAt": now.isoformat()
         }
         edge.setdefault("participants", []).append(participant)
@@ -233,13 +351,25 @@ class GameForbiddenEdgeMixin:
             "total": total,
             "supportLabels": support_labels,
             "rewardParts": reward_parts,
+            "routeExperienceUsed": consumed_experience,
             "collectionReady": bool(action.get("collectionReady")) and not lost,
             "createdAt": now.isoformat()
         }
         rescue = None
+        created_experience = None
         if lost:
             rescue = self._create_forbidden_edge_rescue(tribe, edge, player_id, member_name, action)
             record["rescueId"] = rescue.get("id")
+        elif int(tribe.get("forbidden_edge_safe_streak", 0) or 0) >= TRIBE_FORBIDDEN_EDGE_SAFE_STREAK_TARGET:
+            created_experience = self._create_forbidden_edge_route_experience(tribe, edge, record, support_labels)
+            tribe["forbidden_edge_safe_streak"] = 0
+            record["routeExperienceCreated"] = created_experience
+        oral_reference = None
+        oral_lineage = None
+        if hasattr(self, "_record_oral_map_context_reference"):
+            oral_reference, oral_lineage = self._record_oral_map_context_reference(tribe, "forbidden_edge", edge.get("label", "禁地边缘"), member_name, "迷失" if lost else action.get("label", "试探"))
+            record["oralMapReference"] = oral_reference
+            record["oralMapLineage"] = oral_lineage
         tribe.setdefault("forbidden_edge_records", []).append(record)
         tribe["forbidden_edge_records"] = tribe["forbidden_edge_records"][-TRIBE_FORBIDDEN_EDGE_RECORD_LIMIT:]
 
@@ -247,8 +377,16 @@ class GameForbiddenEdgeMixin:
             detail = f"{member_name}在{edge.get('label', '禁地边缘')}逗留过深，掷出{roll}，留下营救线索而非死亡。"
         else:
             detail = f"{member_name}在{edge.get('label', '禁地边缘')}完成{action.get('label', '试探')}，掷出{roll}+支撑{support_bonus}，{'、'.join(reward_parts) or '安全回撤'}。"
+            if consumed_experience:
+                detail += f" 消耗{consumed_experience.get('label', '禁地回撤经验')}稳住回路。"
+            if created_experience:
+                detail += f" 连续安全回撤沉淀为{created_experience.get('label', '禁地回撤经验')}。"
             if record.get("collectionReady"):
                 detail += " 带回的边缘旧物可整理进收藏墙。"
+        if oral_reference:
+            detail += f" 引用了{oral_reference.get('actionLabel', '口述地图')}。"
+        if oral_lineage:
+            detail += f" 形成{oral_lineage.get('label', '路线讲述谱系')}。"
         self._add_tribe_history(tribe, "exploration", "禁地边缘", detail, player_id, {"kind": "forbidden_edge", "record": record, "edge": edge})
         await self._notify_tribe(tribe_id, detail)
         if lost:

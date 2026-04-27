@@ -130,6 +130,10 @@ class GameMessengerMixin:
             relation["lastAction"] = f"covenant_messenger_{task.get('sourceKind', 'covenant')}"
             relation["lastActionAt"] = datetime.now().isoformat()
             reward_parts.extend(self._apply_boundary_temperature_channel_bonus(tribe, other_tribe_id, "messenger"))
+            if hasattr(self, "_consume_alliance_signal_hint"):
+                hint = self._consume_alliance_signal_hint(tribe, other_tribe_id, "messenger")
+                if hint:
+                    reward_parts.append(hint)
         return reward_parts
 
     def _mark_atonement_token_redeemed(self, tribe: dict, token_id: str, member_name: str, now_text: str, outcome: dict):

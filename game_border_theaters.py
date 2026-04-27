@@ -165,6 +165,10 @@ class GameBorderTheaterMixin:
                 bonus = 1 if diplomacy < 7 else 2
                 score += bonus
                 reasons.append(f"外交+{bonus}")
+        tune_bonus = self._traveler_song_lineage_border_theater_score_bonus(tribe) if hasattr(self, "_traveler_song_lineage_border_theater_score_bonus") else 0
+        if tune_bonus:
+            score += tune_bonus
+            reasons.append(f"曲牌+{tune_bonus}")
         return max(1, score), reasons
 
     def _apply_border_theater_rewards(self, tribe: dict, reward: dict) -> list:
@@ -188,6 +192,13 @@ class GameBorderTheaterMixin:
         relation_delta = int(action.get("relationDelta", 0) or 0)
         trust_delta = int(action.get("tradeTrustDelta", 0) or 0)
         if not relation_delta and not trust_delta:
+            if hasattr(self, "_consume_alliance_signal_hint"):
+                for other_id in theater.get("participantTribeIds", []) or []:
+                    if not other_id or other_id == tribe_id:
+                        continue
+                    hint = self._consume_alliance_signal_hint(tribe, other_id, "border_theater")
+                    if hint:
+                        parts.append(hint)
             return parts, affected
         for other_id in theater.get("participantTribeIds", []) or []:
             if not other_id or other_id == tribe_id:
@@ -209,6 +220,10 @@ class GameBorderTheaterMixin:
                 other_relation["lastAction"] = "incoming_border_theater"
                 other_relation["lastActionAt"] = now_text
                 affected.add(other_id)
+            if hasattr(self, "_consume_alliance_signal_hint"):
+                hint = self._consume_alliance_signal_hint(tribe, other_id, "border_theater")
+                if hint:
+                    parts.append(hint)
         if relation_delta:
             parts.append(f"关系{relation_delta:+d}")
         if trust_delta:
@@ -291,6 +306,8 @@ class GameBorderTheaterMixin:
             "winnerActionLabel": theater.get("winnerActionLabel"),
             "score": int(theater.get("score", 0) or 0),
             "target": int(theater.get("target", TRIBE_BORDER_THEATER_TARGET) or 1),
+            "participantTribeIds": list(theater.get("participantTribeIds", []) or []),
+            "participantTribeNames": list(theater.get("participantTribeNames", []) or []),
             "participantNames": [item.get("memberName", "成员") for item in theater.get("participants", []) or []],
             "rewardParts": reward_parts,
             "rumorTone": action.get("rumorTone", "lively"),
