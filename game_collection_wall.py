@@ -108,6 +108,37 @@ class GameCollectionWallMixin:
             if item:
                 candidates.append(item)
 
+        for record in reversed(tribe.get("old_camp_records", []) or []):
+            if not isinstance(record, dict) or not record.get("collectionReady"):
+                continue
+            item = self._collection_candidate(
+                tribe,
+                "old_camp_echo",
+                record.get("id", ""),
+                record.get("label", "回归旧营旧物"),
+                f"{record.get('memberName', '成员')} 在{record.get('sourceLabel', '旧营旧场')}完成{record.get('actionLabel', '带回旧物')}，这件旧物仍带着回归旧营的灰痕。",
+                record.get("sourceLabel", "回归旧营"),
+                {"rewardParts": record.get("rewardParts", []), "memberName": record.get("memberName", "")}
+            )
+            if item:
+                candidates.append(item)
+
+        for echo_item in reversed(tribe.get("echo_items", []) or []):
+            if not isinstance(echo_item, dict) or len(echo_item.get("memories", []) or []) < 2:
+                continue
+            memory_labels = "、".join(memory.get("experienceLabel", "经历") for memory in (echo_item.get("memories", []) or [])[-3:] if isinstance(memory, dict))
+            item = self._collection_candidate(
+                tribe,
+                "echo_item",
+                echo_item.get("id", ""),
+                echo_item.get("label", "回声物品"),
+                f"{echo_item.get('holderName', '成员')} 手中的{echo_item.get('label', '回声物品')}已经留下{memory_labels or '多段经历'}，可以挂上收藏墙保留来历。",
+                "回声物品",
+                {"memberName": echo_item.get("holderName", ""), "memoryCount": len(echo_item.get("memories", []) or [])}
+            )
+            if item:
+                candidates.append(item)
+
         return candidates[:TRIBE_COLLECTION_CANDIDATE_LIMIT]
 
     def _public_collection_wall(self, tribe: dict) -> list:

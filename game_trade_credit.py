@@ -196,6 +196,11 @@ class GameTradeCreditMixin:
         relation["tradeCreditStreak"] = 0
         relation["lastAction"] = "trade_credit_breach"
         relation["lastActionAt"] = now_text
+        other_relation = other_tribe.setdefault("boundary_relations", {}).setdefault(acting_tribe.get("id"), {})
+        other_relation["tradeTrust"] = max(0, int(other_relation.get("tradeTrust", 0) or 0) - 1)
+        other_relation["tradeCreditStreak"] = 0
+        other_relation["lastAction"] = "trade_credit_breach"
+        other_relation["lastActionAt"] = now_text
         return task
 
     async def complete_trade_credit_repair(self, player_id: str, task_id: str):

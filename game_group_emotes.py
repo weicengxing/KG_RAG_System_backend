@@ -89,6 +89,7 @@ class GameGroupEmoteMixin:
         member = tribe.get("members", {}).get(player_id, {})
         member_name = member.get("name", "成员")
         reward_parts = self._apply_group_emote_reward(tribe, action)
+        reward_parts.extend(self.apply_tribe_custom_event_bonus(tribe, "group_emote", action.get("label", "群体动作"), player_id))
         pressure_relief = self._apply_group_emote_pressure_relief(tribe, int(action.get("pressureRelief", 0) or 0))
         if pressure_relief:
             reward_parts.append(f"战争压力-{pressure_relief}")

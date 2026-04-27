@@ -169,11 +169,31 @@ class GameCelebrationMixin:
         member = tribe.get("members", {}).get(player_id, {})
         member_name = member.get("name", "成员")
         reward_parts = self._apply_celebration_echo_reward(tribe, player_id, echo.get("reward", {}))
+        previous_participant_ids = [
+            pid for pid in (echo.get("participantIds", []) or [])
+            if pid and pid != player_id
+        ]
+        relation_updates = []
+        if hasattr(self, "_record_player_relation"):
+            for participant_id in previous_participant_ids:
+                update = self._record_player_relation(
+                    player_id,
+                    participant_id,
+                    PLAYER_RELATION_CELEBRATION_DELTA,
+                    echo.get("title", "庆功余韵"),
+                    "celebration_echo"
+                )
+                if update:
+                    relation_updates.append(update)
+        if relation_updates:
+            names = "、".join([item.get("targetName", "同伴") for item in relation_updates[:3]])
+            reward_parts.append(f"与{names}关系+{PLAYER_RELATION_CELEBRATION_DELTA}")
         participant = {
             "playerId": player_id,
             "memberName": member_name,
             "joinedAt": datetime.now().isoformat(),
-            "rewardParts": reward_parts
+            "rewardParts": reward_parts,
+            "relationshipLabels": [item.get("label", "") for item in relation_updates if item.get("label")]
         }
         echo.setdefault("participantIds", []).append(player_id)
         echo.setdefault("participants", []).append(participant)
@@ -184,6 +204,7 @@ class GameCelebrationMixin:
             "sourceLabel": echo.get("sourceLabel"),
             "memberName": member_name,
             "rewardParts": reward_parts,
+            "relationshipLabels": participant["relationshipLabels"],
             "createdAt": participant["joinedAt"]
         })
         tribe["celebration_echo_records"] = tribe["celebration_echo_records"][-TRIBE_CELEBRATION_ECHO_HISTORY_LIMIT:]
@@ -192,4 +213,8 @@ class GameCelebrationMixin:
         self._add_tribe_history(tribe, "ritual", "庆功余韵", detail, player_id, {"kind": "celebration_echo", "echoId": echo_id, "sourceKind": echo.get("sourceKind")})
         await self._notify_tribe(tribe_id, detail)
         await self.broadcast_tribe_state(tribe_id)
+        if hasattr(self, "send_personal_conflict_status"):
+            await self.send_personal_conflict_status(player_id)
+            for participant_id in previous_participant_ids:
+                await self.send_personal_conflict_status(participant_id)
         await self._broadcast_current_map()

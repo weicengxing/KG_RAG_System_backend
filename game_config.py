@@ -155,6 +155,93 @@ TRIBE_SHARED_PUZZLE_COMPLETE_REWARD = {
     "renown": 4,
     "tradeReputation": 2
 }
+TRIBE_RUMOR_TRUTH_ACTIVE_MINUTES = 30
+TRIBE_RUMOR_TRUTH_LIMIT = 4
+TRIBE_RUMOR_TRUTH_RECORD_LIMIT = 6
+TRIBE_RUMOR_TRUTH_HINT_MINUTES = 24
+TRIBE_RUMOR_TRUTH_ACTIONS = {
+    "believe": {
+        "label": "相信传闻",
+        "summary": "把传闻当作可用线索，快速换取发现或声望；若传闻走偏，会留下轻量误导记录。",
+        "reward": {"discoveryProgress": 1, "renown": 1},
+        "trueBonus": {"discoveryProgress": 1},
+        "falsePenalty": {"renown": -1},
+        "hintLabel": "相信传闻"
+    },
+    "verify": {
+        "label": "派人验证",
+        "summary": "校对线索来源，收益更稳，并让下一次事件提示更可信。",
+        "reward": {"discoveryProgress": 1},
+        "trueBonus": {"renown": 2},
+        "falseBonus": {"tradeReputation": 1},
+        "hintLabel": "验证传闻"
+    },
+    "counter": {
+        "label": "反向传闻",
+        "summary": "公开修正或反制这条说法，换取贸易信誉，并可能降低边界战争压力。",
+        "reward": {"tradeReputation": 1},
+        "pressureRelief": 1,
+        "hintLabel": "反向传闻"
+    }
+}
+TRIBE_WORLD_RIDDLE_ACTIVE_MINUTES = 18
+TRIBE_WORLD_RIDDLE_LIMIT = 4
+TRIBE_WORLD_RIDDLE_RADIUS = 24
+TRIBE_WORLD_RIDDLE_SPAWN_CHANCE = 0.28
+TRIBE_WORLD_RIDDLE_RECORD_LIMIT = 6
+TRIBE_WORLD_RIDDLE_INFLUENCE_MINUTES = 45
+TRIBE_WORLD_RIDDLE_INFLUENCE_LIMIT = 5
+TRIBE_WORLD_RIDDLE_INFLUENCE_BONUS = 0.12
+TRIBE_WORLD_RIDDLE_INFLUENCE_MAX_BONUS = 0.32
+TRIBE_WORLD_RIDDLE_PREDICTIONS = {
+    "sky": {
+        "label": "指向天象",
+        "summary": "把符号读成星、月、云影的预兆，命中后提高天象窗口权重。"
+    },
+    "ruin": {
+        "label": "指向遗迹",
+        "summary": "把石影读成旧石和洞口的提示，命中后提高稀有遗迹权重。"
+    },
+    "tide": {
+        "label": "指向潮汐",
+        "summary": "把声响读成水线和兽群迁移，命中后牵引下一轮稀有事件。"
+    }
+}
+TRIBE_WORLD_RIDDLE_PATTERNS = [
+    {
+        "key": "stone_circle",
+        "title": "石阵错影",
+        "label": "石阵谜语",
+        "patternLabel": "三块石影轮流指向晨星",
+        "summary": "短石、长影和碎光排成环，像是在等人判断它指向天空还是旧路。",
+        "answerKey": "sky",
+        "influenceKind": "celestial",
+        "influenceLabel": "天象权重+",
+        "reward": {"discoveryProgress": 1, "renown": 1}
+    },
+    {
+        "key": "hollow_echo",
+        "title": "空洞回声",
+        "label": "回声谜语",
+        "patternLabel": "空地回声在地下重复三次",
+        "summary": "没有洞口的地方传出回声，像旧石遗迹在用地下声音报信。",
+        "answerKey": "ruin",
+        "influenceKind": "rare_ruin",
+        "influenceLabel": "稀有遗迹权重+",
+        "reward": {"discoveryProgress": 2}
+    },
+    {
+        "key": "tide_notches",
+        "title": "潮痕刻线",
+        "label": "潮痕谜语",
+        "patternLabel": "湿线和兽足印隔一段就重合",
+        "summary": "泥地上水线、兽足和碎贝壳排成间隔规律，像潮汐把远处消息推回来。",
+        "answerKey": "tide",
+        "influenceKind": "rare_ruin",
+        "influenceLabel": "稀有事件权重+",
+        "reward": {"tradeReputation": 1, "renown": 1}
+    }
+]
 TRIBE_NAMED_LANDMARK_LIMIT = 10
 TRIBE_NAMED_LANDMARK_PROPOSAL_LIMIT = 6
 TRIBE_NAMED_LANDMARK_RECORD_LIMIT = 8
@@ -195,6 +282,16 @@ PLAYER_CONFLICT_SPARRING_RENOWN = 1
 PLAYER_CONFLICT_INSPIRE_MIN_RENOWN = 5
 PLAYER_CONFLICT_INSPIRE_SECONDS = 180
 PLAYER_CONFLICT_INSPIRE_CONTRIBUTION = 1
+PLAYER_RELATION_SCORE_MIN = -6
+PLAYER_RELATION_SCORE_MAX = 6
+PLAYER_RELATION_FRIEND_THRESHOLD = 3
+PLAYER_RELATION_BEST_FRIEND_THRESHOLD = 5
+PLAYER_RELATION_RIVAL_THRESHOLD = -3
+PLAYER_RELATION_NEMESIS_THRESHOLD = -5
+PLAYER_RELATION_HISTORY_LIMIT = 8
+PLAYER_RELATION_STATUS_LIMIT = 4
+PLAYER_RELATION_INSPIRE_DELTA = 2
+PLAYER_RELATION_CELEBRATION_DELTA = 1
 PLAYER_RENOWN_TITLES = [
     {"min": 12, "title": "守边名手", "summary": "在守边和集结中更容易带动同伴。", "guardRadiusBonus": 3, "sparTrainingBonus": 1, "fatigueRecoveryBonusSeconds": 90, "skirmishContributionBonus": 1},
     {"min": 7, "title": "营火勇名", "summary": "附近成员愿意听从他的短促号令。", "guardRadiusBonus": 2, "sparTrainingBonus": 1, "fatigueRecoveryBonusSeconds": 60, "skirmishContributionBonus": 1},
@@ -237,9 +334,9 @@ PLAYER_IDENTITY_OPTIONS = {
     }
 }
 PLAYER_CONFLICT_ACTIONS = {
-    "intimidate": {"label": "威慑", "summary": "靠近对方发出警告，提升个人声望并轻微影响部落关系。", "renown": 1, "fatigue": 1, "relationDelta": -1},
-    "challenge": {"label": "挑战", "summary": "进行一次短促的近身冲突，胜负只造成疲劳和击退，不造成死亡。", "renown": 2, "fatigue": 2, "relationDelta": -2, "knockback": 2.4},
-    "spar": {"label": "切磋", "summary": "同部落成员之间的练习冲突，只留下少量疲劳和个人声望。", "renown": 1, "fatigue": 1, "sameTribeOnly": True, "relationDelta": 0, "knockback": 1.0, "trainingRenown": PLAYER_CONFLICT_SPARRING_RENOWN},
+    "intimidate": {"label": "威慑", "summary": "靠近对方发出警告，提升个人声望并轻微影响部落关系。", "renown": 1, "fatigue": 1, "relationDelta": -1, "personalRelationDelta": -1},
+    "challenge": {"label": "挑战", "summary": "进行一次短促的近身冲突，胜负只造成疲劳和击退，不造成死亡。", "renown": 2, "fatigue": 2, "relationDelta": -2, "personalRelationDelta": -2, "knockback": 2.4},
+    "spar": {"label": "切磋", "summary": "同部落成员之间的练习冲突，只留下少量疲劳和个人声望。", "renown": 1, "fatigue": 1, "sameTribeOnly": True, "relationDelta": 0, "personalRelationDelta": 1, "knockback": 1.0, "trainingRenown": PLAYER_CONFLICT_SPARRING_RENOWN},
     "inspire": {"label": "鼓舞", "summary": "高个人声望成员可鼓舞附近同部落成员，使其下一次小规模集结贡献提高。", "sameTribeOnly": True, "inspire": True},
     "guard": {"label": "守势", "summary": "对靠近的目标摆出防备姿态，短时间内降低下一次个人冲突造成的疲劳，也能保护附近同部落成员。", "guard": True}
 }
@@ -425,6 +522,31 @@ TRIBE_NIGHT_OUTING_OPTIONS = {
         "riskRelief": 1,
         "reward": {"discoveryProgress": 1, "tradeReputation": 1},
         "successMemory": True
+    }
+}
+TRIBE_DREAM_OMEN_ACTIVE_MINUTES = 18
+TRIBE_DREAM_OMEN_SOURCE_LIMIT = 6
+TRIBE_DREAM_OMEN_RECORD_LIMIT = 6
+TRIBE_DREAM_OMEN_EVENT_BIAS_USES = 1
+TRIBE_DREAM_OMEN_ACTIONS = {
+    "interpret": {
+        "label": "解梦",
+        "summary": "把梦里的路、星和旧痕解释成可追踪的线索。",
+        "reward": {"discoveryProgress": 1, "renown": 1},
+        "eventBias": "ruin_clue",
+        "eventBiasLabel": "遗迹线索"
+    },
+    "quiet": {
+        "label": "压梦",
+        "summary": "把惊醒和不安压回营火旁，避免边界旧怨被梦兆放大。",
+        "reward": {"renown": 1, "pressureRelief": 1}
+    },
+    "share": {
+        "label": "分享梦路",
+        "summary": "把同一段梦路讲给外来者和邻近营地听，让梦兆变成可交换口信。",
+        "reward": {"tradeReputation": 1, "renown": 1},
+        "eventBias": "herd",
+        "eventBiasLabel": "兽群经过"
     }
 }
 TRIBE_DRUM_RHYTHM_ACTIVE_MINUTES = 18
@@ -613,6 +735,61 @@ TRIBE_SACRED_FIRE_RELAY_EVENTS = [
     {"key": "shared_song", "label": "共歌回声", "summary": "同行者唱起同一段调子，路边的人愿意记住这次接力。", "reward": {"tradeReputation": 1}},
     {"key": "ember_falter", "label": "火星欲灭", "summary": "火星一度变暗，守火者稳住了惊慌。", "reward": {"warPressureRelief": 1}}
 ]
+TRIBE_LOST_TECH_FRAGMENT_TARGET = 3
+TRIBE_LOST_TECH_ACTIVE_MINUTES = 45
+TRIBE_LOST_TECH_HISTORY_LIMIT = 6
+TRIBE_LOST_TECH_SOURCES = {
+    "rubbing": {
+        "label": "遗迹拓片",
+        "summary": "从遗迹线索、稀有发现或收藏墙上抄下旧纹样。",
+        "renown": 1,
+        "requires": "discovery_or_collection"
+    },
+    "cave": {
+        "label": "洞穴发现",
+        "summary": "把洞穴远征带回的回声和刻痕拼进技艺记忆。",
+        "discoveryProgress": 1,
+        "requires": "cave_memory"
+    },
+    "old_object": {
+        "label": "旧物收藏",
+        "summary": "拆看旧物、信物或回声物品，找到可复原的手法。",
+        "tradeReputation": 1,
+        "requires": "collection"
+    },
+    "elder_tale": {
+        "label": "长者讲述",
+        "summary": "让长者把旧故事复述成可操作的步骤。",
+        "renown": 1,
+        "requires": "history"
+    }
+}
+TRIBE_LOST_TECH_OPTIONS = {
+    "stone_joinery": {
+        "label": "扣石榫法",
+        "summary": "短时降低营地建筑木石消耗，适合扩建仓库、道路和工台。",
+        "buildCostDiscountPercent": 8,
+        "renown": 2
+    },
+    "ember_basket": {
+        "label": "火篮编法",
+        "summary": "让丰收篝火和采集队更容易携带余火。",
+        "ritualGatherBonus": 1,
+        "food": 3
+    },
+    "shell_tally": {
+        "label": "贝筹记账",
+        "summary": "短时提高部落贸易结算后的信誉收益。",
+        "tradeReputationBonus": 1,
+        "tradeReputation": 2
+    },
+    "cave_lamp": {
+        "label": "洞灯护罩",
+        "summary": "下一段洞穴远征更容易多带回发现。",
+        "caveFindsBonus": 1,
+        "discoveryProgress": 1
+    }
+}
 TRIBE_TRADE_MAX_ACTIVE = 5
 TRIBE_TRADE_RENOWN_BONUS = 3
 TRIBE_TRADE_CREDIT_ACTIVE_MINUTES = 36
@@ -867,6 +1044,49 @@ TRIBE_APPRENTICE_EXCHANGE_ACTIONS = {
         "tradeReputationBonus": 1,
         "buffLabel": "贸易学徒",
         "buffSummary": "完成部落贸易时额外获得贸易信誉 +1。"
+    }
+}
+TRIBE_GUEST_STAY_ACTIVE_MINUTES = 24
+TRIBE_GUEST_STAY_RECORD_LIMIT = 8
+TRIBE_GUEST_STAY_MIN_RELATION = 1
+TRIBE_GUEST_STAY_MIN_TRADE_TRUST = 1
+TRIBE_GUEST_STAY_WANDERER_TARGET_LIMIT = 8
+TRIBE_GUEST_STAY_ACTIONS = {
+    "build_help": {
+        "label": "帮忙建设",
+        "summary": "客居者帮忙搬木、垒石和修补营地，只留下故事，不获得核心权限。",
+        "wood": 3,
+        "stone": 2,
+        "renown": 1,
+        "contribution": 3,
+        "guestRenown": 1,
+        "relationDelta": 1
+    },
+    "relief_help": {
+        "label": "帮忙救灾",
+        "summary": "客居者协助分食、守夜和安顿伤者，把危急时刻变成可回忆的人情。",
+        "food": 3,
+        "renown": 2,
+        "pressureRelief": 1,
+        "contribution": 2,
+        "relationDelta": 1
+    },
+    "market_help": {
+        "label": "帮忙互市",
+        "summary": "客居者替两个营地解释口风、搬运货物，短时提高贸易信誉与信任。",
+        "tradeReputation": 2,
+        "renown": 1,
+        "contribution": 2,
+        "relationDelta": 1,
+        "tradeTrustDelta": 1
+    },
+    "story_help": {
+        "label": "讲述来历",
+        "summary": "客居者把远路、旧事和火边规矩讲给营地，留下发现线索与共同故事。",
+        "discoveryProgress": 1,
+        "renown": 2,
+        "guestRenown": 1,
+        "relationDelta": 1
     }
 }
 TRIBE_DIPLOMACY_COUNCIL_SIGNAL_TARGET = 2
@@ -1610,7 +1830,8 @@ TRIBE_MAP_MEMORY_REWARDS = {
     "border_market": {"tradeReputation": 1, "renown": 1},
     "oral_epic": {"renown": 2},
     "season_taboo": {"renown": 1, "discoveryProgress": 1},
-    "night_trace": {"renown": 1, "discoveryProgress": 1}
+    "night_trace": {"renown": 1, "discoveryProgress": 1},
+    "world_riddle_miss": {"renown": 1, "discoveryProgress": 1}
 }
 TRIBE_TRAIL_MARKER_ACTIVE_MINUTES = 45
 TRIBE_TRAIL_MARKER_LIMIT = 8
@@ -1687,6 +1908,32 @@ TRIBE_NEUTRAL_SANCTUARY_ACTIONS = {
         "blessingLabel": "守静祝福"
     }
 }
+TRIBE_OLD_CAMP_ECHO_ACTIVE_MINUTES = 28
+TRIBE_OLD_CAMP_ECHO_LIMIT = 3
+TRIBE_OLD_CAMP_RECORD_LIMIT = 8
+TRIBE_OLD_CAMP_ECHO_ACTIONS = {
+    "repair_trace": {
+        "label": "修复旧痕",
+        "summary": "整理废弃营火、旧战场或旧边市留下的现场，让后来者知道这里发生过什么。",
+        "woodCost": 1,
+        "reward": {"renown": 2, "discoveryProgress": 1},
+        "recordLabel": "修复旧痕"
+    },
+    "rewrite_story": {
+        "label": "补写故事",
+        "summary": "把旧营火边没讲完的故事补上，给部落历史留下一段可引用的旧话。",
+        "reward": {"renown": 1, "tradeReputation": 1},
+        "recordLabel": "补写故事"
+    },
+    "bring_relic": {
+        "label": "带回旧物",
+        "summary": "从旧营、旧战场或旧边市带回一件可被收藏墙整理的小物。",
+        "foodCost": 1,
+        "reward": {"renown": 1, "discoveryProgress": 1},
+        "collectionReady": True,
+        "recordLabel": "带回旧物"
+    }
+}
 TRIBE_COLLECTION_WALL_LIMIT = 8
 TRIBE_COLLECTION_CANDIDATE_LIMIT = 10
 TRIBE_COLLECTION_INFLUENCE_LIMIT = 5
@@ -1752,6 +1999,37 @@ TRIBE_ECHO_ITEM_EXPERIENCES = {
     "ritual": {"label": "仪式经历", "summary": "把一次祭典、鼓点、导师或庆功记成物品回声。", "renown": 2},
     "border": {"label": "守边经历", "summary": "把一次警戒、停争或边界误判记进物品来历。", "renown": 1, "pressureRelief": 1},
     "trade": {"label": "往来经历", "summary": "把一次来访、信使、互市或远方回信记进物品来历。", "tradeReputation": 1, "renown": 1}
+}
+TRIBE_REVERSE_VICTORY_RECORD_LIMIT = 8
+TRIBE_REVERSE_VICTORY_COOLDOWN_MINUTES = 20
+TRIBE_REVERSE_VICTORY_TARGETS = {
+    "hold_border": {
+        "label": "守住边界",
+        "summary": "战争压力或恶劣关系没有变成大战，反而被守望者稳住。",
+        "renown": 5,
+        "pressureRelief": 1
+    },
+    "rescue_missing": {
+        "label": "救回失踪者",
+        "summary": "把洞穴竞速失败留下的失踪线索变成救援荣耀。",
+        "renown": 4,
+        "discoveryProgress": 1
+    },
+    "mediate": {
+        "label": "成功调停",
+        "summary": "在低关系边界里留下可承认的缓和口径。",
+        "renown": 3,
+        "tradeReputation": 1,
+        "relationDelta": 1,
+        "tradeTrustDelta": 1
+    },
+    "preserve_fire": {
+        "label": "保存火种",
+        "summary": "食物或声望低谷里保住营火，把弱势变成继续生活的荣耀。",
+        "renown": 4,
+        "food": 3,
+        "discoveryProgress": 1
+    }
 }
 TRIBE_MYTH_CLAIM_ACTIVE_MINUTES = 45
 TRIBE_MYTH_CLAIM_LIMIT = 6

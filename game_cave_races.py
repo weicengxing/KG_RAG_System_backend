@@ -22,6 +22,7 @@ class GameCaveRaceMixin:
                         continue
                 except (TypeError, ValueError):
                     pass
+            race["type"] = "cave_rescue_clue" if race.get("status") == "rescue" else "rare_cave_race"
             active.append(race)
         if changed:
             tribe["cave_races"] = active[-TRIBE_CAVE_RACE_LIMIT:]

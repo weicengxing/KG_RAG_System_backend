@@ -1029,6 +1029,7 @@ class GameTribeProgressionMixin:
         trust_delta = int(action.get("tradeTrustDelta", 0) or 0)
         pressure_relief = int(action.get("warPressureRelief", 0) or 0)
         affected_tribe_ids = {tribe_id}
+        temperature_bits = []
         for other_id in participant_ids:
             other_tribe = self.tribes.get(other_id)
             relation = tribe.setdefault("boundary_relations", {}).setdefault(other_id, {})
@@ -1041,6 +1042,7 @@ class GameTribeProgressionMixin:
                 relation["canDeclareWar"] = False
             relation["lastAction"] = f"diplomacy_council_{action_key}"
             relation["lastActionAt"] = now_text
+            temperature_bits.extend(self._apply_boundary_temperature_channel_bonus(tribe, other_id, "diplomacy"))
             if action.get("closeMarketPacts"):
                 self._remove_market_pact_between(tribe, other_id)
             if other_tribe:
@@ -1054,6 +1056,7 @@ class GameTribeProgressionMixin:
                     other_relation["canDeclareWar"] = False
                 other_relation["lastAction"] = f"incoming_diplomacy_council_{action_key}"
                 other_relation["lastActionAt"] = now_text
+                temperature_bits.extend(self._apply_boundary_temperature_channel_bonus(other_tribe, tribe_id, "diplomacy"))
                 if discovery_reward:
                     other_tribe["discovery_progress"] = int(other_tribe.get("discovery_progress", 0) or 0) + discovery_reward
                 if trade_reward:
@@ -1081,6 +1084,7 @@ class GameTribeProgressionMixin:
             reward_bits.append(f"信任{trust_delta:+d}")
         if pressure_relief:
             reward_bits.append(f"战争压力-{pressure_relief}")
+        reward_bits.extend(temperature_bits)
         if action.get("closeMarketPacts"):
             reward_bits.append("互市约定封存")
         detail = f"{member.get('name', '成员')} 在{site.get('title', '大议会')}主持“{action.get('label', '议题')}”：{action.get('summary', '')} {'、'.join(reward_bits)}。"
@@ -1092,6 +1096,7 @@ class GameTribeProgressionMixin:
             "participantTribeIds": participant_ids,
             "participantTribeNames": site.get("participantTribeNames", []),
             "rewardParts": reward_bits,
+            "temperatureRewardParts": temperature_bits,
             "createdAt": site.get("createdAt"),
             "resolvedAt": now_text
         }

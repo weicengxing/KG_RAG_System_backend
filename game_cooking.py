@@ -161,6 +161,7 @@ class GameCookingMixin:
         if completed:
             recipe = TRIBE_COMMUNAL_COOK_RECIPES.get(cook.get("recipeKey"), {})
             final_parts = self._apply_communal_cook_reward(tribe, recipe.get("reward", {}))
+            final_parts.extend(self.apply_tribe_custom_event_bonus(tribe, "communal_cook", cook.get("recipeLabel", "共同烹饪"), player_id))
             cook["status"] = "completed"
             cook["completedAt"] = datetime.now().isoformat()
             cook["completedBy"] = player_id

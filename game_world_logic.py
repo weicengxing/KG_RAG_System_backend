@@ -467,6 +467,14 @@ class GameWorldLogicMixin:
             decorations.extend(self._active_world_event_remnants(tribe))
             if hasattr(self, "_active_map_memories"):
                 decorations.extend(self._active_map_memories(tribe))
+            if hasattr(self, "_active_world_riddles"):
+                decorations.extend(self._active_world_riddles(tribe))
+            if hasattr(self, "_active_cave_races"):
+                for race in self._active_cave_races(tribe):
+                    race_marker = dict(race)
+                    race_marker["raceId"] = race.get("id")
+                    race_marker["id"] = f"{race.get('id')}_{tribe.get('id')}"
+                    decorations.append(race_marker)
             if hasattr(self, "_active_trail_markers"):
                 decorations.extend(self._active_trail_markers(tribe))
             if hasattr(self, "_active_named_landmarks"):
@@ -879,6 +887,58 @@ class GameWorldLogicMixin:
                     "claimedAt": memory.get("createdAt"),
                     "activeUntil": memory.get("activeUntil")
                 })
+            if hasattr(self, "_active_world_riddles"):
+                for riddle in self._active_world_riddles(tribe):
+                    landmarks.append({
+                        "id": riddle.get("id"),
+                        "tribeId": tribe_id,
+                        "label": riddle.get("label", "世界谜语"),
+                        "x": riddle.get("x", 0),
+                        "z": riddle.get("z", 0),
+                        "type": "world_riddle_site",
+                        "summary": riddle.get("summary"),
+                        "patternLabel": riddle.get("patternLabel"),
+                        "regionLabel": riddle.get("regionLabel"),
+                        "rewardLabel": riddle.get("rewardLabel"),
+                        "claimedAt": riddle.get("createdAt"),
+                        "activeUntil": riddle.get("activeUntil")
+                    })
+            if hasattr(self, "_active_old_camp_echoes"):
+                for echo in self._active_old_camp_echoes(tribe):
+                    landmarks.append({
+                        "id": echo.get("id"),
+                        "tribeId": tribe_id,
+                        "label": echo.get("label", "回归旧营"),
+                        "x": echo.get("x", 0),
+                        "z": echo.get("z", 0),
+                        "type": "old_camp_echo",
+                        "summary": echo.get("summary"),
+                        "sourceLabel": echo.get("sourceLabel"),
+                        "participantCount": len(echo.get("participants", []) or []),
+                        "claimedAt": echo.get("createdAt"),
+                        "activeUntil": echo.get("activeUntil")
+                    })
+            if hasattr(self, "_active_cave_races"):
+                for race in self._active_cave_races(tribe):
+                    rescue = race.get("rescue") or {}
+                    landmarks.append({
+                        "id": f"{race.get('id')}_{tribe_id}",
+                        "raceId": race.get("id"),
+                        "tribeId": tribe_id,
+                        "label": race.get("label", "短时稀有洞穴"),
+                        "x": race.get("x", 0),
+                        "z": race.get("z", 0),
+                        "type": "cave_rescue_clue" if race.get("status") == "rescue" else "rare_cave_race",
+                        "summary": race.get("summary"),
+                        "caveLabel": race.get("caveLabel"),
+                        "status": race.get("status"),
+                        "firstExplorerTribeName": race.get("firstExplorerTribeName"),
+                        "missingMemberName": rescue.get("missingMemberName"),
+                        "progress": int(rescue.get("progress", 0) or 0),
+                        "target": int(rescue.get("target", 0) or 0),
+                        "claimedAt": race.get("createdAt"),
+                        "activeUntil": race.get("activeUntil")
+                    })
             if hasattr(self, "_active_trail_markers"):
                 for marker in self._active_trail_markers(tribe):
                     landmarks.append({
@@ -1080,11 +1140,19 @@ class GameWorldLogicMixin:
                 ruin_regions = [region for region in WORLD_REGIONS if region.get("type") == "region_ruin"] or WORLD_REGIONS
                 duration = WORLD_EVENT_RARE_RUIN_DURATION_MINUTES if hinted_event.get("key") == "rare_ruin" else None
                 return self._build_world_event(hinted_event, self._weather_rng.choice(ruin_regions), duration)
+        if hasattr(self, "_world_riddle_chance_bonus"):
+            bonus = self._world_riddle_chance_bonus("rare_ruin")
+            if bonus and self._weather_rng.random() < bonus:
+                if hasattr(self, "_mark_world_riddle_influence_used"):
+                    self._mark_world_riddle_influence_used("rare_ruin", "牵引稀有遗迹")
+                return self._build_rare_ruin_event()
         event_pool = list(WORLD_EVENT_LIBRARY)
         if self._active_migration_season(env or {}):
             herd_event = next((item for item in WORLD_EVENT_LIBRARY if item.get("key") == "herd"), None)
             if herd_event:
                 event_pool.extend([herd_event] * max(0, MIGRATION_SEASON_HERD_WEIGHT - 1))
+        if hasattr(self, "_apply_dream_omen_world_event_bias"):
+            event_pool = self._apply_dream_omen_world_event_bias(event_pool)
         event = self._weather_rng.choice(event_pool)
         region = self._weather_rng.choice(WORLD_REGIONS)
         return self._build_world_event(event, region)
@@ -1152,10 +1220,14 @@ class GameWorldLogicMixin:
                 celestial_chance = CELESTIAL_WINDOW_CHANCE
                 if hasattr(self, "_visitor_aftereffect_bonus"):
                     celestial_chance += self._visitor_aftereffect_bonus("celestial")
+                if hasattr(self, "_world_riddle_chance_bonus"):
+                    celestial_chance += self._world_riddle_chance_bonus("celestial")
                 if not self._active_celestial_window(env) and self._weather_rng.random() < celestial_chance:
                     env["celestialWindow"] = self._build_celestial_window(env)
                     if hasattr(self, "_mark_visitor_aftereffect_used"):
                         self._mark_visitor_aftereffect_used("celestial", env["celestialWindow"].get("title", "罕见天象"))
+                    if hasattr(self, "_mark_world_riddle_influence_used"):
+                        self._mark_world_riddle_influence_used("celestial", env["celestialWindow"].get("title", "罕见天象"))
                 env["weather"] = next_weather
                 env["resourceTide"] = self._pick_resource_tide(env)
                 env["seasonObjective"] = self._build_season_objective()
@@ -1168,13 +1240,16 @@ class GameWorldLogicMixin:
                 visitor_spawned = 0
                 if hasattr(self, "_maybe_spawn_nomad_visitors"):
                     visitor_spawned = await self._maybe_spawn_nomad_visitors()
+                riddle_spawned = 0
+                if hasattr(self, "_maybe_spawn_world_riddles"):
+                    riddle_spawned = await self._maybe_spawn_world_riddles()
 
                 await self.broadcast({
                     "type": "environment_update",
                     "mapName": self.current_map_name,
                     "environment": env
                 })
-                if visitor_spawned:
+                if visitor_spawned or riddle_spawned:
                     await self._broadcast_current_map()
         except asyncio.CancelledError:
             return

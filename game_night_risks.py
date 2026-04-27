@@ -159,6 +159,7 @@ class GameNightRiskMixin:
         memory = None
         if success:
             reward_parts = self._apply_night_outing_reward(tribe, option.get("reward", {}))
+            reward_parts.extend(self.apply_tribe_custom_event_bonus(tribe, "night_outing", option.get("label", "夜行"), player_id))
             try:
                 x = float(player.get("x", (tribe.get("camp") or {}).get("center", {}).get("x", 0)) or 0)
                 z = float(player.get("z", (tribe.get("camp") or {}).get("center", {}).get("z", 0)) or 0)

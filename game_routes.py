@@ -36,15 +36,22 @@ from game_caravans import GameCaravanMixin
 from game_cooking import GameCookingMixin
 from game_drum_rhythms import GameDrumRhythmMixin
 from game_group_emotes import GameGroupEmoteMixin
+from game_dream_omens import GameDreamOmenMixin
+from game_echo_items import GameEchoItemMixin
+from game_lost_tech import GameLostTechMixin
 from game_sacred_fire import GameSacredFireMixin
 from game_mentorship import GameMentorshipMixin
 from game_celebrations import GameCelebrationMixin
 from game_night_risks import GameNightRiskMixin
+from game_old_camps import GameOldCampEchoMixin
 from game_trade_credit import GameTradeCreditMixin
 from game_weather_forecast import GameWeatherForecastMixin
 from game_laws import GameLawMixin
 from game_shared_puzzles import GameSharedPuzzleMixin
+from game_rumor_truth import GameRumorTruthMixin
+from game_world_riddles import GameWorldRiddleMixin
 from game_apprentices import GameApprenticeExchangeMixin
+from game_guest_stays import GameGuestStayMixin
 from game_messengers import GameMessengerMixin
 from game_personal_tokens import GamePersonalTokenMixin
 from game_visitors import GameVisitorMixin
@@ -53,12 +60,14 @@ from game_trail_markers import GameTrailMarkerMixin
 from game_sanctuaries import GameSanctuaryMixin
 from game_collection_wall import GameCollectionWallMixin
 from game_renown_pledges import GameRenownPledgeMixin
+from game_customs import GameCustomMixin
+from game_boundary_temperatures import GameBoundaryTemperatureMixin
 from game_cave_races import GameCaveRaceMixin
 from game_named_landmarks import GameNamedLandmarkMixin
 from game_tribe_progression import GameTribeProgressionMixin
 from game_conflict import GameConflictMixin
 
-class ConnectionManager(GameConflictMixin, GameEmergencyChoiceMixin, GameMutualAidAlertMixin, GameStoryEventsMixin, GameSeasonTabooMixin, GameStandingRitualMixin, GameBeastLinkMixin, GameMigrationMixin, GameCelestialMixin, GameHistoryFactMixin, GameCaravanMixin, GameCookingMixin, GameDrumRhythmMixin, GameGroupEmoteMixin, GameSacredFireMixin, GameMentorshipMixin, GameCelebrationMixin, GameNightRiskMixin, GameTradeCreditMixin, GameWeatherForecastMixin, GameLawMixin, GameSharedPuzzleMixin, GameApprenticeExchangeMixin, GameMessengerMixin, GamePersonalTokenMixin, GameVisitorMixin, GameFarReturnMixin, GameTrailMarkerMixin, GameSanctuaryMixin, GameCollectionWallMixin, GameRenownPledgeMixin, GameCaveRaceMixin, GameNamedLandmarkMixin, GameMythMixin, GameTribeProgressionMixin, GameWorldLogicMixin):
+class ConnectionManager(GameConflictMixin, GameEmergencyChoiceMixin, GameMutualAidAlertMixin, GameStoryEventsMixin, GameSeasonTabooMixin, GameStandingRitualMixin, GameBeastLinkMixin, GameMigrationMixin, GameCelestialMixin, GameHistoryFactMixin, GameCaravanMixin, GameCookingMixin, GameDrumRhythmMixin, GameGroupEmoteMixin, GameDreamOmenMixin, GameEchoItemMixin, GameLostTechMixin, GameSacredFireMixin, GameMentorshipMixin, GameCelebrationMixin, GameNightRiskMixin, GameOldCampEchoMixin, GameTradeCreditMixin, GameWeatherForecastMixin, GameLawMixin, GameSharedPuzzleMixin, GameRumorTruthMixin, GameWorldRiddleMixin, GameApprenticeExchangeMixin, GameGuestStayMixin, GameMessengerMixin, GamePersonalTokenMixin, GameVisitorMixin, GameFarReturnMixin, GameTrailMarkerMixin, GameSanctuaryMixin, GameCollectionWallMixin, GameRenownPledgeMixin, GameCustomMixin, GameBoundaryTemperatureMixin, GameCaveRaceMixin, GameNamedLandmarkMixin, GameMythMixin, GameTribeProgressionMixin, GameWorldLogicMixin):
     def __init__(self):
         # 活跃连接：{player_id: websocket}
         self.active_connections: Dict[str, WebSocket] = {}
@@ -247,6 +256,8 @@ class ConnectionManager(GameConflictMixin, GameEmergencyChoiceMixin, GameMutualA
         return list(reversed(self.world_rumors[-WORLD_RUMOR_LIMIT:]))
 
     def _build_world_rumor(self, rumor_type: str, title: str, text: str, related: Optional[dict] = None) -> dict:
+        if hasattr(self, "_boundary_temperature_rumor_text"):
+            text, related = self._boundary_temperature_rumor_text(text, related)
         return {
             "id": f"rumor_{int(datetime.now().timestamp() * 1000)}_{random.randint(1000, 9999)}",
             "type": rumor_type,
@@ -607,7 +618,8 @@ class ConnectionManager(GameConflictMixin, GameEmergencyChoiceMixin, GameMutualA
     def _tribe_building_cost(self, tribe: dict, layout: dict) -> dict:
         effects = self._tribe_rune_effects(tribe)
         apprentice_discount = self._apprentice_build_discount(tribe) if tribe else 0
-        wood_discount = max(0, min(80, int(effects.get("buildCostDiscountPercent", 0) or 0) + apprentice_discount))
+        lost_tech_discount = self._lost_tech_build_discount(tribe) if tribe else 0
+        wood_discount = max(0, min(80, int(effects.get("buildCostDiscountPercent", 0) or 0) + apprentice_discount + lost_tech_discount))
         stone_discount = max(0, min(80, wood_discount + int(effects.get("stoneBuildCostDiscountPercent", 0) or 0)))
         base_wood = int(layout.get("wood", 0) or 0)
         base_stone = int(layout.get("stone", 0) or 0)
@@ -680,6 +692,7 @@ class ConnectionManager(GameConflictMixin, GameEmergencyChoiceMixin, GameMutualA
         duration_bonus = int(effects.get("ritualDurationBonusMinutes", 0) or 0)
         gather_bonus = int(effects.get("ritualGatherBonus", 0) or 0)
         gather_bonus += self._apprentice_ritual_gather_bonus(tribe or {})
+        gather_bonus += self._lost_tech_ritual_gather_bonus(tribe or {})
         return {
             "wood": TRIBE_RITUAL_WOOD_COST,
             "stone": TRIBE_RITUAL_STONE_COST,
@@ -1106,13 +1119,28 @@ class ConnectionManager(GameConflictMixin, GameEmergencyChoiceMixin, GameMutualA
                 "minRelation": TRIBE_APPRENTICE_EXCHANGE_MIN_RELATION,
                 "minTradeTrust": TRIBE_APPRENTICE_EXCHANGE_MIN_TRADE_TRUST
             },
+            "guestStayTargets": self._guest_stay_targets(tribe),
+            "guestStayActions": TRIBE_GUEST_STAY_ACTIONS,
+            "guestStays": self._active_guest_stays(tribe),
+            "guestStayConfig": {
+                "activeMinutes": TRIBE_GUEST_STAY_ACTIVE_MINUTES,
+                "minRelation": TRIBE_GUEST_STAY_MIN_RELATION,
+                "minTradeTrust": TRIBE_GUEST_STAY_MIN_TRADE_TRUST
+            },
             "farReplyTasks": self._public_far_reply_tasks(tribe),
             "farReplyActions": TRIBE_FAR_REPLY_ACTIONS,
             "farReplyRecords": self._recent_far_reply_records(tribe),
             "regionEventBonuses": self._active_region_event_bonus_summaries(tribe),
             "worldEventActions": self._world_event_action_options(tribe),
             "worldEventRemnants": self._active_world_event_remnants(tribe),
+            "rumorTruthTasks": self._public_rumor_truth_tasks(tribe),
+            "rumorTruthActions": self._public_rumor_truth_actions(),
+            "rumorTruthRecords": self._public_rumor_truth_records(tribe),
+            "rumorTruthHints": self._public_rumor_truth_hints(tribe),
             "mapMemories": self._active_map_memories(tribe),
+            "oldCampEchoes": self._public_old_camp_echoes(tribe),
+            "oldCampEchoActions": TRIBE_OLD_CAMP_ECHO_ACTIONS,
+            "oldCampRecords": self._public_old_camp_records(tribe),
             "caveRaces": self._public_cave_races(tribe),
             "caveRaceActions": TRIBE_CAVE_RACE_ACTIONS,
             "trailMarkers": self._public_trail_markers(tribe),
@@ -1121,6 +1149,10 @@ class ConnectionManager(GameConflictMixin, GameEmergencyChoiceMixin, GameMutualA
             "neutralSanctuaries": self._public_neutral_sanctuaries(tribe),
             "neutralSanctuaryActions": self._public_neutral_sanctuary_actions(),
             "neutralSanctuaryBlessings": self._public_neutral_sanctuary_blessings(tribe),
+            "echoItems": self._public_echo_items(tribe),
+            "echoItemTypes": TRIBE_ECHO_ITEM_TYPES,
+            "echoItemExperiences": TRIBE_ECHO_ITEM_EXPERIENCES,
+            "echoItemRecords": self._public_echo_item_records(tribe),
             "collectionWall": self._public_collection_wall(tribe),
             "collectionCandidates": self._collection_wall_candidates(tribe),
             "collectionActions": TRIBE_COLLECTION_ACTIONS,
@@ -1206,6 +1238,13 @@ class ConnectionManager(GameConflictMixin, GameEmergencyChoiceMixin, GameMutualA
                 "minParticipants": TRIBE_SACRED_FIRE_RELAY_MIN_PARTICIPANTS,
                 "target": TRIBE_SACRED_FIRE_RELAY_TARGET_PARTICIPANTS
             },
+            "lostTech": self._public_lost_tech_state(tribe),
+            "lostTechSources": self._public_lost_tech_sources(tribe),
+            "lostTechOptions": TRIBE_LOST_TECH_OPTIONS,
+            "lostTechConfig": {
+                "fragmentTarget": TRIBE_LOST_TECH_FRAGMENT_TARGET,
+                "activeMinutes": TRIBE_LOST_TECH_ACTIVE_MINUTES
+            },
             "mentorship": self._public_mentorship(tribe),
             "mentorshipFocusOptions": {} if self._active_mentorship(tribe) else TRIBE_MENTORSHIP_FOCUS_OPTIONS,
             "mentorCandidates": self._mentor_candidates(tribe),
@@ -1239,6 +1278,10 @@ class ConnectionManager(GameConflictMixin, GameEmergencyChoiceMixin, GameMutualA
             "nightOutingStatus": self._public_night_outing_status(tribe),
             "nightOutingOptions": self._public_night_outing_options(tribe),
             "nightOutingRecords": self._public_night_outing_records(tribe),
+            "dreamOmen": self._public_dream_omen(tribe),
+            "dreamOmenSources": self._public_dream_omen_sources(tribe),
+            "dreamOmenActions": self._public_dream_omen_actions(),
+            "dreamOmenRecords": self._public_dream_omen_records(tribe),
             "tribeLaw": self._public_tribe_law(tribe),
             "tribeLawOptions": {} if self._active_tribe_law(tribe) else TRIBE_LAW_OPTIONS,
             "tribeLawRemedies": self._public_law_remedies(tribe),
@@ -1246,6 +1289,10 @@ class ConnectionManager(GameConflictMixin, GameEmergencyChoiceMixin, GameMutualA
             "sharedPuzzle": self._public_shared_puzzle(tribe),
             "sharedPuzzleOptions": self._public_shared_puzzle_options(tribe),
             "sharedPuzzleRecords": self._public_shared_puzzle_records(tribe),
+            "worldRiddles": self._public_world_riddles(tribe),
+            "worldRiddlePredictions": self._public_world_riddle_predictions(),
+            "worldRiddleInfluences": self._public_world_riddle_influences(tribe),
+            "worldRiddleRecords": self._public_world_riddle_records(tribe),
             "namedLandmarkOptions": self._public_named_landmark_options(tribe),
             "namedLandmarkProposals": self._public_named_landmark_proposals(tribe),
             "namedLandmarks": self._public_named_landmarks(tribe),
@@ -1289,6 +1336,8 @@ class ConnectionManager(GameConflictMixin, GameEmergencyChoiceMixin, GameMutualA
                 "stake": TRIBE_RENOWN_PLEDGE_STAKE,
                 "failurePenalty": TRIBE_RENOWN_PLEDGE_FAILURE_PENALTY
             },
+            "tribeCustoms": self._public_tribe_customs(tribe),
+            "tribeCustomOptions": self._public_tribe_custom_options(tribe),
             "boundaryOutcomes": [
                 item for item in (tribe.get("boundary_outcomes", []) or [])
                 if isinstance(item, dict) and item.get("status") == "pending"
@@ -1301,6 +1350,9 @@ class ConnectionManager(GameConflictMixin, GameEmergencyChoiceMixin, GameMutualA
             },
             "territoryFlags": list(tribe.get("territory_flags", []) or []),
             "boundaryRelations": dict(tribe.get("boundary_relations", {}) or {}),
+            "boundaryTemperatures": self._public_boundary_temperatures(tribe),
+            "boundaryTemperatureActions": TRIBE_BOUNDARY_TEMPERATURE_ACTIONS,
+            "boundaryTemperatureRecords": self._public_boundary_temperature_records(tribe),
             "boundaryPressures": self._active_boundary_pressures(tribe),
             "boundaryTruces": self._active_boundary_truces(tribe),
             "boundaryFollowupTasks": self._public_boundary_followup_tasks(tribe),
@@ -1402,7 +1454,14 @@ class ConnectionManager(GameConflictMixin, GameEmergencyChoiceMixin, GameMutualA
                 "tribe": None,
                 "role": None,
                 "contribution": 0,
-                "votes": active_votes
+                "votes": active_votes,
+                "guestStayTargets": self._wanderer_guest_stay_targets(),
+                "guestStayActions": TRIBE_GUEST_STAY_ACTIONS,
+                "guestStayConfig": {
+                    "activeMinutes": TRIBE_GUEST_STAY_ACTIVE_MINUTES,
+                    "minRelation": TRIBE_GUEST_STAY_MIN_RELATION,
+                    "minTradeTrust": TRIBE_GUEST_STAY_MIN_TRADE_TRUST
+                }
             }
 
         tribe = self.tribes[tribe_id]
@@ -1983,12 +2042,20 @@ class ConnectionManager(GameConflictMixin, GameEmergencyChoiceMixin, GameMutualA
             to_trade_bonus = int((self._active_celebration_buff(to_tribe) or {}).get("tradeRenownBonus", 0) or 0)
             from_apprentice_trade_bonus = self._apprentice_trade_reputation_bonus(from_tribe)
             to_apprentice_trade_bonus = self._apprentice_trade_reputation_bonus(to_tribe)
+            from_lost_tech_trade_bonus = self._lost_tech_trade_reputation_bonus(from_tribe)
+            to_lost_tech_trade_bonus = self._lost_tech_trade_reputation_bonus(to_tribe)
             if from_apprentice_trade_bonus:
                 from_tribe["trade_reputation"] += from_apprentice_trade_bonus
             if to_apprentice_trade_bonus:
                 to_tribe["trade_reputation"] += to_apprentice_trade_bonus
+            if from_lost_tech_trade_bonus:
+                from_tribe["trade_reputation"] += from_lost_tech_trade_bonus
+            if to_lost_tech_trade_bonus:
+                to_tribe["trade_reputation"] += to_lost_tech_trade_bonus
             from_law_bonus = self.apply_tribe_law_event_bonus(from_tribe, "trade_accept", "部落贸易")
             to_law_bonus = self.apply_tribe_law_event_bonus(to_tribe, "trade_accept", "部落贸易")
+            from_custom_bonus = self.apply_tribe_custom_event_bonus(from_tribe, "trade_accept", "部落贸易", player_id)
+            to_custom_bonus = self.apply_tribe_custom_event_bonus(to_tribe, "trade_accept", "部落贸易", player_id)
             from_oath_bonus = self._oath_bonus(from_tribe, "tradeRenownBonus")
             to_oath_bonus = self._oath_bonus(to_tribe, "tradeRenownBonus")
             from_tribe["renown"] = max(0, int(from_tribe.get("renown", 0) or 0)) + TRIBE_TRADE_RENOWN_BONUS + from_trade_bonus
@@ -2015,20 +2082,28 @@ class ConnectionManager(GameConflictMixin, GameEmergencyChoiceMixin, GameMutualA
             apprentice_detail = ""
             if from_apprentice_trade_bonus or to_apprentice_trade_bonus:
                 apprentice_detail = f" 学徒账法让贸易信誉额外 +{from_apprentice_trade_bonus}/{to_apprentice_trade_bonus}。"
+            lost_tech_detail = ""
+            if from_lost_tech_trade_bonus or to_lost_tech_trade_bonus:
+                lost_tech_detail = f" 复原技艺让贸易信誉额外 +{from_lost_tech_trade_bonus}/{to_lost_tech_trade_bonus}。"
             pact_detail = f" 互市约定让双方贸易信誉额外 +{market_pact_bonus}。" if market_pact_bonus else ""
             law_detail = ""
             if from_law_bonus or to_law_bonus:
                 law_detail = f" 律令加成：{'; '.join(from_law_bonus + to_law_bonus)}。"
+            custom_detail = ""
+            if from_custom_bonus or to_custom_bonus:
+                custom_detail = f" 风俗加成：{'; '.join(from_custom_bonus + to_custom_bonus)}。"
             credit_detail = f" 贸易信用结算：{'、'.join(trade_credit_parts)}。" if trade_credit_parts else ""
             earned_credit = trade_credit_result.get("fromRecord")
             if earned_credit:
                 credit_detail += f" 连续守约 {trade_credit_result.get('streak', 0)} 次，形成“{earned_credit.get('label', '贸易信用')}”。"
             detail = f"{member.get('name', '管理者')} 接受了 {trade.get('fromTribeName', '部落')} 的贸易：收到 {trade['offer']['amount']} {trade['offer']['resource']}，交付 {request_amount} {request_resource}。{pact_detail}"
             detail += apprentice_detail
+            detail += lost_tech_detail
             detail += law_detail
+            detail += custom_detail
             detail += credit_detail
             self._add_tribe_history(to_tribe, "trade", "接受部落贸易", detail, player_id, {"kind": "trade", **self._public_trade(trade)})
-            self._add_tribe_history(from_tribe, "trade", "完成部落贸易", f"{to_tribe.get('name', '部落')} 接受贸易，部落收到 {request_amount} {request_resource}。{pact_detail}{apprentice_detail}{law_detail}{credit_detail}", player_id, {"kind": "trade", **self._public_trade(trade)})
+            self._add_tribe_history(from_tribe, "trade", "完成部落贸易", f"{to_tribe.get('name', '部落')} 接受贸易，部落收到 {request_amount} {request_resource}。{pact_detail}{apprentice_detail}{lost_tech_detail}{law_detail}{custom_detail}{credit_detail}", player_id, {"kind": "trade", **self._public_trade(trade)})
             await self._notify_tribe(from_tribe_id, f"{to_tribe.get('name', '部落')} 接受了贸易请求，交换已完成。")
             await self._publish_world_rumor(
                 "trade",
@@ -2048,6 +2123,8 @@ class ConnectionManager(GameConflictMixin, GameEmergencyChoiceMixin, GameMutualA
                     "tradeCreditStreak": trade_credit_result.get("streak", 0),
                     "fromApprenticeTradeBonus": from_apprentice_trade_bonus,
                     "toApprenticeTradeBonus": to_apprentice_trade_bonus,
+                    "fromLostTechTradeBonus": from_lost_tech_trade_bonus,
+                    "toLostTechTradeBonus": to_lost_tech_trade_bonus,
                     "fromLawBonus": from_law_bonus,
                     "toLawBonus": to_law_bonus,
                     "fromReputation": self._trade_reputation_state(from_tribe),
@@ -2617,6 +2694,9 @@ class ConnectionManager(GameConflictMixin, GameEmergencyChoiceMixin, GameMutualA
         law_event_bonus_parts = self.apply_tribe_law_event_bonus(tribe, event_key or "world_event", title)
         if law_event_bonus_parts:
             reward_parts.extend(law_event_bonus_parts)
+        custom_event_bonus_parts = self.apply_tribe_custom_event_bonus(tribe, event_key or "world_event", title, player_id)
+        if custom_event_bonus_parts:
+            reward_parts.extend(custom_event_bonus_parts)
         for resource_key, label in (("wood", "木材"), ("stone", "石块")):
             amount = int(reward.get(resource_key, 0) or 0)
             if amount == 0:
@@ -2985,6 +3065,7 @@ class ConnectionManager(GameConflictMixin, GameEmergencyChoiceMixin, GameMutualA
             "health": 100,
             "conflict_fatigue": 0,
             "personal_renown": 0,
+            "personal_relations": {},
             "level": 1,
             "connected_at": datetime.now().isoformat()
         }
@@ -3206,6 +3287,98 @@ class ConnectionManager(GameConflictMixin, GameEmergencyChoiceMixin, GameMutualA
             "minRenown": PLAYER_IDENTITY_MIN_RENOWN
         }
 
+    def _personal_relation_label(self, score: int) -> str:
+        if score >= PLAYER_RELATION_BEST_FRIEND_THRESHOLD:
+            return "挚友"
+        if score >= PLAYER_RELATION_FRIEND_THRESHOLD:
+            return "可靠同伴"
+        if score <= PLAYER_RELATION_NEMESIS_THRESHOLD:
+            return "宿敌"
+        if score <= PLAYER_RELATION_RIVAL_THRESHOLD:
+            return "劲敌"
+        if score > 0:
+            return "熟人"
+        if score < 0:
+            return "嫌隙"
+        return "陌生"
+
+    def _public_personal_relations(self, player: dict) -> list:
+        relations = []
+        for target_id, relation in (player.get("personal_relations", {}) or {}).items():
+            if not isinstance(relation, dict):
+                continue
+            score = int(relation.get("score", 0) or 0)
+            relations.append({
+                "targetId": target_id,
+                "targetName": relation.get("targetName") or self.players.get(target_id, {}).get("name", "玩家"),
+                "score": score,
+                "label": self._personal_relation_label(score),
+                "lastDelta": int(relation.get("lastDelta", 0) or 0),
+                "lastSource": relation.get("lastSource", ""),
+                "lastKind": relation.get("lastKind", ""),
+                "updatedAt": relation.get("updatedAt", ""),
+                "history": list(relation.get("history", []) or [])[-PLAYER_RELATION_HISTORY_LIMIT:]
+            })
+        return sorted(
+            relations,
+            key=lambda item: (abs(item.get("score", 0)), item.get("updatedAt", "")),
+            reverse=True
+        )[:PLAYER_RELATION_STATUS_LIMIT]
+
+    def _record_player_relation(self, actor_id: str, target_id: str, delta: int, source_label: str, kind: str) -> Optional[dict]:
+        if not actor_id or not target_id or actor_id == target_id or not delta:
+            return None
+        actor = self.players.get(actor_id)
+        target = self.players.get(target_id)
+        if not actor or not target:
+            return None
+        now_text = datetime.now().isoformat()
+
+        def update(owner: dict, other_id: str, other_name: str) -> dict:
+            relations = owner.setdefault("personal_relations", {})
+            relation = relations.setdefault(other_id, {})
+            before = int(relation.get("score", 0) or 0)
+            score = max(PLAYER_RELATION_SCORE_MIN, min(PLAYER_RELATION_SCORE_MAX, before + int(delta)))
+            label = self._personal_relation_label(score)
+            event = {
+                "targetId": other_id,
+                "targetName": other_name,
+                "delta": int(delta),
+                "score": score,
+                "label": label,
+                "sourceLabel": source_label,
+                "kind": kind,
+                "createdAt": now_text
+            }
+            history = list(relation.get("history", []) or [])
+            history.append(event)
+            relation.update({
+                "targetName": other_name,
+                "score": score,
+                "label": label,
+                "lastDelta": int(delta),
+                "lastSource": source_label,
+                "lastKind": kind,
+                "updatedAt": now_text,
+                "history": history[-PLAYER_RELATION_HISTORY_LIMIT:]
+            })
+            return event
+
+        actor_event = update(actor, target_id, target.get("name", "玩家"))
+        update(target, actor_id, actor.get("name", "玩家"))
+        return {
+            "actorId": actor_id,
+            "actorName": actor.get("name", "玩家"),
+            "targetId": target_id,
+            "targetName": target.get("name", "玩家"),
+            "delta": int(delta),
+            "score": actor_event.get("score", 0),
+            "label": actor_event.get("label", "陌生"),
+            "sourceLabel": source_label,
+            "kind": kind,
+            "createdAt": now_text
+        }
+
     def _public_personal_conflict_status(self, player: dict) -> dict:
         fatigue = self._active_player_fatigue(player)
         guard = self._active_personal_guard(player)
@@ -3231,6 +3404,7 @@ class ConnectionManager(GameConflictMixin, GameEmergencyChoiceMixin, GameMutualA
             "skirmishContributionBonus": int(renown_title.get("skirmishContributionBonus", 0) or 0),
             "guardSeconds": PLAYER_CONFLICT_GUARD_SECONDS,
             "inspireSeconds": PLAYER_CONFLICT_INSPIRE_SECONDS,
+            "personalRelations": self._public_personal_relations(player),
             "identity": self._personal_identity_state(player, personal_renown)
         }
 
@@ -3460,6 +3634,13 @@ class ConnectionManager(GameConflictMixin, GameEmergencyChoiceMixin, GameMutualA
                 "contributionBonus": PLAYER_CONFLICT_INSPIRE_CONTRIBUTION,
                 "activeUntil": datetime.fromtimestamp(datetime.now().timestamp() + PLAYER_CONFLICT_INSPIRE_SECONDS).isoformat()
             }
+            relation_update = self._record_player_relation(
+                player_id,
+                target_id,
+                PLAYER_RELATION_INSPIRE_DELTA,
+                action.get("label", "鼓舞"),
+                "inspire"
+            )
             result = {
                 "type": "personal_conflict_result",
                 "actionKey": action_key,
@@ -3474,7 +3655,8 @@ class ConnectionManager(GameConflictMixin, GameEmergencyChoiceMixin, GameMutualA
                 "renownTitle": title,
                 "status": self._public_personal_conflict_status(actor),
                 "targetStatus": self._public_personal_conflict_status(target),
-                "renownGain": 0
+                "renownGain": 0,
+                "relationship": relation_update
             }
             record = {
                 "actionLabel": result["actionLabel"],
@@ -3484,6 +3666,10 @@ class ConnectionManager(GameConflictMixin, GameEmergencyChoiceMixin, GameMutualA
                 "renownTitle": title.get("title"),
                 "inspirationContribution": PLAYER_CONFLICT_INSPIRE_CONTRIBUTION,
                 "inspirationUntil": target["personal_inspiration"]["activeUntil"],
+                "relationshipLabel": relation_update.get("label") if relation_update else "",
+                "relationshipDelta": relation_update.get("delta") if relation_update else 0,
+                "relationshipScore": relation_update.get("score") if relation_update else 0,
+                "relationshipSource": relation_update.get("sourceLabel") if relation_update else "",
                 "createdAt": datetime.now().isoformat()
             }
             tribe = self.tribes.get(actor_tribe_id)
@@ -3574,6 +3760,14 @@ class ConnectionManager(GameConflictMixin, GameEmergencyChoiceMixin, GameMutualA
                 progress["lastAction"] = f"incoming_personal:{action_key}"
                 progress["lastActionAt"] = cooldowns[target_id]
 
+        relation_update = self._record_player_relation(
+            player_id,
+            target_id,
+            int(action.get("personalRelationDelta", 0) or 0),
+            action.get("label", "个人互动"),
+            action_key
+        )
+
         knockback = float(action.get("knockback", 0) or 0)
         if knockback and actor_won:
             length = math.sqrt(dx * dx + dz * dz) or 0.001
@@ -3612,7 +3806,8 @@ class ConnectionManager(GameConflictMixin, GameEmergencyChoiceMixin, GameMutualA
             "trainingBonus": training_bonus,
             "targetRecoverySeconds": target_recovery_seconds,
             "actorRecoverySeconds": actor_recovery_seconds,
-            "renownGain": renown_gain if actor_won else 0
+            "renownGain": renown_gain if actor_won else 0,
+            "relationship": relation_update
         }
         record = {
             "actionLabel": result["actionLabel"],
@@ -3630,6 +3825,10 @@ class ConnectionManager(GameConflictMixin, GameEmergencyChoiceMixin, GameMutualA
             "guarded": guard_active,
             "guardianName": result.get("guardianName", ""),
             "targetRecoverySeconds": target_recovery_seconds,
+            "relationshipLabel": relation_update.get("label") if relation_update else "",
+            "relationshipDelta": relation_update.get("delta") if relation_update else 0,
+            "relationshipScore": relation_update.get("score") if relation_update else 0,
+            "relationshipSource": relation_update.get("sourceLabel") if relation_update else "",
             "createdAt": cooldowns[target_id]
         }
         for tribe_id in {actor_tribe_id, target_tribe_id}:
@@ -3994,6 +4193,13 @@ async def game_websocket(
                         message.get("actionKey", "")
                     )
 
+                elif message_type == "tribe_tune_boundary_temperature":
+                    await manager.tune_boundary_temperature(
+                        player_id,
+                        message.get("otherTribeId", ""),
+                        message.get("actionKey", "")
+                    )
+
                 elif message_type == "tribe_complete_boundary_followup":
                     await manager.complete_boundary_followup_task(
                         player_id,
@@ -4045,6 +4251,26 @@ async def game_websocket(
                         message.get("emoteKey", "")
                     )
 
+                elif message_type == "tribe_create_echo_item":
+                    await manager.create_echo_item(
+                        player_id,
+                        message.get("itemKey", "")
+                    )
+
+                elif message_type == "tribe_add_echo_item_memory":
+                    await manager.add_echo_item_memory(
+                        player_id,
+                        message.get("itemId", ""),
+                        message.get("experienceKey", "")
+                    )
+
+                elif message_type == "tribe_transfer_echo_item":
+                    await manager.transfer_echo_item(
+                        player_id,
+                        message.get("itemId", ""),
+                        message.get("targetId", "")
+                    )
+
                 elif message_type == "tribe_start_sacred_fire":
                     await manager.start_sacred_fire_relay(
                         player_id,
@@ -4082,6 +4308,18 @@ async def game_websocket(
                     await manager.start_night_outing(
                         player_id,
                         message.get("optionKey", "")
+                    )
+
+                elif message_type == "tribe_start_dream_omen":
+                    await manager.start_dream_omen(
+                        player_id,
+                        message.get("sourceId", "")
+                    )
+
+                elif message_type == "tribe_resolve_dream_omen":
+                    await manager.resolve_dream_omen(
+                        player_id,
+                        message.get("actionKey", "")
                     )
 
                 elif message_type == "tribe_punish_member":
@@ -4175,6 +4413,13 @@ async def game_websocket(
                         message.get("focusKey", "")
                     )
 
+                elif message_type == "tribe_start_guest_stay":
+                    await manager.start_guest_stay(
+                        player_id,
+                        message.get("targetTribeId", ""),
+                        message.get("actionKey", "")
+                    )
+
                 elif message_type == "tribe_resolve_nomad_visitor":
                     await manager.resolve_nomad_visitor(
                         player_id,
@@ -4249,6 +4494,13 @@ async def game_websocket(
                     await manager.revisit_map_memory(
                         player_id,
                         message.get("memoryId", "")
+                    )
+
+                elif message_type == "tribe_revisit_old_camp_echo":
+                    await manager.revisit_old_camp_echo(
+                        player_id,
+                        message.get("echoId", ""),
+                        message.get("actionKey", "")
                     )
 
                 elif message_type == "tribe_create_trail_marker":
@@ -4422,6 +4674,12 @@ async def game_websocket(
                         message.get("remedyId", "")
                     )
 
+                elif message_type == "tribe_commit_custom_practice":
+                    await manager.commit_tribe_custom_practice(
+                        player_id,
+                        message.get("customKey", "")
+                    )
+
                 elif message_type == "tribe_record_shared_puzzle_fragment":
                     await manager.record_shared_puzzle_fragment(
                         player_id,
@@ -4430,6 +4688,20 @@ async def game_websocket(
 
                 elif message_type == "tribe_complete_shared_puzzle":
                     await manager.complete_shared_puzzle(player_id)
+
+                elif message_type == "tribe_resolve_rumor_truth":
+                    await manager.resolve_rumor_truth(
+                        player_id,
+                        message.get("rumorId", ""),
+                        message.get("actionKey", "")
+                    )
+
+                elif message_type == "tribe_solve_world_riddle":
+                    await manager.solve_world_riddle(
+                        player_id,
+                        message.get("riddleId", ""),
+                        message.get("predictionKey", "")
+                    )
 
                 elif message_type == "tribe_compose_epic":
                     await manager.compose_oral_epic(player_id)

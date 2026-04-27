@@ -174,6 +174,7 @@ class GameMutualAidAlertMixin:
                     reward_parts.append(f"战争压力-{before - relation['warPressure']}")
             relation["lastAction"] = "mutual_aid_alert"
             relation["lastActionAt"] = datetime.now().isoformat()
+            reward_parts.extend(self._apply_boundary_temperature_channel_bonus(tribe, other_tribe_id, "mutual_aid"))
         return reward_parts
 
     def _sync_shared_mutual_aid_progress(self, shared_id: str, participant_ids: list, participant_names: list, progress: int):

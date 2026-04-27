@@ -113,9 +113,23 @@ class GameSharedPuzzleMixin:
             "rewardParts": reward_parts,
             "createdAt": datetime.now().isoformat()
         }
+        echo_item = next((
+            item for item in reversed(tribe.get("echo_items", []) or [])
+            if isinstance(item, dict) and item.get("memories")
+        ), None)
+        if echo_item:
+            last_memory = (echo_item.get("memories", []) or [])[-1]
+            fragment["echoItemHint"] = {
+                "itemId": echo_item.get("id"),
+                "itemLabel": echo_item.get("label", "回声物品"),
+                "memoryLabel": last_memory.get("experienceLabel", "旧经历") if isinstance(last_memory, dict) else "旧经历"
+            }
         fragments.append(fragment)
         tribe["shared_puzzle_fragments"] = fragments[-TRIBE_SHARED_PUZZLE_TARGET:]
         detail = f"{fragment['memberName']} 记录“{fragment['sourceLabel']}”：{'、'.join(reward_parts) or '谜图多了一角'}。"
+        if fragment.get("echoItemHint"):
+            hint = fragment["echoItemHint"]
+            detail += f" {hint.get('itemLabel', '回声物品')}的{hint.get('memoryLabel', '旧经历')}也成了旁注。"
         self._add_tribe_history(tribe, "world_event", "记录共享谜图", detail, player_id, {"kind": "shared_puzzle_fragment", "fragment": fragment})
         await self._notify_tribe(tribe_id, detail)
         await self.broadcast_tribe_state(tribe_id)

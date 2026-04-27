@@ -25,6 +25,82 @@ class GameBoundaryTemperatureMixin:
             return {"key": "open", "label": "松动", "summary": "这条边界开始能谈，但还没有完全热起来。"}
         return {"key": "quiet", "label": "平静", "summary": "这条边界暂时没有强烈口风。"}
 
+    def _boundary_temperature_suggestion(self, temperature_key: str) -> dict:
+        suggestions = {
+            "warm": {"actionKey": "warm_words", "label": "趁热互市", "effectHint": "外交、信使和互助更容易沉淀贸易信誉。"},
+            "open": {"actionKey": "warm_words", "label": "续上口风", "effectHint": "公开往来会额外提高一点信任。"},
+            "suspicious": {"actionKey": "clear_suspicion", "label": "先澄清猜疑", "effectHint": "互助或信使会优先削减战争压力。"},
+            "cold": {"actionKey": "clear_suspicion", "label": "慢慢解冻", "effectHint": "外交结果会偏向关系修复。"},
+            "awe": {"actionKey": "awe_watch", "label": "以敬畏守望", "effectHint": "守边类公开行动会额外稳定压力。"},
+            "cool": {"actionKey": "cool_mark", "label": "保持冷处理", "effectHint": "公开传闻会更克制，减少误判。"}
+        }
+        return suggestions.get(temperature_key, {"actionKey": "warm_words", "label": "观察口风", "effectHint": "暂无额外倾向。"})
+
+    def _temperature_relation(self, tribe: dict, other_tribe_id: str) -> dict:
+        return tribe.setdefault("boundary_relations", {}).setdefault(other_tribe_id, {})
+
+    def _apply_boundary_temperature_channel_bonus(self, tribe: dict, other_tribe_id: str, channel: str) -> list:
+        if not tribe or not other_tribe_id:
+            return []
+        relation = self._temperature_relation(tribe, other_tribe_id)
+        temp = self._boundary_temperature_label(relation)
+        key = temp.get("key")
+        parts = []
+        if channel in ("diplomacy", "messenger", "mutual_aid"):
+            if key in ("warm", "open"):
+                if channel == "diplomacy":
+                    tribe["trade_reputation"] = int(tribe.get("trade_reputation", 0) or 0) + 1
+                    parts.append(f"{temp.get('label')}口风贸易信誉+1")
+                else:
+                    relation["tradeTrust"] = max(0, min(10, int(relation.get("tradeTrust", 0) or 0) + 1))
+                    parts.append(f"{temp.get('label')}口风信任+1")
+            elif key in ("suspicious", "cold", "cool"):
+                before = int(relation.get("warPressure", 0) or 0)
+                relation["warPressure"] = max(0, before - 1)
+                relation["canDeclareWar"] = int(relation.get("warPressure", 0) or 0) >= TRIBE_SKIRMISH_WAR_PRESSURE_THRESHOLD
+                if before != int(relation.get("warPressure", 0) or 0):
+                    parts.append(f"{temp.get('label')}口风战争压力-1")
+                elif channel != "diplomacy":
+                    relation["score"] = max(-9, min(9, int(relation.get("score", 0) or 0) + 1))
+                    parts.append(f"{temp.get('label')}口风关系+1")
+            elif key == "awe":
+                tribe["renown"] = int(tribe.get("renown", 0) or 0) + 1
+                parts.append("敬畏口风声望+1")
+        if parts:
+            relation["lastTemperatureBonus"] = {
+                "channel": channel,
+                "temperatureKey": key,
+                "temperatureLabel": temp.get("label"),
+                "rewardParts": parts,
+                "createdAt": datetime.now().isoformat()
+            }
+        return parts
+
+    def _boundary_temperature_rumor_text(self, text: str, related: dict | None = None) -> tuple[str, dict]:
+        related = dict(related or {})
+        tribe_id = related.get("tribeId")
+        other_id = related.get("otherTribeId") or related.get("targetTribeId") or related.get("sourceTribeId")
+        tribe = self.tribes.get(tribe_id) if tribe_id and hasattr(self, "tribes") else None
+        if not tribe or not other_id:
+            return text, related
+        relation = (tribe.get("boundary_relations", {}) or {}).get(other_id)
+        if not isinstance(relation, dict):
+            return text, related
+        temp = self._boundary_temperature_label(relation)
+        key = temp.get("key")
+        phrase = {
+            "warm": "热络口风把这条消息讲得更像互市佳讯。",
+            "open": "松动口风让这条消息更容易被双方接住。",
+            "suspicious": "猜疑口风让这条消息带着试探意味。",
+            "cold": "冷淡口风让这条消息显得克制谨慎。",
+            "cool": "冷处理口风压低了这条消息里的火气。",
+            "awe": "敬畏口风让这条消息多了一层守边分量。"
+        }.get(key, "")
+        if not phrase:
+            return text, related
+        related["boundaryTemperature"] = {"key": key, "label": temp.get("label")}
+        return f"{text} {phrase}", related
+
     def _public_boundary_temperatures(self, tribe: dict) -> list:
         if not tribe:
             return []
@@ -40,6 +116,7 @@ class GameBoundaryTemperatureMixin:
                 "temperatureKey": temp["key"],
                 "temperatureLabel": temp["label"],
                 "summary": temp["summary"],
+                "suggestedAction": self._boundary_temperature_suggestion(temp["key"]),
                 "score": int(relation.get("score", 0) or 0),
                 "tradeTrust": int(relation.get("tradeTrust", 0) or 0),
                 "warPressure": int(relation.get("warPressure", 0) or 0),
