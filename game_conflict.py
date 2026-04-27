@@ -2178,19 +2178,26 @@ class GameConflictMixin:
             f"war_after:{aftermath_id}",
             member.get("name", "成员")
         )
-        self._open_myth_claim(
-            tribe,
+        other_tribe = self.tribes.get(other_tribe_id)
+        myth_source_id = f"war_after:{task.get('warId') or task.get('diplomacyId') or aftermath_id}"
+        self._open_shared_myth_claim(
+            [item for item in (tribe, other_tribe) if item],
             "war_aftermath",
             task.get("title", "战后余波"),
-            f"与{task.get('otherTribeName', '其他部落')}的战后余波被整理后，族人可以争论这段旧事该成为守边誓言、互市佳兆还是火种护佑。",
+            f"与{task.get('otherTribeName', '其他部落')}的战后余波被整理后，双方族人都可以争论这段旧事该成为守边誓言、互市佳兆还是火种护佑。",
             float(self.players.get(player_id, {}).get("x", 0) or 0),
             float(self.players.get(player_id, {}).get("z", 0) or 0),
-            f"war_after:{aftermath_id}",
+            myth_source_id,
             member.get("name", "成员")
         )
         self._add_tribe_history(tribe, "governance", "战后余波", detail, player_id, {"kind": "war_aftermath", "aftermathId": aftermath_id, "otherTribeId": other_tribe_id})
         await self._notify_tribe(tribe_id, detail)
         await self.broadcast_tribe_state(tribe_id)
+        if other_tribe and other_tribe_id != tribe_id:
+            other_detail = f"{tribe.get('name', '邻近部落')} 整理了与本部相关的{task.get('title', '战后余波')}，这段旧事开始进入同源神话争夺。"
+            self._add_tribe_history(other_tribe, "governance", "同源神话争夺", other_detail, player_id, {"kind": "shared_myth_claim", "sourceId": myth_source_id, "otherTribeId": tribe_id})
+            await self._notify_tribe(other_tribe_id, other_detail)
+            await self.broadcast_tribe_state(other_tribe_id)
         await self._broadcast_current_map()
 
     async def complete_war_ally_task(self, player_id: str, task_id: str, action: str = ""):

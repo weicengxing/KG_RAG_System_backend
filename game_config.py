@@ -698,6 +698,42 @@ TRIBE_SEASON_TABOO_OPTIONS = {
         "remedy": {"title": "补跳丰收舞", "summary": "把被中断的舞步补完，让这次抢收重新回到共同庆典里。", "foodCost": 1, "renownReward": 3, "tradeReward": 1}
     }
 }
+TRIBE_STANDING_RITUAL_ACTIVE_MINUTES = 25
+TRIBE_STANDING_RITUAL_MIN_PARTICIPANTS = 2
+TRIBE_STANDING_RITUAL_TARGET_PARTICIPANTS = 3
+TRIBE_STANDING_RITUAL_HISTORY_LIMIT = 5
+TRIBE_STANDING_RITUAL_OPTIONS = {
+    "totem": {
+        "label": "图腾环站",
+        "summary": "成员围住图腾分站火位、影位和守位，把近期神话变成可见仪式。",
+        "reward": {"renown": 4, "wood": 2},
+        "fullReward": {"renown": 5}
+    },
+    "cave": {
+        "label": "洞口列队",
+        "summary": "成员在洞口前分列，决定是探路、守绳还是携火，为下一次探索积势。",
+        "reward": {"renown": 3, "discoveryProgress": 1},
+        "fullReward": {"discoveryProgress": 1, "renown": 3}
+    },
+    "market": {
+        "label": "边市迎客",
+        "summary": "成员带着食物、木牌或石印排成迎客线，让边市节更像公开外交。",
+        "reward": {"tradeReputation": 2, "food": 2},
+        "fullReward": {"tradeReputation": 2, "renown": 2}
+    },
+    "council": {
+        "label": "议场席位",
+        "summary": "成员按首领、长老、见证者和携物者站位，让一次议会留下共同承认的秩序。",
+        "reward": {"renown": 3, "tradeReputation": 1},
+        "fullReward": {"renown": 4}
+    }
+}
+TRIBE_STANDING_RITUAL_STANCES = {
+    "witness": {"label": "见证者", "summary": "不携带资源，只用在场人数推动传闻。", "renown": 1},
+    "fire": {"label": "持火者", "summary": "消耗少量木材，强化声望和守望意味。", "woodCost": 2, "renown": 2},
+    "grain": {"label": "携粮者", "summary": "消耗少量食物，强化宴饮、边市或救援意味。", "foodCost": 2, "tradeReputation": 1},
+    "stone": {"label": "立石者", "summary": "消耗少量石材，强化洞口、议场和历史记号。", "stoneCost": 2, "discoveryProgress": 1}
+}
 SEASON_OBJECTIVES = {
     "region_forest": {"title": "林地采种", "summary": "采集迁徙季节留下的坚果与嫩枝。", "food": 8, "wood": 10, "renown": 4},
     "region_mountain": {"title": "山地试炼", "summary": "沿山脊寻找新露出的石脉。", "stone": 16, "renown": 5},

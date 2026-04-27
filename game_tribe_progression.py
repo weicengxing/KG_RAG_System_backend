@@ -479,6 +479,9 @@ class GameTribeProgressionMixin:
             return []
         market_until = datetime.fromtimestamp(now.timestamp() + TRIBE_TRADE_ROUTE_MARKET_MINUTES * 60).isoformat()
         activated = []
+        myth_tribes = []
+        myth_x = float(site.get("x", 0) or 0)
+        myth_z = float(site.get("z", 0) or 0)
         for target_tribe in self.tribes.values():
             route_site = next((
                 item for item in (target_tribe.get("trade_route_sites", []) or [])
@@ -515,17 +518,20 @@ class GameTribeProgressionMixin:
                 f"market:{shared_id}:{target_tribe.get('id')}",
                 "边市"
             )
-            self._open_myth_claim(
-                target_tribe,
-                "border_market",
-                "边市开张",
-                f"与{route_site.get('partnerTribeName', '邻近部落')}的边市开张后，族人可以争论这是互市佳兆、旧路显现还是守边誓言。",
-                float(route_site.get("x", 0) or 0),
-                float(route_site.get("z", 0) or 0),
-                f"market:{shared_id}:{target_tribe.get('id')}",
-                "边市"
-            )
+            myth_tribes.append(target_tribe)
+            myth_x = float(route_site.get("x", myth_x) or myth_x)
+            myth_z = float(route_site.get("z", myth_z) or myth_z)
             activated.append(target_tribe.get("id"))
+        self._open_shared_myth_claim(
+            myth_tribes,
+            "border_market",
+            "边市开张",
+            "同一处短时边市在边界两侧开张，相关部落都可以争论这是互市佳兆、旧路显现还是守边誓言。",
+            myth_x,
+            myth_z,
+            f"market:{shared_id}",
+            "边市"
+        )
         return activated
 
     def _apply_trade_route_market_reward(self, tribe: dict, site: dict, reward_parts: list):

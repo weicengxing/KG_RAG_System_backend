@@ -22,36 +22,77 @@ class GameMythMixin:
             tribe["myth_claims"] = active[-TRIBE_MYTH_CLAIM_LIMIT:]
         return active[-TRIBE_MYTH_CLAIM_LIMIT:]
 
-    def _public_myth_interpretations(self, claim: dict) -> list:
+    def _myth_claim_influence(self, claim: dict, interpretation_key: str) -> int:
+        version = (claim.get("versions", {}) or {}).get(interpretation_key, {}) or {}
+        supporters = version.get("supporters", []) or []
+        return int(version.get("influence", 0) or len(supporters))
+
+    def _shared_myth_claim_records(self, claim: dict) -> list:
+        if not claim.get("shared") or not claim.get("dedupeId"):
+            return []
+        records = []
+        for tribe in self.tribes.values():
+            for item in self._active_myth_claim_records(tribe):
+                if item.get("dedupeId") == claim.get("dedupeId"):
+                    records.append((tribe, item))
+        return records
+
+    def _myth_claim_influence_target(self, claim: dict, shared_records: list | None = None) -> int:
+        target = int(claim.get("influenceTarget", TRIBE_MYTH_INFLUENCE_TARGET) or TRIBE_MYTH_INFLUENCE_TARGET)
+        if claim.get("shared"):
+            count = len(shared_records or self._shared_myth_claim_records(claim))
+            target += max(0, count - 1)
+        return target
+
+    def _public_myth_interpretations(self, claim: dict, shared_records: list | None = None) -> list:
         versions = claim.get("versions", {}) or {}
         result = []
         for key, config in TRIBE_MYTH_INTERPRETATIONS.items():
             version = versions.get(key, {}) or {}
             supporters = version.get("supporters", []) or []
+            own_influence = int(version.get("influence", 0) or len(supporters))
+            shared_influence = own_influence
+            if claim.get("shared"):
+                records = shared_records or self._shared_myth_claim_records(claim)
+                shared_influence = sum(self._myth_claim_influence(item, key) for _, item in records)
             result.append({
                 "key": key,
                 "label": config.get("label", key),
                 "summary": config.get("summary", ""),
                 "rewardLabel": self._reward_summary_text(config.get("reward", {})),
-                "influence": int(version.get("influence", 0) or len(supporters)),
+                "influence": shared_influence,
+                "ownInfluence": own_influence,
+                "sharedInfluence": shared_influence,
+                "rivalInfluence": max(0, shared_influence - own_influence),
                 "supporterCount": len(supporters),
                 "supporterNames": [item.get("name", "成员") for item in supporters[-3:] if isinstance(item, dict)]
             })
         return result
 
     def _public_myth_claim(self, claim: dict) -> dict:
-        interpretations = self._public_myth_interpretations(claim)
+        shared_records = self._shared_myth_claim_records(claim)
+        interpretations = self._public_myth_interpretations(claim, shared_records)
         leader = max(interpretations, key=lambda item: item.get("influence", 0), default=None)
+        rival_names = [
+            item.get("name", "其他部落")
+            for item in (claim.get("rivalTribes", []) or [])
+            if isinstance(item, dict)
+        ]
+        influence_target = self._myth_claim_influence_target(claim, shared_records)
         return {
             "id": claim.get("id"),
             "title": claim.get("title", "神话解释权"),
             "summary": claim.get("summary", ""),
             "sourceKind": claim.get("sourceKind", ""),
             "sourceLabel": claim.get("sourceLabel", ""),
-            "influenceTarget": int(claim.get("influenceTarget", TRIBE_MYTH_INFLUENCE_TARGET) or TRIBE_MYTH_INFLUENCE_TARGET),
+            "influenceTarget": influence_target,
             "leaderLabel": leader.get("label") if leader and leader.get("influence", 0) > 0 else "",
             "leaderInfluence": leader.get("influence", 0) if leader else 0,
             "interpretations": interpretations,
+            "shared": bool(claim.get("shared")),
+            "sharedSourceId": claim.get("sharedSourceId", ""),
+            "rivalTribeNames": rival_names,
+            "sharedSummary": f"同源争夺：{ '、'.join(rival_names) }也在解释这件事。" if rival_names else "",
             "createdAt": claim.get("createdAt"),
             "activeUntil": claim.get("activeUntil")
         }
@@ -62,13 +103,26 @@ class GameMythMixin:
     def _active_dominant_myths(self, tribe: dict) -> list:
         return list(tribe.get("dominant_myths", []) or [])[-TRIBE_DOMINANT_MYTH_LIMIT:]
 
-    def _open_myth_claim(self, tribe: dict, source_kind: str, source_label: str, summary: str, x: float = 0, z: float = 0, source_id: str = "", actor_name: str = "") -> dict | None:
+    def _open_myth_claim(self, tribe: dict, source_kind: str, source_label: str, summary: str, x: float = 0, z: float = 0, source_id: str = "", actor_name: str = "", shared_tribes: list | None = None) -> dict | None:
         if not tribe:
             return None
         active = self._active_myth_claim_records(tribe)
         dedupe_id = f"{source_kind}:{source_id}" if source_id else ""
-        if dedupe_id and any(item.get("dedupeId") == dedupe_id for item in active):
-            return None
+        participant_tribes = [item for item in (shared_tribes or []) if isinstance(item, dict) and item.get("id")]
+        shared = len({item.get("id") for item in participant_tribes}) > 1
+        rival_tribes = [
+            {"id": item.get("id"), "name": item.get("name", "其他部落")}
+            for item in participant_tribes
+            if item.get("id") != tribe.get("id")
+        ]
+        if dedupe_id:
+            existing = next((item for item in active if item.get("dedupeId") == dedupe_id), None)
+            if existing:
+                if shared:
+                    existing["shared"] = True
+                    existing["sharedSourceId"] = source_id or dedupe_id
+                    existing["rivalTribes"] = rival_tribes
+                return self._public_myth_claim(existing)
         now = datetime.now()
         claim = {
             "id": f"myth_{tribe.get('id')}_{int(now.timestamp() * 1000)}",
@@ -78,6 +132,10 @@ class GameMythMixin:
             "sourceKind": source_kind,
             "sourceLabel": source_label or "大事",
             "dedupeId": dedupe_id,
+            "ownerTribeId": tribe.get("id"),
+            "shared": shared,
+            "sharedSourceId": source_id or dedupe_id,
+            "rivalTribes": rival_tribes,
             "x": float(x or 0),
             "z": float(z or 0),
             "actorName": actor_name,
@@ -88,6 +146,26 @@ class GameMythMixin:
         }
         tribe["myth_claims"] = [*active, claim][-TRIBE_MYTH_CLAIM_LIMIT:]
         return self._public_myth_claim(claim)
+
+    def _open_shared_myth_claim(self, tribes: list, source_kind: str, source_label: str, summary: str, x: float = 0, z: float = 0, source_id: str = "", actor_name: str = "") -> list:
+        participants = []
+        seen = set()
+        for tribe in tribes or []:
+            if not isinstance(tribe, dict) or not tribe.get("id") or tribe.get("id") in seen:
+                continue
+            participants.append(tribe)
+            seen.add(tribe.get("id"))
+        if not participants:
+            return []
+        if len(participants) == 1:
+            claim = self._open_myth_claim(participants[0], source_kind, source_label, summary, x, z, source_id, actor_name)
+            return [claim] if claim else []
+        opened = []
+        for tribe in participants:
+            claim = self._open_myth_claim(tribe, source_kind, source_label, summary, x, z, source_id, actor_name, participants)
+            if claim:
+                opened.append(claim)
+        return opened
 
     def _apply_myth_reward(self, tribe: dict, reward: dict) -> list:
         reward_parts = []
@@ -143,11 +221,21 @@ class GameMythMixin:
         })
         version["influence"] = int(version.get("influence", 0) or 0) + 1
         label = config.get("label", interpretation_key)
-        target = int(claim.get("influenceTarget", TRIBE_MYTH_INFLUENCE_TARGET) or TRIBE_MYTH_INFLUENCE_TARGET)
-        if int(version.get("influence", 0) or 0) >= target:
+        shared_records = self._shared_myth_claim_records(claim)
+        target = self._myth_claim_influence_target(claim, shared_records)
+        influence = int(version.get("influence", 0) or 0)
+        if claim.get("shared"):
+            influence = sum(self._myth_claim_influence(item, interpretation_key) for _, item in shared_records)
+        if influence >= target:
             await self._complete_myth_claim(tribe_id, tribe, claim, interpretation_key, config, player_id)
             return
-        detail = f"{member.get('name', '成员')} 支持把{claim.get('sourceLabel', '这件事')}解释为“{label}”，影响 {version['influence']} / {target}。"
+        if claim.get("shared"):
+            rival_names = "、".join(item.get("name", "其他部落") for item in (claim.get("rivalTribes", []) or []) if isinstance(item, dict))
+            detail = f"{member.get('name', '成员')} 支持把{claim.get('sourceLabel', '这件事')}解释为“{label}”，同源影响 {influence} / {target}。"
+            if rival_names:
+                detail += f" {rival_names}也在争夺这个源事件的说法。"
+        else:
+            detail = f"{member.get('name', '成员')} 支持把{claim.get('sourceLabel', '这件事')}解释为“{label}”，影响 {version['influence']} / {target}。"
         self._add_tribe_history(
             tribe,
             "world_event",
@@ -159,7 +247,100 @@ class GameMythMixin:
         await self._notify_tribe(tribe_id, detail)
         await self.broadcast_tribe_state(tribe_id)
 
+    def _apply_shared_myth_relation_effect(self, tribe_id: str, other_id: str, interpretation_key: str, now_text: str) -> list:
+        tribe = self.tribes.get(tribe_id)
+        other = self.tribes.get(other_id)
+        if not tribe or not other:
+            return []
+        relation = tribe.setdefault("boundary_relations", {}).setdefault(other_id, {})
+        parts = []
+        if interpretation_key == "trade":
+            relation["score"] = min(9, int(relation.get("score", 0) or 0) + 1)
+            relation["tradeTrust"] = min(10, int(relation.get("tradeTrust", 0) or 0) + 2)
+            parts.append("关系+1")
+            parts.append("贸易信任+2")
+        elif interpretation_key == "border":
+            relation["score"] = min(9, int(relation.get("score", 0) or 0) + 1)
+            relation["warPressure"] = max(0, int(relation.get("warPressure", 0) or 0) - 1)
+            relation["canDeclareWar"] = False
+            parts.append("关系+1")
+            parts.append("战争压力-1")
+        elif interpretation_key == "trail":
+            relation["tradeTrust"] = min(10, int(relation.get("tradeTrust", 0) or 0) + 1)
+            parts.append("贸易信任+1")
+        else:
+            relation["score"] = min(9, int(relation.get("score", 0) or 0) + 1)
+            parts.append("关系+1")
+        relation["lastAction"] = f"shared_myth_{interpretation_key}"
+        relation["lastActionAt"] = now_text
+        return parts
+
+    async def _complete_shared_myth_claim(self, tribe_id: str, tribe: dict, claim: dict, interpretation_key: str, config: dict, player_id: str):
+        records = self._shared_myth_claim_records(claim)
+        if not records:
+            return False
+        member = tribe.get("members", {}).get(player_id, {})
+        now_text = datetime.now().isoformat()
+        reward_parts = self._apply_myth_reward(tribe, config.get("reward", {}))
+        involved_ids = []
+        for target_tribe, _ in records:
+            if target_tribe.get("id") and target_tribe.get("id") not in involved_ids:
+                involved_ids.append(target_tribe.get("id"))
+        relation_parts = []
+        for other_id in involved_ids:
+            if other_id == tribe_id:
+                continue
+            relation_parts.extend(self._apply_shared_myth_relation_effect(tribe_id, other_id, interpretation_key, now_text))
+            relation_parts.extend(self._apply_shared_myth_relation_effect(other_id, tribe_id, interpretation_key, now_text))
+        relation_parts = list(dict.fromkeys(relation_parts))
+        detail = f"{tribe.get('name', '部落')} 将同源事件“{claim.get('sourceLabel', '大事')}”讲成“{config.get('label', interpretation_key)}”，这个版本压过了其他部落的说法。"
+        if reward_parts:
+            detail += f" 收获：{'、'.join(reward_parts)}。"
+        if relation_parts:
+            detail += f" 边界回响：{'、'.join(relation_parts)}。"
+        for target_tribe, target_claim in records:
+            is_winner = target_tribe.get("id") == tribe_id
+            myth = {
+                "id": f"dominant_{target_claim.get('id')}",
+                "title": f"{config.get('label', '主流神话')}成为同源主流",
+                "sourceLabel": target_claim.get("sourceLabel", "大事"),
+                "interpretationKey": interpretation_key,
+                "interpretationLabel": config.get("label", interpretation_key),
+                "summary": config.get("summary", ""),
+                "rewardParts": reward_parts if is_winner else relation_parts,
+                "completedBy": member.get("name", "成员"),
+                "completedAt": now_text,
+                "shared": True,
+                "winnerTribeId": tribe_id,
+                "winnerTribeName": tribe.get("name", "部落")
+            }
+            target_tribe["dominant_myths"] = [*(target_tribe.get("dominant_myths", []) or []), myth][-TRIBE_DOMINANT_MYTH_LIMIT:]
+            target_tribe["myth_claims"] = [
+                item for item in self._active_myth_claim_records(target_tribe)
+                if item.get("dedupeId") != claim.get("dedupeId")
+            ]
+            self._add_tribe_history(
+                target_tribe,
+                "world_event",
+                "同源神话定型",
+                detail,
+                player_id,
+                {"kind": "shared_dominant_myth", **myth}
+            )
+            await self._notify_tribe(target_tribe.get("id"), detail)
+        await self._publish_world_rumor(
+            "myth",
+            "同源神话定型",
+            detail,
+            {"tribeId": tribe_id, "claimId": claim.get("id"), "interpretationKey": interpretation_key, "shared": True}
+        )
+        for target_id in involved_ids:
+            await self.broadcast_tribe_state(target_id)
+        return True
+
     async def _complete_myth_claim(self, tribe_id: str, tribe: dict, claim: dict, interpretation_key: str, config: dict, player_id: str):
+        if claim.get("shared") and await self._complete_shared_myth_claim(tribe_id, tribe, claim, interpretation_key, config, player_id):
+            return
         reward_parts = self._apply_myth_reward(tribe, config.get("reward", {}))
         member = tribe.get("members", {}).get(player_id, {})
         myth = {

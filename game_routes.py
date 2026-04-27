@@ -26,10 +26,11 @@ from game_emergency_choices import GameEmergencyChoiceMixin
 from game_story_events import GameStoryEventsMixin
 from game_myths import GameMythMixin
 from game_season_taboo import GameSeasonTabooMixin
+from game_standing_rituals import GameStandingRitualMixin
 from game_tribe_progression import GameTribeProgressionMixin
 from game_conflict import GameConflictMixin
 
-class ConnectionManager(GameConflictMixin, GameEmergencyChoiceMixin, GameStoryEventsMixin, GameSeasonTabooMixin, GameMythMixin, GameTribeProgressionMixin, GameWorldLogicMixin):
+class ConnectionManager(GameConflictMixin, GameEmergencyChoiceMixin, GameStoryEventsMixin, GameSeasonTabooMixin, GameStandingRitualMixin, GameMythMixin, GameTribeProgressionMixin, GameWorldLogicMixin):
     def __init__(self):
         # 活跃连接：{player_id: websocket}
         self.active_connections: Dict[str, WebSocket] = {}
@@ -1071,6 +1072,15 @@ class ConnectionManager(GameConflictMixin, GameEmergencyChoiceMixin, GameStoryEv
                 "minutes": TRIBE_SEASON_TABOO_ACTIVE_MINUTES
             },
             "seasonTabooRemedies": self._public_season_taboo_remedies(tribe),
+            "standingRitual": self._public_standing_ritual(tribe),
+            "standingRitualOptions": {} if self._active_standing_ritual(tribe) else TRIBE_STANDING_RITUAL_OPTIONS,
+            "standingRitualStances": TRIBE_STANDING_RITUAL_STANCES,
+            "standingRitualConfig": {
+                "activeMinutes": TRIBE_STANDING_RITUAL_ACTIVE_MINUTES,
+                "minParticipants": TRIBE_STANDING_RITUAL_MIN_PARTICIPANTS,
+                "target": TRIBE_STANDING_RITUAL_TARGET_PARTICIPANTS
+            },
+            "standingRitualHistory": list(tribe.get("standing_ritual_history", []) or [])[-TRIBE_STANDING_RITUAL_HISTORY_LIMIT:],
             "oralChain": self._public_oral_chain(tribe),
             "oralChainConfig": {
                 "lineTarget": TRIBE_ORAL_CHAIN_LINE_TARGET,
@@ -3840,6 +3850,21 @@ async def game_websocket(
                         player_id,
                         message.get("remedyId", "")
                     )
+
+                elif message_type == "tribe_start_standing_ritual":
+                    await manager.start_standing_ritual(
+                        player_id,
+                        message.get("ritualKey", "")
+                    )
+
+                elif message_type == "tribe_join_standing_ritual":
+                    await manager.join_standing_ritual(
+                        player_id,
+                        message.get("stanceKey", "")
+                    )
+
+                elif message_type == "tribe_complete_standing_ritual":
+                    await manager.complete_standing_ritual(player_id)
 
                 elif message_type == "tribe_patrol_controlled_site":
                     await manager.patrol_controlled_resource_site(
