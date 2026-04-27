@@ -59,6 +59,29 @@ class GameOralMapMixin:
             if isinstance(item, dict)
         ][-TRIBE_ORAL_MAP_REFERENCE_LIMIT:]
 
+    def _active_oral_map_narrators(self, tribe: dict) -> list:
+        return self._active_tribe_items(
+            tribe,
+            "oral_map_narrators",
+            TRIBE_ORAL_MAP_NARRATOR_LIMIT,
+            inactive_statuses={"expired"}
+        )
+
+    def _public_oral_map_narrators(self, tribe: dict) -> list:
+        return [
+            {
+                "id": item.get("id"),
+                "memberName": item.get("memberName", "成员"),
+                "title": item.get("title", "讲路师"),
+                "summary": item.get("summary", ""),
+                "contexts": list(item.get("contexts", []) or []),
+                "referenceCount": int(item.get("referenceCount", 0) or 0),
+                "createdAt": item.get("createdAt"),
+                "activeUntil": item.get("activeUntil")
+            }
+            for item in self._active_oral_map_narrators(tribe)
+        ]
+
     def _oral_map_used_source_ids(self, tribe: dict) -> set:
         return {
             item.get("sourceId")
@@ -263,7 +286,7 @@ class GameOralMapMixin:
         return None
 
     def _oral_map_lineage_for_context(self, tribe: dict, context_key: str) -> dict | None:
-        if context_key in {"cave_race", "cave_rescue", "forbidden_edge"}:
+        if context_key in {"cave_race", "cave_rescue", "forbidden_edge", "forbidden_route_proof", "fog_trail", "mentorship"}:
             return self._oral_map_lineage_for_kind(tribe, "rescue")
         if context_key == "rumor_truth":
             return self._oral_map_lineage_for_kind(tribe, "rumor") or self._oral_map_lineage_for_kind(tribe, "puzzle")
@@ -293,6 +316,7 @@ class GameOralMapMixin:
             "actionKey": record.get("actionKey"),
             "actionLabel": record.get("actionLabel", "口述地图"),
             "sourceLabel": record.get("sourceLabel", "归路旧痕"),
+            "sourceMemberName": record.get("memberName", ""),
             "contextKey": context_key,
             "contextLabel": context_label,
             "memberName": member_name,
@@ -305,7 +329,48 @@ class GameOralMapMixin:
         lineage = self._maybe_create_oral_map_lineage_from_references(tribe, record.get("actionKey", ""))
         if lineage:
             reference["lineageCreated"] = lineage
+        narrator = self._maybe_create_oral_map_narrator(tribe, reference)
+        if narrator:
+            reference["narratorTitle"] = narrator
         return reference, lineage
+
+    def _maybe_create_oral_map_narrator(self, tribe: dict, reference: dict) -> dict | None:
+        member_name = reference.get("memberName")
+        if not member_name:
+            return None
+        refs = [
+            item for item in (tribe.get("oral_map_references", []) or [])
+            if isinstance(item, dict) and item.get("memberName") == member_name
+        ]
+        contexts = []
+        for item in refs:
+            label = item.get("contextLabel") or item.get("contextKey") or "后续行动"
+            if label not in contexts:
+                contexts.append(label)
+        if len(contexts) < TRIBE_ORAL_MAP_NARRATOR_TARGET:
+            return None
+        active = self._active_oral_map_narrators(tribe)
+        existing = next((item for item in active if item.get("memberName") == member_name), None)
+        now = datetime.now()
+        active_until = datetime.fromtimestamp(now.timestamp() + TRIBE_ORAL_MAP_NARRATOR_ACTIVE_MINUTES * 60).isoformat()
+        if existing:
+            existing["referenceCount"] = len(refs)
+            existing["contexts"] = contexts[-5:]
+            existing["activeUntil"] = active_until
+            return existing
+        narrator = {
+            "id": f"oral_map_narrator_{tribe.get('id')}_{int(now.timestamp() * 1000)}_{random.randint(100, 999)}",
+            "status": "active",
+            "memberName": member_name,
+            "title": "讲路师",
+            "summary": f"{member_name}在导师、雾区、禁地或洞穴行动中多次引用口述地图，短时间内会被族人当成能讲清路线的人。",
+            "referenceCount": len(refs),
+            "contexts": contexts[-5:],
+            "createdAt": now.isoformat(),
+            "activeUntil": active_until
+        }
+        tribe["oral_map_narrators"] = [*active, narrator][-TRIBE_ORAL_MAP_NARRATOR_LIMIT:]
+        return narrator
 
     def _oral_map_lineage_rescue_bonus(self, tribe: dict) -> tuple[int, dict, str]:
         lineage = self._oral_map_lineage_for_kind(tribe, "rescue")

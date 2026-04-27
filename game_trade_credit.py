@@ -236,6 +236,7 @@ class GameTradeCreditMixin:
         relation["lastAction"] = "trade_credit_repaired"
         relation["lastActionAt"] = datetime.now().isoformat()
         tribe["trade_reputation"] = int(tribe.get("trade_reputation", 0) or 0) + 1
+        ash_promise = self._apply_ash_ledger_promise_bonus(tribe, "贸易信用修复", other_id, relation["lastActionAt"])
         if other_tribe:
             other_relation = other_tribe.setdefault("boundary_relations", {}).setdefault(tribe_id, {})
             other_relation["tradeTrust"] = max(0, min(10, int(other_relation.get("tradeTrust", 0) or 0) + 1))
@@ -245,7 +246,10 @@ class GameTradeCreditMixin:
         task["completedAt"] = relation["lastActionAt"]
         task["completedBy"] = player_id
         task["completedByName"] = (tribe.get("members", {}).get(player_id, {}) or {}).get("name", "成员")
-        detail = f"{task['completedByName']} 完成“{task.get('title', '贸易信用修复')}”，向 {task.get('otherTribeName', '邻近部落')} 补交保证与口信，贸易信誉+1。"
+        if ash_promise.get("parts"):
+            task["ashLedgerPromise"] = ash_promise
+        ash_detail = f" 灰烬账谱承诺：{'、'.join(ash_promise.get('parts', []))}。" if ash_promise.get("parts") else ""
+        detail = f"{task['completedByName']} 完成“{task.get('title', '贸易信用修复')}”，向 {task.get('otherTribeName', '邻近部落')} 补交保证与口信，贸易信誉+1。{ash_detail}"
         self._add_tribe_history(tribe, "trade", "贸易信用修复", detail, player_id, {"kind": "trade_credit_repair", "task": task})
         await self._notify_tribe(tribe_id, detail)
         if other_tribe:

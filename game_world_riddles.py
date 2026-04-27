@@ -1,4 +1,4 @@
-from datetime import datetime
+﻿from datetime import datetime
 import math
 import random
 
@@ -80,24 +80,7 @@ class GameWorldRiddleMixin:
         return [item for item in tribe.get("world_riddle_records", []) or [] if isinstance(item, dict)][-TRIBE_WORLD_RIDDLE_RECORD_LIMIT:]
 
     def _apply_world_riddle_reward(self, tribe: dict, reward: dict) -> list:
-        parts = []
-        storage = tribe.setdefault("storage", {"wood": 0, "stone": 0})
-        for key, label in (("wood", "木材"), ("stone", "石块")):
-            amount = int((reward or {}).get(key, 0) or 0)
-            if amount:
-                storage[key] = max(0, int(storage.get(key, 0) or 0) + amount)
-                parts.append(f"{label}+{amount}")
-        for key, label, tribe_key in (
-            ("food", "食物", "food"),
-            ("renown", "声望", "renown"),
-            ("tradeReputation", "贸易信誉", "trade_reputation"),
-            ("discoveryProgress", "发现", "discovery_progress")
-        ):
-            amount = int((reward or {}).get(key, 0) or 0)
-            if amount:
-                tribe[tribe_key] = int(tribe.get(tribe_key, 0) or 0) + amount
-                parts.append(f"{label}+{amount}")
-        return parts
+        return self._apply_tribe_reward(tribe, reward)
 
     def _build_world_riddle(self, tribe: dict, env: dict) -> dict:
         rng = getattr(self, "_weather_rng", None) or random

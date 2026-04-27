@@ -1,4 +1,4 @@
-from datetime import datetime
+﻿from datetime import datetime
 import random
 
 from game_config import *
@@ -6,19 +6,12 @@ from game_config import *
 
 class GameSacredFireMixin:
     def _active_sacred_fire_relay(self, tribe: dict) -> dict | None:
-        relay = tribe.get("sacred_fire_relay") if isinstance(tribe, dict) else None
-        if not isinstance(relay, dict) or relay.get("status") != "active":
-            return None
-        try:
-            if datetime.fromisoformat(relay.get("activeUntil", "")) <= datetime.now():
-                relay["status"] = "expired"
-                relay["expiredAt"] = datetime.now().isoformat()
-                return None
-        except (TypeError, ValueError):
-            relay["status"] = "expired"
-            relay["expiredAt"] = datetime.now().isoformat()
-            return None
-        return relay
+        return self._active_tribe_item(
+            tribe,
+            "sacred_fire_relay",
+            status="active",
+            mark_expired_status="expired"
+        )
 
     def _public_sacred_fire_relay(self, tribe: dict) -> dict | None:
         relay = self._active_sacred_fire_relay(tribe)
@@ -45,23 +38,7 @@ class GameSacredFireMixin:
         return list(tribe.get("sacred_fire_history", []) or [])[-TRIBE_SACRED_FIRE_RELAY_HISTORY_LIMIT:]
 
     def _apply_sacred_fire_reward(self, tribe: dict, reward: dict) -> list:
-        parts = []
-        storage = tribe.setdefault("storage", {"wood": 0, "stone": 0})
-        for key, label in (("wood", "木材"), ("stone", "石材")):
-            value = int((reward or {}).get(key, 0) or 0)
-            if value:
-                storage[key] = max(0, int(storage.get(key, 0) or 0) + value)
-                parts.append(f"{label}{value:+d}")
-        for key, label, tribe_key in (
-            ("food", "食物", "food"),
-            ("renown", "声望", "renown"),
-            ("tradeReputation", "贸易信誉", "trade_reputation"),
-            ("discoveryProgress", "发现", "discovery_progress")
-        ):
-            value = int((reward or {}).get(key, 0) or 0)
-            if value:
-                tribe[tribe_key] = int(tribe.get(tribe_key, 0) or 0) + value
-                parts.append(f"{label}+{value}")
+        parts = self._apply_tribe_reward(tribe, reward)
         pressure_relief = int((reward or {}).get("warPressureRelief", 0) or 0)
         if pressure_relief:
             relieved = self._relieve_sacred_fire_pressure(tribe, pressure_relief)

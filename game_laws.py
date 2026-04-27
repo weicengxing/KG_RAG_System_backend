@@ -276,6 +276,8 @@ class GameLawMixin:
         if food_cost:
             reward_parts.append(f"食物-{food_cost}")
         reward_parts.extend(self._apply_law_reward(tribe, option.get("remedyReward", {})))
+        ash_promise = self._apply_ash_ledger_promise_bonus(tribe, "律令补救", "", datetime.now().isoformat())
+        reward_parts.extend(ash_promise.get("parts", []))
         remedy["status"] = "completed"
         remedy["completedAt"] = datetime.now().isoformat()
         remedy["completedBy"] = player_id
@@ -286,9 +288,12 @@ class GameLawMixin:
             "lawLabel": remedy.get("lawLabel"),
             "title": remedy.get("title"),
             "rewardParts": reward_parts,
+            "sourceChain": ash_promise.get("sourceChain", []),
             "completedByName": remedy["completedByName"],
             "createdAt": remedy["completedAt"]
         }
+        if ash_promise.get("parts"):
+            remedy["ashLedgerPromise"] = ash_promise
         tribe.setdefault("law_records", []).append(record)
         tribe["law_records"] = tribe["law_records"][-TRIBE_LAW_RECORD_LIMIT:]
         detail = f"{record['completedByName']} 完成“{record['title']}”：{'、'.join(reward_parts) or '补救完成'}。"

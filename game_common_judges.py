@@ -192,6 +192,33 @@ class GameCommonJudgeMixin:
                 })
         return cases
 
+    def _common_judge_season_taboo_cases(self, judge_tribe_id: str, recent_source_ids: set) -> list:
+        cases = []
+        for source_id, tribe in (getattr(self, "tribes", {}) or {}).items():
+            if source_id == judge_tribe_id:
+                continue
+            for evidence in self._public_season_taboo_evidence(tribe) if hasattr(self, "_public_season_taboo_evidence") else []:
+                if not isinstance(evidence, dict) or evidence.get("status") == "expired":
+                    continue
+                source_case_id = evidence.get("id")
+                if not source_case_id or source_case_id in recent_source_ids:
+                    continue
+                cases.append({
+                    "id": self._common_judge_case_id("season_taboo", source_case_id, source_id, evidence.get("otherTribeId", "")),
+                    "kind": "season_taboo",
+                    "sourceCaseId": source_case_id,
+                    "sourceTribeId": source_id,
+                    "sourceTribeName": tribe.get("name", "邻近部落"),
+                    "otherTribeId": evidence.get("otherTribeId", ""),
+                    "otherTribeName": evidence.get("otherTribeName", ""),
+                    "title": "破戒证据待裁",
+                    "summary": evidence.get("summary", "季节禁忌留下了公开破戒证据，中立部落可以决定它更像急难、贪利还是可补救的旧事。"),
+                    "sourceLabel": evidence.get("label", "破戒证据"),
+                    "activeUntil": evidence.get("activeUntil"),
+                    "stakes": ["破戒口风", "补救信用", "神话解释"]
+                })
+        return cases
+
     def _public_common_judge_cases(self, judge_tribe: dict) -> list:
         if not judge_tribe:
             return []
@@ -203,8 +230,11 @@ class GameCommonJudgeMixin:
         cases.extend(self._common_judge_old_grudge_cases(judge_tribe_id, recent_source_ids))
         cases.extend(self._common_judge_trial_cases(judge_tribe_id, recent_source_ids))
         cases.extend(self._common_judge_traveler_song_cases(judge_tribe_id, recent_source_ids))
+        cases.extend(self._common_judge_season_taboo_cases(judge_tribe_id, recent_source_ids))
         if hasattr(self, "_dispute_witness_common_judge_cases"):
             cases.extend(self._dispute_witness_common_judge_cases(judge_tribe_id, recent_source_ids))
+        if hasattr(self, "_public_secret_common_judge_cases"):
+            cases.extend(self._public_secret_common_judge_cases(judge_tribe_id, recent_source_ids))
         cases = [
             case for case in cases
             if case.get("sourceTribeId") != judge_tribe_id and case.get("otherTribeId") != judge_tribe_id
@@ -336,11 +366,34 @@ class GameCommonJudgeMixin:
             "rewardParts": reward_parts,
             "createdAt": now.isoformat()
         }
+        old_song_adoptions = []
+        if hasattr(self, "_schedule_old_song_adoption"):
+            for target_tribe, target_label, related_tribe_id in (
+                (judge_tribe, "裁判见证", case.get("sourceTribeId", "")),
+                (source_tribe, "来源复述", judge_tribe_id),
+            ):
+                adoption = self._schedule_old_song_adoption(
+                    target_tribe,
+                    "common_judge",
+                    f"{record.get('id')}:{target_tribe.get('id')}",
+                    f"{case.get('title', '共同裁判')}·{target_label}",
+                    f"{case.get('title', '共同裁判')}已经由中立见证留下口风，可以借成谱旧歌决定是否采信。",
+                    related_tribe_id
+                )
+                if adoption:
+                    old_song_adoptions.append(adoption)
         for tribe in [judge_tribe, source_tribe, other_tribe]:
             if not tribe:
                 continue
             tribe.setdefault("common_judge_records", []).append(record)
             tribe["common_judge_records"] = tribe["common_judge_records"][-TRIBE_COMMON_JUDGE_RECORD_LIMIT:]
+        if case.get("kind") == "season_taboo":
+            for evidence in source_tribe.get("season_taboo_evidence", []) or []:
+                if isinstance(evidence, dict) and evidence.get("id") == case.get("sourceCaseId"):
+                    evidence["judgedByName"] = judge_tribe.get("name", "中立部落")
+                    evidence["judgedAt"] = now.isoformat()
+                    evidence["judgeActionLabel"] = action.get("label", "共同裁判")
+                    break
 
         target_text = case.get("sourceTribeName", "邻近部落")
         if case.get("otherTribeName"):
@@ -348,6 +401,8 @@ class GameCommonJudgeMixin:
         detail = f"{member_name}代表{judge_tribe.get('name', '中立部落')}为{target_text}的“{case.get('title', '分歧')}”提交{action.get('label', '见证')}。"
         if reward_parts:
             detail += f" {'、'.join(reward_parts)}。"
+        if old_song_adoptions:
+            detail += f" 生成旧歌采信 {len(old_song_adoptions)} 条。"
         for tribe, history_player in ((judge_tribe, player_id), (source_tribe, player_id), (other_tribe, player_id)):
             if tribe:
                 self._add_tribe_history(tribe, "diplomacy", "共同裁判", detail, history_player, {"kind": "common_judge", "record": record})

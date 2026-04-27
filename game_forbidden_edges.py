@@ -148,6 +148,34 @@ class GameForbiddenEdgeMixin:
             return []
         sources = []
 
+        if hasattr(self, "_active_oral_map_lineages"):
+            for lineage in reversed(self._active_oral_map_lineages(tribe)):
+                source = self._forbidden_edge_route_proof_source(
+                    tribe,
+                    "oral_map_lineage",
+                    lineage.get("id", ""),
+                    lineage.get("label", "路线讲述谱系"),
+                    lineage.get("summary", "多次复述的路线讲述可以刻成禁地路证来源。"),
+                    "路线讲述谱系",
+                    {"sourceLabels": lineage.get("sourceLabels", []), "referenceCount": lineage.get("useCount", 0)}
+                )
+                if source:
+                    sources.append(source)
+        for record in reversed(tribe.get("oral_map_records", []) or []):
+            if not isinstance(record, dict):
+                continue
+            source = self._forbidden_edge_route_proof_source(
+                tribe,
+                "oral_map_record",
+                record.get("id", ""),
+                record.get("actionLabel", "口述地图"),
+                record.get("summary", "这段口述地图可以为禁地路证提供路线来源。"),
+                "口述地图",
+                {"sourceLabels": [record.get("sourceLabel", "归路旧痕")], "referenceCount": record.get("referenceCount", 0)}
+            )
+            if source:
+                sources.append(source)
+
         for experience in reversed(self._active_forbidden_edge_route_experiences(tribe)):
             if not isinstance(experience, dict):
                 continue
@@ -297,10 +325,142 @@ class GameForbiddenEdgeMixin:
         return [dict(proof) for proof in (tribe.get("forbidden_edge_route_proofs", []) or []) if isinstance(proof, dict) and proof.get("status") == "active"]
 
     def _public_forbidden_edge_route_proof_records(self, tribe: dict) -> list:
-        return [
-            record for record in (tribe.get("forbidden_edge_route_proof_records", []) or [])
-            if isinstance(record, dict)
-        ][-TRIBE_FORBIDDEN_EDGE_ROUTE_PROOF_RECORD_LIMIT:]
+        references = [
+            item for item in (tribe.get("forbidden_edge_route_proof_references", []) or [])
+            if isinstance(item, dict)
+        ]
+        guardians = self._active_forbidden_edge_route_guardians(tribe)
+        public_records = []
+        for record in (tribe.get("forbidden_edge_route_proof_records", []) or []):
+            if not isinstance(record, dict):
+                continue
+            source_key = record.get("sourceKey")
+            item = dict(record)
+            item_refs = [ref for ref in references if ref.get("sourceKey") == source_key]
+            item["references"] = item_refs[-4:]
+            item["referenceCount"] = max(int(item.get("referenceCount", 0) or 0), len(item_refs))
+            guardian = next((guard for guard in guardians if guard.get("sourceKey") == source_key), None)
+            if guardian:
+                item["guardianTitle"] = guardian
+            public_records.append(item)
+        return public_records[-TRIBE_FORBIDDEN_EDGE_ROUTE_PROOF_RECORD_LIMIT:]
+
+    def _active_forbidden_edge_route_guardians(self, tribe: dict) -> list:
+        if not tribe:
+            return []
+        active = []
+        now = datetime.now()
+        for item in tribe.get("forbidden_edge_route_guardians", []) or []:
+            if not isinstance(item, dict) or item.get("status", "active") != "active":
+                continue
+            try:
+                if datetime.fromisoformat(item.get("activeUntil", "")) <= now:
+                    item["status"] = "expired"
+                    item["expiredAt"] = now.isoformat()
+                    continue
+            except (TypeError, ValueError):
+                item["status"] = "expired"
+                item["expiredAt"] = now.isoformat()
+                continue
+            active.append(item)
+        tribe["forbidden_edge_route_guardians"] = active[-TRIBE_FORBIDDEN_EDGE_ROUTE_PROOF_RECORD_LIMIT:]
+        return tribe["forbidden_edge_route_guardians"]
+
+    def _forbidden_edge_route_proof_record_for_context(self, tribe: dict, context_key: str = "") -> dict | None:
+        if not tribe:
+            return None
+        preferred = {
+            "fog_trail": {"forbidden_edge_record", "forbidden_route_experience", "oral_map_record", "oral_map_lineage"},
+            "oral_map": {"forbidden_edge_record", "forbidden_route_experience", "forbidden_rescue_record"},
+            "mentorship": {"forbidden_edge_record", "forbidden_route_experience", "forbidden_rescue_record"},
+            "cave_rescue": {"forbidden_edge_record", "forbidden_route_experience", "forbidden_rescue_record"}
+        }.get(context_key, set())
+        records = [
+            item for item in (tribe.get("forbidden_edge_route_proof_records", []) or [])
+            if isinstance(item, dict)
+        ]
+        for record in reversed(records):
+            if not preferred or record.get("sourceKind") in preferred:
+                return record
+        return records[-1] if records else None
+
+    def _forbidden_edge_route_proof_context_support(self, tribe: dict, context_key: str = "") -> tuple[int, list, dict | None, dict | None]:
+        record = self._forbidden_edge_route_proof_record_for_context(tribe, context_key)
+        if not record:
+            return 0, [], None, None
+        labels = [record.get("label", "禁地路证")]
+        bonus = 1
+        guardians = self._active_forbidden_edge_route_guardians(tribe)
+        guardian = next((item for item in guardians if item.get("sourceKey") == record.get("sourceKey")), None)
+        if guardian:
+            labels.append(guardian.get("title", "路证守护者"))
+            bonus += 1
+        return bonus, labels[-3:], record, guardian
+
+    def _maybe_create_forbidden_edge_route_guardian(self, tribe: dict, reference: dict, record: dict) -> dict | None:
+        source_key = reference.get("sourceKey")
+        refs = [
+            item for item in (tribe.get("forbidden_edge_route_proof_references", []) or [])
+            if isinstance(item, dict) and item.get("sourceKey") == source_key
+        ]
+        if len(refs) < TRIBE_ORAL_MAP_NARRATOR_TARGET:
+            return None
+        active = self._active_forbidden_edge_route_guardians(tribe)
+        now = datetime.now()
+        active_until = datetime.fromtimestamp(now.timestamp() + TRIBE_ORAL_MAP_NARRATOR_ACTIVE_MINUTES * 60).isoformat()
+        existing = next((item for item in active if item.get("sourceKey") == source_key), None)
+        contexts = []
+        for ref in refs:
+            label = ref.get("contextLabel") or ref.get("contextKey") or "后续行动"
+            if label not in contexts:
+                contexts.append(label)
+        if existing:
+            existing["memberName"] = reference.get("memberName", existing.get("memberName", "成员"))
+            existing["referenceCount"] = len(refs)
+            existing["contexts"] = contexts[-5:]
+            existing["activeUntil"] = active_until
+            return existing
+        guardian = {
+            "id": f"route_proof_guardian_{tribe.get('id')}_{int(now.timestamp() * 1000)}_{random.randint(100, 999)}",
+            "status": "active",
+            "sourceKey": source_key,
+            "routeProofRecordId": record.get("id"),
+            "memberName": reference.get("memberName", "成员"),
+            "title": "路证守护者",
+            "summary": f"{reference.get('memberName', '成员')}多次把{record.get('label', '禁地路证')}引到雾区、导师或路线讲述中，短时成为守护这条证据回路的人。",
+            "referenceCount": len(refs),
+            "contexts": contexts[-5:],
+            "createdAt": now.isoformat(),
+            "activeUntil": active_until
+        }
+        tribe["forbidden_edge_route_guardians"] = [*active, guardian][-TRIBE_FORBIDDEN_EDGE_ROUTE_PROOF_RECORD_LIMIT:]
+        return guardian
+
+    def _record_forbidden_edge_route_proof_reference(self, tribe: dict, context_key: str, context_label: str, member_name: str, outcome_label: str = "") -> tuple[dict | None, dict | None]:
+        record = self._forbidden_edge_route_proof_record_for_context(tribe, context_key)
+        if not record:
+            return None, None
+        now = datetime.now()
+        reference = {
+            "id": f"route_proof_ref_{tribe.get('id')}_{context_key}_{int(now.timestamp() * 1000)}_{random.randint(100, 999)}",
+            "routeProofRecordId": record.get("id"),
+            "sourceKey": record.get("sourceKey"),
+            "sourceKind": record.get("sourceKind"),
+            "label": record.get("label", "禁地路证"),
+            "sourceLabel": record.get("sourceLabel", "路证来源"),
+            "contextKey": context_key,
+            "contextLabel": context_label,
+            "memberName": member_name,
+            "outcomeLabel": outcome_label,
+            "createdAt": now.isoformat()
+        }
+        tribe.setdefault("forbidden_edge_route_proof_references", []).append(reference)
+        tribe["forbidden_edge_route_proof_references"] = tribe["forbidden_edge_route_proof_references"][-TRIBE_FORBIDDEN_EDGE_ROUTE_PROOF_RECORD_LIMIT * 2:]
+        record["referenceCount"] = int(record.get("referenceCount", 0) or 0) + 1
+        guardian = self._maybe_create_forbidden_edge_route_guardian(tribe, reference, record)
+        if guardian:
+            reference["guardianTitle"] = guardian
+        return reference, guardian
 
     def _public_forbidden_edge_route_proof_actions(self) -> dict:
         actions = {}
@@ -545,6 +705,16 @@ class GameForbiddenEdgeMixin:
         if completed:
             proof["status"] = "completed"
             proof["completedAt"] = now.isoformat()
+            oral_reference = None
+            oral_lineage = None
+            if hasattr(self, "_record_oral_map_context_reference"):
+                oral_reference, oral_lineage = self._record_oral_map_context_reference(
+                    tribe,
+                    "forbidden_route_proof",
+                    proof.get("label", "禁地路证"),
+                    member_name,
+                    action.get("label", "刻写路证")
+                )
             record = {
                 "id": f"forbidden_route_proof_record_{tribe_id}_{int(now.timestamp() * 1000)}_{random.randint(100, 999)}",
                 "sourceKey": proof.get("sourceKey"),
@@ -562,6 +732,8 @@ class GameForbiddenEdgeMixin:
                 "actionLabel": action.get("label", "刻写路证"),
                 "participantNames": [item.get("memberName", "成员") for item in proof.get("participants", [])],
                 "rewardParts": reward_parts + relation_parts + witness_parts,
+                "oralMapReference": oral_reference,
+                "oralMapLineage": oral_lineage,
                 "createdAt": proof["completedAt"]
             }
             created_experience = self._create_forbidden_edge_route_proof_experience(tribe, proof, record)
@@ -573,6 +745,10 @@ class GameForbiddenEdgeMixin:
                 if isinstance(item, dict) and item.get("status") == "active"
             ][-TRIBE_FORBIDDEN_EDGE_ROUTE_PROOF_LIMIT:]
             detail += f" 路证已公开，沉淀为{created_experience.get('label', '禁地路证')}，下次高风险禁地行动更不容易迷失。"
+            if oral_reference:
+                detail += f" 引用了{oral_reference.get('actionLabel', '口述地图')}。"
+            if oral_reference and oral_reference.get("narratorTitle"):
+                detail += f" {member_name}获得短时“讲路师”称号。"
         self._add_tribe_history(tribe, "exploration", "禁地路证", detail, player_id, {"kind": "forbidden_edge_route_proof", "proof": proof, "record": record})
         await self._notify_tribe(tribe_id, detail)
         if completed:

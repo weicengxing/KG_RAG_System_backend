@@ -281,6 +281,15 @@ class GameRumorTruthMixin:
             "oralMapReference": oral_reference,
             "oralMapLineage": oral_lineage
         }
+        old_song_adoption = None
+        if hasattr(self, "_schedule_old_song_adoption"):
+            old_song_adoption = self._schedule_old_song_adoption(
+                tribe,
+                "rumor_truth",
+                record.get("id"),
+                f"{task.get('sourceLabel', '传闻')}·{outcome_label}",
+                f"{task.get('title', '传闻')}已经被处理成{outcome_label}，可以借一段成谱旧歌决定是否采信。",
+            )
         tribe.setdefault("rumor_truth_records", []).append(record)
         tribe["rumor_truth_records"] = tribe["rumor_truth_records"][-TRIBE_RUMOR_TRUTH_RECORD_LIMIT:]
         task["status"] = "resolved"
@@ -295,6 +304,8 @@ class GameRumorTruthMixin:
             detail += f" 传闻辨认引用了{oral_reference.get('actionLabel', '口述地图')}。"
         if oral_lineage:
             detail += f" 形成{oral_lineage.get('label', '路线讲述谱系')}。"
+        if old_song_adoption:
+            detail += f" 生成旧歌采信：{old_song_adoption.get('label', '旧歌采信')}。"
         self._add_tribe_history(tribe, "world_event", "辨认真伪", detail, player_id, {
             "kind": "rumor_truth",
             "record": record,

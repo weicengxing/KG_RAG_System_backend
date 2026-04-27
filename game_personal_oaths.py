@@ -137,9 +137,14 @@ class GamePersonalOathMixin:
             return
         member = tribe.get("members", {}).get(player_id, {})
         reward_parts = self._apply_dark_oath_reward(tribe, player_id, member, option)
+        ash_promise = self._apply_ash_ledger_promise_bonus(tribe, "个人暗誓兑现", "", datetime.now().isoformat())
+        reward_parts.extend(ash_promise.get("parts", []))
         oath["status"] = "fulfilled"
         oath["revealedAt"] = datetime.now().isoformat()
         oath["rewardParts"] = reward_parts
+        if ash_promise.get("parts"):
+            oath["ashLedgerPromise"] = ash_promise
+            oath["sourceChain"] = ash_promise.get("sourceChain", [])
         tribe.setdefault("personal_dark_oath_records", []).append(dict(oath))
         tribe["personal_dark_oath_records"] = tribe["personal_dark_oath_records"][-PLAYER_DARK_OATH_RECORD_LIMIT:]
         player["personal_dark_oath"] = None
@@ -214,11 +219,16 @@ class GamePersonalOathMixin:
         tribe["food"] = int(tribe.get("food", 0) or 0) - food_cost
         member = tribe.get("members", {}).get(player_id, {})
         reward_parts = self._apply_dark_oath_reward(tribe, player_id, member, remedy.get("reward", {}))
+        ash_promise = self._apply_ash_ledger_promise_bonus(tribe, "个人暗誓补救", "", datetime.now().isoformat())
+        reward_parts.extend(ash_promise.get("parts", []))
         remedy["status"] = "completed"
         remedy["completedBy"] = player_id
         remedy["completedByName"] = member.get("name", "成员")
         remedy["completedAt"] = datetime.now().isoformat()
         remedy["rewardParts"] = reward_parts
+        if ash_promise.get("parts"):
+            remedy["ashLedgerPromise"] = ash_promise
+            remedy["sourceChain"] = ash_promise.get("sourceChain", [])
         detail = f"{member.get('name', '成员')} 完成“{remedy.get('label', '赎誓')}”，补回{remedy.get('memberName', '成员')}的暗誓缺口：{'、'.join(reward_parts) or '部落承认了补救'}。"
         self._add_tribe_history(tribe, "governance", "个人暗誓补救", detail, player_id, {"kind": "personal_dark_oath_remedy", "remedy": remedy})
         await self._notify_tribe(tribe_id, detail)

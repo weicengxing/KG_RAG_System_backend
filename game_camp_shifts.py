@@ -1,4 +1,4 @@
-from datetime import datetime
+﻿from datetime import datetime
 
 from game_config import *
 
@@ -24,29 +24,7 @@ class GameCampShiftMixin:
         ][-TRIBE_CAMP_SHIFT_RECORD_LIMIT:]
 
     def _apply_camp_shift_reward(self, tribe: dict, reward: dict) -> list:
-        reward_parts = []
-        storage = tribe.setdefault("storage", {"wood": 0, "stone": 0})
-        for resource, label in (("wood", "木材"), ("stone", "石块")):
-            amount = int(reward.get(resource, 0) or 0)
-            if amount:
-                storage[resource] = int(storage.get(resource, 0) or 0) + amount
-                reward_parts.append(f"{label}+{amount}")
-        food = int(reward.get("food", 0) or 0)
-        if food:
-            tribe["food"] = int(tribe.get("food", 0) or 0) + food
-            reward_parts.append(f"食物+{food}")
-        renown = int(reward.get("renown", 0) or 0)
-        if renown:
-            tribe["renown"] = int(tribe.get("renown", 0) or 0) + renown
-            reward_parts.append(f"声望+{renown}")
-        discovery = int(reward.get("discoveryProgress", 0) or 0)
-        if discovery:
-            tribe["discovery_progress"] = int(tribe.get("discovery_progress", 0) or 0) + discovery
-            reward_parts.append(f"发现+{discovery}")
-        trade = int(reward.get("tradeReputation", 0) or 0)
-        if trade:
-            tribe["trade_reputation"] = int(tribe.get("trade_reputation", 0) or 0) + trade
-            reward_parts.append(f"贸易信誉+{trade}")
+        reward_parts = self._apply_tribe_reward(tribe, reward)
         pressure_relief = int(reward.get("warPressureRelief", reward.get("pressureRelief", 0)) or 0)
         if pressure_relief:
             relieved = 0

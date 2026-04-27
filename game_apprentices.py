@@ -66,6 +66,7 @@ class GameApprenticeExchangeMixin:
                 "relationScore": score,
                 "tradeTrust": trust,
                 "marketPact": market_pact,
+                "tribePersonality": self._public_tribe_personality(other) if hasattr(self, "_public_tribe_personality") else None,
                 "summary": f"关系 {score:+d} / 信任 +{trust}" + (" / 互市约定" if market_pact else "")
             })
         return targets

@@ -168,6 +168,21 @@ class GameCollectionWallMixin:
             if item:
                 candidates.append(item)
 
+        for record in reversed(tribe.get("lost_item_records", []) or []):
+            if not isinstance(record, dict) or not record.get("collectionReady"):
+                continue
+            item = self._collection_candidate(
+                tribe,
+                "lost_item",
+                record.get("id", ""),
+                record.get("label", "漂流失物"),
+                f"{record.get('memberName', '成员')} 对来自{record.get('originTribeName', '来源部落')}的失物选择{record.get('actionLabel', '处理')}，这段漂流来源可以挂上收藏墙。",
+                record.get("sourceLabel", "失物漂流"),
+                {"rewardParts": record.get("rewardParts", []), "memberName": record.get("memberName", ""), "otherTribeName": record.get("originTribeName", "")}
+            )
+            if item:
+                candidates.append(item)
+
         for echo_item in reversed(tribe.get("echo_items", []) or []):
             if not isinstance(echo_item, dict) or len(echo_item.get("memories", []) or []) < 2:
                 continue
@@ -180,6 +195,21 @@ class GameCollectionWallMixin:
                 f"{echo_item.get('holderName', '成员')} 手中的{echo_item.get('label', '回声物品')}已经留下{memory_labels or '多段经历'}，可以挂上收藏墙保留来历。",
                 "回声物品",
                 {"memberName": echo_item.get("holderName", ""), "memoryCount": len(echo_item.get("memories", []) or [])}
+            )
+            if item:
+                candidates.append(item)
+
+        for record in reversed(tribe.get("lost_item_records", []) or []):
+            if not isinstance(record, dict) or not record.get("collectionReady"):
+                continue
+            item = self._collection_candidate(
+                tribe,
+                "lost_item",
+                record.get("id", ""),
+                record.get("itemLabel", "漂流失物"),
+                record.get("summary") or f"{record.get('memberName', '成员')} 把失物整理成可回看的来源。",
+                record.get("sourceLabel", "失物漂流"),
+                {"rewardParts": record.get("rewardParts", []), "memberName": record.get("memberName", ""), "otherTribeName": record.get("otherTribeName", "")}
             )
             if item:
                 candidates.append(item)

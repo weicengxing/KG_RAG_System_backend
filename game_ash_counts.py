@@ -8,13 +8,13 @@ class GameAshCountMixin:
         try:
             return datetime.fromisoformat(item.get("activeUntil", "")) <= datetime.now()
         except (TypeError, ValueError):
-            return False
+            return True
 
     def _ash_ledger_expired(self, item: dict) -> bool:
         try:
             return datetime.fromisoformat(item.get("activeUntil", "")) <= datetime.now()
         except (TypeError, ValueError):
-            return False
+            return True
 
     def _active_ash_ledgers(self, tribe: dict) -> list:
         if not tribe:
@@ -35,7 +35,88 @@ class GameAshCountMixin:
         return tribe["ash_ledgers"]
 
     def _public_ash_ledgers(self, tribe: dict) -> list:
-        return [dict(ledger) for ledger in self._active_ash_ledgers(tribe)]
+        ledgers = []
+        for ledger in self._active_ash_ledgers(tribe):
+            item = dict(ledger)
+            promises = [
+                dict(promise) for promise in (ledger.get("promises", []) or [])
+                if isinstance(promise, dict)
+            ]
+            item["promises"] = promises[-5:]
+            item["promiseCount"] = len([promise for promise in promises if promise.get("status", "active") == "active"])
+            item["usedPromiseCount"] = len([promise for promise in promises if promise.get("status") == "used"])
+            ledgers.append(item)
+        return ledgers
+
+    def _ash_ledger_source_chain(self, ledger: dict, promise: dict | None = None) -> list:
+        chain = [{
+            "kind": "ash_ledger",
+            "id": ledger.get("id"),
+            "label": ledger.get("label", "灰烬账谱"),
+            "sourceLabel": ledger.get("sourceLabel", "公开分配明账"),
+            "summary": ledger.get("summary", "")
+        }]
+        source_ids = ledger.get("sourceRecordIds", []) or []
+        source_labels = ledger.get("sourceLabels", []) or []
+        for index, source_id in enumerate(source_ids[-3:]):
+            chain.append({
+                "kind": "ash_count_record",
+                "id": source_id,
+                "label": source_labels[index] if index < len(source_labels) else "灰烬清点",
+                "sourceLabel": "灰烬清点记录"
+            })
+        if promise:
+            chain.append({
+                "kind": "ash_ledger_promise",
+                "id": promise.get("id"),
+                "label": promise.get("label", "分配承诺"),
+                "memberName": promise.get("memberName", "成员"),
+                "createdAt": promise.get("createdAt")
+            })
+        return chain
+
+    def _active_ash_ledger_promise(self, tribe: dict) -> tuple[dict | None, dict | None]:
+        for ledger in reversed(self._active_ash_ledgers(tribe)):
+            for promise in reversed(ledger.get("promises", []) or []):
+                if isinstance(promise, dict) and promise.get("status", "active") == "active":
+                    return ledger, promise
+        return None, None
+
+    def _apply_ash_ledger_promise_bonus(self, tribe: dict, context_label: str, other_tribe_id: str = "", now_text: str = "") -> dict:
+        ledger, promise = self._active_ash_ledger_promise(tribe)
+        if not ledger or not promise:
+            return {"parts": [], "sourceChain": []}
+        now_text = now_text or datetime.now().isoformat()
+        parts = []
+        trust_bonus = max(1, int(ledger.get("trustBonus", TRIBE_ASH_LEDGER_TRUST_BONUS) or 0))
+        renown_bonus = max(1, int(ledger.get("renownBonus", TRIBE_ASH_LEDGER_RENOWN_BONUS) or 0))
+        other = self.tribes.get(other_tribe_id) if other_tribe_id and hasattr(self, "tribes") else None
+        if other:
+            for source, target in ((tribe, other), (other, tribe)):
+                relation = source.setdefault("boundary_relations", {}).setdefault(target.get("id"), {})
+                relation["tradeTrust"] = max(0, min(10, int(relation.get("tradeTrust", 0) or 0) + trust_bonus))
+                relation["lastAction"] = "ash_ledger_promise"
+                relation["lastActionAt"] = now_text
+            parts.append(f"分配承诺信任+{trust_bonus}")
+        else:
+            tribe["renown"] = int(tribe.get("renown", 0) or 0) + renown_bonus
+            parts.append(f"分配承诺声望+{renown_bonus}")
+        source_chain = self._ash_ledger_source_chain(ledger, promise)
+        promise["status"] = "used"
+        promise["usedAt"] = now_text
+        promise["usedContext"] = context_label
+        promise["rewardParts"] = parts
+        promise["sourceChain"] = source_chain
+        ledger["useCount"] = int(ledger.get("useCount", 0) or 0) + 1
+        ledger["promiseUseCount"] = int(ledger.get("promiseUseCount", 0) or 0) + 1
+        ledger["lastUsedAt"] = now_text
+        return {
+            "parts": parts,
+            "sourceChain": source_chain,
+            "promise": dict(promise),
+            "ledgerId": ledger.get("id"),
+            "ledgerLabel": ledger.get("label", "灰烬账谱")
+        }
 
     def _ash_ledger_sources(self, tribe: dict) -> list:
         if not tribe:
@@ -341,5 +422,42 @@ class GameAshCountMixin:
             f"{tribe.get('name', '部落')}把{task.get('sourceLabel', '灰烬旧痕')}清点成公开明账。",
             {"tribeId": tribe_id, "ashId": ash_id, "actionKey": action_key}
         )
+        await self._notify_tribe(tribe_id, detail)
+        await self.broadcast_tribe_state(tribe_id)
+
+    async def endorse_ash_ledger(self, player_id: str, ledger_id: str):
+        tribe_id = self.player_tribes.get(player_id)
+        tribe = self.tribes.get(tribe_id)
+        if not tribe:
+            await self._send_tribe_error(player_id, "请先加入一个部落")
+            return
+        ledger = next((item for item in self._active_ash_ledgers(tribe) if item.get("id") == ledger_id), None)
+        if not ledger:
+            await self._send_tribe_error(player_id, "这本灰烬账谱已经散去")
+            return
+        for promise in ledger.get("promises", []) or []:
+            if isinstance(promise, dict) and promise.get("memberId") == player_id and promise.get("status", "active") == "active":
+                await self._send_tribe_error(player_id, "你已经为这本账谱背书过分配承诺")
+                return
+        now = datetime.now()
+        member = tribe.get("members", {}).get(player_id, {})
+        member_name = member.get("name", self.players.get(player_id, {}).get("name", "成员"))
+        promise = {
+            "id": f"ash_promise_{ledger_id}_{player_id}_{int(now.timestamp() * 1000)}",
+            "status": "active",
+            "label": "分配承诺",
+            "summary": f"{member_name}把这本灰烬账谱背书为后续互市、赎誓或律令执行可引用的一次性承诺。",
+            "memberId": player_id,
+            "memberName": member_name,
+            "ledgerId": ledger_id,
+            "createdAt": now.isoformat(),
+            "activeUntil": ledger.get("activeUntil"),
+            "sourceChain": self._ash_ledger_source_chain(ledger)
+        }
+        ledger.setdefault("promises", []).append(promise)
+        ledger["promises"] = ledger["promises"][-TRIBE_ASH_LEDGER_LIMIT:]
+        ledger["promiseCount"] = len([item for item in ledger.get("promises", []) if isinstance(item, dict) and item.get("status", "active") == "active"])
+        detail = f"{member_name}把“{ledger.get('label', '灰烬账谱')}”背书为分配承诺，后续事务可读取这条来源链。"
+        self._add_tribe_history(tribe, "trade", "灰烬账谱背书", detail, player_id, {"kind": "ash_ledger_promise", "ledgerId": ledger_id, "promise": promise})
         await self._notify_tribe(tribe_id, detail)
         await self.broadcast_tribe_state(tribe_id)

@@ -9,7 +9,8 @@ class GameFarReturnMixin:
         labels = {
             "messenger": "盟约信使",
             "visitor": "边缘来访者",
-            "apprentice": "学徒交换"
+            "apprentice": "学徒交换",
+            "lost_item": "归还失物"
         }
         return labels.get(source_kind, "远方口信")
 

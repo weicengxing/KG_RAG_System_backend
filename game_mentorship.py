@@ -196,15 +196,42 @@ class GameMentorshipMixin:
             mentor_player = self.players.setdefault(session.get("mentorId"), {})
             mentor_player["personal_renown"] = int(mentor_player.get("personal_renown", 0) or 0) + mentor_gain
             reward_parts.append(f"导师个人声望+{mentor_gain}")
+        oral_reference = None
+        oral_lineage = None
+        if hasattr(self, "_record_oral_map_context_reference"):
+            oral_reference, oral_lineage = self._record_oral_map_context_reference(
+                tribe,
+                "mentorship",
+                session.get("focusLabel", "传承导师"),
+                member.get("name", session.get("mentorName", "导师")),
+                "导师结课"
+            )
+            if oral_reference:
+                reward_parts.append(f"引用{oral_reference.get('actionLabel', '口述地图')}")
         session["status"] = "completed"
         session["completedAt"] = datetime.now().isoformat()
         session["completedBy"] = player_id
         session["rewardParts"] = reward_parts
+        session["oralMapReference"] = oral_reference
+        session["oralMapLineage"] = oral_lineage
         tribe.setdefault("mentorship_history", []).append(session)
         tribe["mentorship_history"] = tribe["mentorship_history"][-TRIBE_MENTORSHIP_HISTORY_LIMIT:]
 
         student_names = "、".join(item.get("name", "成员") for item in students)
         detail = f"{member.get('name', session.get('mentorName', '导师'))} 收束“{session.get('focusLabel', '传承课')}”，{student_names}完成拜师。{'、'.join(reward_parts) or '师徒故事写入部落历史'}。"
+        if oral_reference and oral_reference.get("narratorTitle"):
+            detail += f" {oral_reference['narratorTitle'].get('memberName', '成员')}获得短时“讲路师”称号。"
+        old_song_adoption = None
+        if hasattr(self, "_schedule_old_song_adoption"):
+            old_song_adoption = self._schedule_old_song_adoption(
+                tribe,
+                "mentorship",
+                session.get("id"),
+                f"{session.get('focusLabel', '传承课')}结课",
+                f"{session.get('mentorName', '导师')}的课程已经结课，可以借成谱旧歌决定这段传承该被采信、校订还是暂存。",
+            )
+        if old_song_adoption:
+            detail += f" 生成旧歌采信：{old_song_adoption.get('label', '旧歌采信')}。"
         self._add_tribe_history(tribe, "ritual", "传承导师结课", detail, player_id, {"kind": "mentorship_complete", "session": session})
         await self._publish_world_rumor(
             "ritual",

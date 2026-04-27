@@ -46,28 +46,19 @@ class DatabaseManager:
         # 索引D: 群组所有者查询优化
         await self.db.groups.create_index([("owner_id", 1)])
 
-        # 索引E: 用户-群组关系表 (数据冗余策略，提升查询效率)
-        # user_groups 集合: {user_id, group_id, role, joined_at}
-        await self.db.user_groups.create_index(
-            [("user_id", 1), ("group_id", 1)],
-            unique=True
-        )
-        # 反向索引：通过group_id查询所有成员
-        await self.db.user_groups.create_index([("group_id", 1)])
-        # 通过user_id查询所有群组（最常用的查询）
-        await self.db.user_groups.create_index([("user_id", 1)])
+        # 当前群成员关系的唯一来源是 groups.members；不要再维护未接入读写的 user_groups 副本。
 
-        # 索引F: 群组邀请码索引
+        # 索引E: 群组邀请码索引
         await self.db.groups.create_index([("invite_code", 1)], unique=True, sparse=True)
 
-        # 索引G: 知识图谱文档集合
-        # G1: 基于 MD5 hash 的唯一索引，防止重复上传
+        # 索引F: 知识图谱文档集合
+        # F1: 基于 MD5 hash 的唯一索引，防止重复上传
         await self.db.documents.create_index([("file_hash", 1)], unique=True)
-        # G2: 基于 doc_id 的唯一索引
+        # F2: 基于 doc_id 的唯一索引
         await self.db.documents.create_index([("doc_id", 1)], unique=True)
-        # G3: 上传时间索引（用于按时间查询）
+        # F3: 上传时间索引（用于按时间查询）
         await self.db.documents.create_index([("upload_time", -1)])
-        # G4: 文件类型索引
+        # F4: 文件类型索引
         await self.db.documents.create_index([("file_extension", 1)])
 
         logger.info("✅ Database (Mongo) connected & Indexes checked.")

@@ -126,22 +126,16 @@ class GameTribeProgressionMixin:
         return "、".join(parts)
 
     def _active_world_event_remnants(self, tribe: dict) -> list:
-        active = []
-        now = datetime.now()
-        for remnant in tribe.get("world_event_remnants", []) or []:
-            if not isinstance(remnant, dict) or remnant.get("collectedAt"):
-                continue
-            active_until = remnant.get("activeUntil")
-            if active_until:
-                try:
-                    if datetime.fromisoformat(active_until) <= now:
-                        continue
-                except (TypeError, ValueError):
-                    pass
-            remnant["rewardLabel"] = self._reward_summary_text(remnant.get("reward") or {})
-            active.append(remnant)
+        active = self._active_tribe_items(
+            tribe,
+            "world_event_remnants",
+            WORLD_EVENT_REMNANT_LIMIT
+        )
+        active = [remnant for remnant in active if not remnant.get("collectedAt")]
         if len(active) != len(tribe.get("world_event_remnants", []) or []):
             tribe["world_event_remnants"] = active[-WORLD_EVENT_REMNANT_LIMIT:]
+        for remnant in active:
+            remnant["rewardLabel"] = self._reward_summary_text(remnant.get("reward") or {})
         return active[-WORLD_EVENT_REMNANT_LIMIT:]
 
     def _build_world_event_remnant(self, tribe: dict, event: dict, action_key: Optional[str], action_plan: Optional[dict], member: dict) -> Optional[dict]:
@@ -260,22 +254,12 @@ class GameTribeProgressionMixin:
         await self._broadcast_current_map()
 
     def _active_map_memories(self, tribe: dict) -> list:
-        active = []
-        now = datetime.now()
-        for memory in tribe.get("map_memories", []) or []:
-            if not isinstance(memory, dict) or memory.get("status") == "resolved":
-                continue
-            active_until = memory.get("activeUntil")
-            if active_until:
-                try:
-                    if datetime.fromisoformat(active_until) <= now:
-                        continue
-                except (TypeError, ValueError):
-                    pass
-            active.append(memory)
-        if len(active) != len(tribe.get("map_memories", []) or []):
-            tribe["map_memories"] = active[-TRIBE_MAP_MEMORY_LIMIT:]
-        return active[-TRIBE_MAP_MEMORY_LIMIT:]
+        return self._active_tribe_items(
+            tribe,
+            "map_memories",
+            TRIBE_MAP_MEMORY_LIMIT,
+            inactive_statuses={"resolved"}
+        )
 
     def _record_map_memory(self, tribe: dict, memory_kind: str, label: str, summary: str, x: float, z: float, source_id: str = "", actor_name: str = "") -> Optional[dict]:
         if not tribe:
@@ -359,6 +343,191 @@ class GameTribeProgressionMixin:
             detail,
             player_id,
             {"kind": "map_memory", **memory, "rewardParts": reward_parts}
+        )
+        await self._notify_tribe(tribe_id, detail)
+        await self.broadcast_tribe_state(tribe_id)
+        await self._broadcast_current_map()
+
+    def _active_map_tile_traces(self, tribe: dict) -> list:
+        active = self._active_tribe_items(
+            tribe,
+            "map_tile_traces",
+            TRIBE_MAP_TILE_TRACE_LIMIT,
+            inactive_statuses={"resolved"}
+        )
+        for trace in active:
+            profile = TRIBE_MAP_TILE_TRACE_PROFILES.get(trace.get("kind"), {}) or {}
+            if profile:
+                trace.setdefault("impactLabel", profile.get("impactLabel", ""))
+                trace.setdefault("recoveryHint", profile.get("recoveryHint", ""))
+                trace.setdefault("weatherRippleLabel", "、".join(profile.get("weatherBias", []) or []))
+        return active
+
+    def _map_tile_trace_action_options(self, trace: dict) -> list:
+        kind = trace.get("kind")
+        return [
+            {"key": key, **action}
+            for key, action in TRIBE_MAP_TILE_TRACE_ACTIONS.items()
+            if kind in (action.get("traceKinds") or [])
+        ]
+
+    def _nearby_map_tile_traces(self, tribe: dict, x: float, z: float, kinds: Optional[set] = None) -> list:
+        traces = []
+        radius2 = TRIBE_MAP_TILE_TRACE_EFFECT_RADIUS * TRIBE_MAP_TILE_TRACE_EFFECT_RADIUS
+        for trace in self._active_map_tile_traces(tribe):
+            if kinds and trace.get("kind") not in kinds:
+                continue
+            dx = float(trace.get("x", 0) or 0) - float(x or 0)
+            dz = float(trace.get("z", 0) or 0) - float(z or 0)
+            if dx * dx + dz * dz <= radius2:
+                traces.append(trace)
+        return traces
+
+    def _map_tile_trace_yield_effect(self, tribe: dict, x: float, z: float) -> tuple[int, list]:
+        delta = 0
+        labels = []
+        for trace in self._nearby_map_tile_traces(tribe, x, z):
+            profile = TRIBE_MAP_TILE_TRACE_PROFILES.get(trace.get("kind"), {}) or {}
+            trace_delta = int(profile.get("resourceYieldDelta", 0) or 0)
+            if not trace_delta:
+                continue
+            intensity = max(1, int(trace.get("intensity", 1) or 1))
+            delta += trace_delta * min(2, intensity)
+            labels.append(f"{trace.get('label', '地块痕迹')}{trace_delta * min(2, intensity):+d}")
+        return delta, labels
+
+    def _record_map_tile_trace(self, tribe: dict, trace_kind: str, x: float, z: float, source_id: str = "", actor_name: str = "", label: str = "", summary: str = "") -> Optional[dict]:
+        if not tribe:
+            return None
+        profile = dict(TRIBE_MAP_TILE_TRACE_PROFILES.get(trace_kind, {}) or {})
+        active = self._active_map_tile_traces(tribe)
+        dedupe_id = f"{trace_kind}:{source_id}" if source_id else ""
+        now = datetime.now()
+        active_until = datetime.fromtimestamp(now.timestamp() + TRIBE_MAP_TILE_TRACE_ACTIVE_MINUTES * 60).isoformat()
+        if dedupe_id:
+            existing = next((item for item in active if item.get("dedupeId") == dedupe_id), None)
+            if existing:
+                existing["intensity"] = min(5, int(existing.get("intensity", 1) or 1) + 1)
+                existing["activeUntil"] = active_until
+                existing["lastTouchedAt"] = now.isoformat()
+                existing["lastTouchedBy"] = actor_name or existing.get("actorName", "")
+                return existing
+        reward = dict(TRIBE_MAP_TILE_TRACE_REWARDS.get(trace_kind, {"renown": 1}))
+        trace = {
+            "id": f"map_tile_{tribe.get('id')}_{int(now.timestamp() * 1000)}_{random.randint(100, 999)}",
+            "type": "map_tile_trace",
+            "status": "active",
+            "kind": trace_kind,
+            "label": label or profile.get("label") or "地块痕迹",
+            "summary": summary or profile.get("summary") or "这片地块短时间内留下了可被后来者处理的痕迹。",
+            "x": max(-490, min(490, float(x or 0))),
+            "z": max(-490, min(490, float(z or 0))),
+            "sourceId": source_id,
+            "dedupeId": dedupe_id,
+            "actorName": actor_name,
+            "intensity": 1,
+            "impactLabel": profile.get("impactLabel", ""),
+            "recoveryHint": profile.get("recoveryHint", ""),
+            "weatherRippleLabel": "、".join(profile.get("weatherBias", []) or []),
+            "reward": reward,
+            "rewardLabel": self._reward_summary_text(reward),
+            "createdAt": now.isoformat(),
+            "activeUntil": active_until
+        }
+        tribe["map_tile_traces"] = [*active, trace][-TRIBE_MAP_TILE_TRACE_LIMIT:]
+        return trace
+
+    def _apply_map_tile_trace_reward(self, tribe: dict, rewards: dict) -> list:
+        reward_parts = self._apply_map_memory_reward(tribe, rewards)
+        relief = int((rewards or {}).get("warPressureRelief", 0) or 0)
+        if relief:
+            relieved = 0
+            for relation in (tribe.get("boundary_relations", {}) or {}).values():
+                before = int((relation or {}).get("warPressure", 0) or 0)
+                if before > 0:
+                    relation["warPressure"] = max(0, before - relief)
+                    relieved += before - int(relation.get("warPressure", 0) or 0)
+            if relieved:
+                reward_parts.append(f"战争压力-{relieved}")
+        return reward_parts
+
+    async def settle_map_tile_trace(self, player_id: str, trace_id: str, action_key: str = ""):
+        tribe_id = self.player_tribes.get(player_id)
+        tribe = self.tribes.get(tribe_id)
+        if not tribe:
+            await self._send_tribe_error(player_id, "请先加入一个部落")
+            return
+        traces = self._active_map_tile_traces(tribe)
+        trace = next((item for item in traces if item.get("id") == trace_id), None)
+        if not trace:
+            await self._send_tribe_error(player_id, "这片地块痕迹已经淡去")
+            return
+        member = tribe.get("members", {}).get(player_id, {})
+        member_name = member.get("name", "成员")
+        action_options = self._map_tile_trace_action_options(trace)
+        action = next((item for item in action_options if item.get("key") == action_key), None)
+        if not action and action_options:
+            action = action_options[0]
+        if not action:
+            action = {
+                "key": "settle",
+                "label": "整理",
+                "recovery": max(1, int(trace.get("intensity", 1) or 1)),
+                "reward": trace.get("reward") or {}
+            }
+
+        storage = tribe.setdefault("storage", {"wood": 0, "stone": 0})
+        wood_cost = int(action.get("woodCost", 0) or 0)
+        food_cost = int(action.get("foodCost", 0) or 0)
+        if wood_cost and int(storage.get("wood", 0) or 0) < wood_cost:
+            await self._send_tribe_error(player_id, "公共木材不足")
+            return
+        if food_cost and int(tribe.get("food", 0) or 0) < food_cost:
+            await self._send_tribe_error(player_id, "部落食物不足")
+            return
+        if wood_cost:
+            storage["wood"] = int(storage.get("wood", 0) or 0) - wood_cost
+        if food_cost:
+            tribe["food"] = int(tribe.get("food", 0) or 0) - food_cost
+
+        reward_parts = self._apply_map_tile_trace_reward(tribe, action.get("reward") or trace.get("reward") or {})
+        cost_parts = []
+        if wood_cost:
+            cost_parts.append(f"木材-{wood_cost}")
+        if food_cost:
+            cost_parts.append(f"食物-{food_cost}")
+        if cost_parts:
+            reward_parts = [*cost_parts, *reward_parts]
+
+        before_intensity = max(1, int(trace.get("intensity", 1) or 1))
+        recovery = max(1, int(action.get("recovery", 1) or 1))
+        recovered = recovery >= before_intensity
+        trace["lastRecoveryBy"] = member_name
+        trace["lastRecoveryAt"] = datetime.now().isoformat()
+        trace["lastRecoveryAction"] = action.get("label", "整理")
+        if recovered:
+            trace["status"] = "resolved"
+            trace["resolvedBy"] = member_name
+            trace["resolvedAt"] = trace["lastRecoveryAt"]
+            tribe["map_tile_traces"] = [item for item in traces if item.get("id") != trace_id]
+        else:
+            trace["intensity"] = before_intensity - recovery
+            tribe["map_tile_traces"] = [
+                trace if item.get("id") == trace_id else item
+                for item in traces
+            ]
+
+        result_text = "让这片地块逐渐恢复" if not recovered else "把这片地块恢复成可再次经过的旧路"
+        detail = f"{member_name} {action.get('label', '整理')}了{trace.get('label', '地块痕迹')}，{result_text}。"
+        if reward_parts:
+            detail += f" 收获：{'、'.join(reward_parts)}。"
+        self._add_tribe_history(
+            tribe,
+            "world_event",
+            "恢复地块痕迹",
+            detail,
+            player_id,
+            {"kind": "map_tile_trace", **trace, "actionKey": action.get("key"), "rewardParts": reward_parts, "recovered": recovered}
         )
         await self._notify_tribe(tribe_id, detail)
         await self.broadcast_tribe_state(tribe_id)
@@ -520,6 +689,14 @@ class GameTribeProgressionMixin:
                 f"market:{shared_id}:{target_tribe.get('id')}",
                 "边市"
             )
+            self._record_map_tile_trace(
+                target_tribe,
+                "busy_market_site",
+                float(route_site.get("x", 0) or 0),
+                float(route_site.get("z", 0) or 0),
+                f"market:{shared_id}:{target_tribe.get('id')}",
+                "边市"
+            )
             myth_tribes.append(target_tribe)
             myth_x = float(route_site.get("x", myth_x) or myth_x)
             myth_z = float(route_site.get("z", myth_z) or myth_z)
@@ -560,22 +737,11 @@ class GameTribeProgressionMixin:
         reward_parts.append("边市贸易信誉+1")
 
     def _active_market_pacts(self, tribe: dict) -> list:
-        active = []
-        now = datetime.now()
-        for pact in tribe.get("market_pacts", []) or []:
-            if not isinstance(pact, dict):
-                continue
-            active_until = pact.get("activeUntil")
-            if active_until:
-                try:
-                    if datetime.fromisoformat(active_until) <= now:
-                        continue
-                except (TypeError, ValueError):
-                    pass
-            active.append(pact)
-        if len(active) != len(tribe.get("market_pacts", []) or []):
-            tribe["market_pacts"] = active[-TRIBE_MARKET_PACT_LIMIT:]
-        return active[-TRIBE_MARKET_PACT_LIMIT:]
+        return self._active_tribe_items(
+            tribe,
+            "market_pacts",
+            TRIBE_MARKET_PACT_LIMIT
+        )
 
     def _market_pact_between(self, tribe: dict, other_tribe_id: str) -> Optional[dict]:
         if not tribe or not other_tribe_id:
@@ -755,26 +921,20 @@ class GameTribeProgressionMixin:
         if not tribe:
             return []
         now = datetime.now()
-        self._ensure_diplomacy_council_site(tribe, now)
-        active = []
-        for site in tribe.get("diplomacy_council_sites", []) or []:
-            if not isinstance(site, dict) or site.get("status") != "active":
-                continue
-            active_until = site.get("activeUntil")
-            if active_until:
-                try:
-                    if datetime.fromisoformat(active_until) <= now:
-                        site["status"] = "expired"
-                        continue
-                except (TypeError, ValueError):
-                    pass
-            active.append(site)
-        if len(active) != len(tribe.get("diplomacy_council_sites", []) or []):
-            tribe["diplomacy_council_sites"] = [
-                site for site in (tribe.get("diplomacy_council_sites", []) or [])
-                if isinstance(site, dict) and site.get("status") == "active"
-            ][-TRIBE_DIPLOMACY_COUNCIL_LIMIT:]
-        return active[-TRIBE_DIPLOMACY_COUNCIL_LIMIT:]
+        return self._active_tribe_items(
+            tribe,
+            "diplomacy_council_sites",
+            TRIBE_DIPLOMACY_COUNCIL_LIMIT,
+            status="active",
+            mark_expired_status="expired",
+            now=now
+        )
+
+    def _public_diplomacy_council_sites(self, tribe: dict) -> list:
+        if not tribe:
+            return []
+        self._ensure_diplomacy_council_site(tribe, datetime.now())
+        return self._active_diplomacy_council_sites(tribe)
 
     def _remove_market_pact_between(self, tribe: dict, other_tribe_id: str):
         if not tribe or not other_tribe_id:
@@ -1887,6 +2047,14 @@ class GameTribeProgressionMixin:
         reward_parts = []
         site_level = max(1, int(site.get("level", 1) or 1))
         base_yield = 3 + site_level
+        trace_yield_delta, trace_yield_labels = self._map_tile_trace_yield_effect(
+            tribe,
+            float(site.get("x", 0) or 0),
+            float(site.get("z", 0) or 0)
+        )
+        if trace_yield_delta:
+            base_yield = max(1, base_yield + trace_yield_delta)
+            reward_parts.append(f"地块影响{trace_yield_delta:+d}（{'、'.join(trace_yield_labels)}）")
         if int(source_reward.get("wood", 0) or 0):
             amount = base_yield
             storage["wood"] = int(storage.get("wood", 0) or 0) + amount
@@ -1923,6 +2091,7 @@ class GameTribeProgressionMixin:
 
         site["lastYieldAt"] = datetime.now().isoformat()
         site["yieldCount"] = int(site.get("yieldCount", 0) or 0) + 1
+        site["tileTraceCollects"] = int(site.get("tileTraceCollects", 0) or 0) + 1
         upgraded = False
         if site_level < TRIBE_CONTROLLED_SITE_MAX_LEVEL and site["yieldCount"] >= TRIBE_CONTROLLED_SITE_UPGRADE_COLLECTS:
             site["level"] = site_level + 1
@@ -1950,7 +2119,20 @@ class GameTribeProgressionMixin:
             "upgraded": upgraded,
             "createdAt": site["lastYieldAt"]
         }
+        tile_trace = None
+        if site["tileTraceCollects"] >= TRIBE_MAP_TILE_TRACE_RESOURCE_COLLECTS:
+            site["tileTraceCollects"] = 0
+            tile_trace = self._record_map_tile_trace(
+                tribe,
+                "exhausted_grove",
+                float(site.get("x", 0) or 0),
+                float(site.get("z", 0) or 0),
+                f"resource:{site.get('id')}",
+                record["memberName"]
+            )
         detail = f"{record['memberName']} 收取了{record['siteLabel']}的控制收益：{'、'.join(reward_parts)}。"
+        if tile_trace:
+            detail += " 这片地块留下了可整理的枯林痕迹。"
         self._add_tribe_history(tribe, "world_event", "收取控制资源点", detail, player_id, record)
         await self._notify_tribe(tribe_id, detail)
         await self.broadcast_tribe_state(tribe_id)

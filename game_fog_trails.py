@@ -133,6 +133,9 @@ class GameFogTrailMixin:
             labels.append("活路标")
         if tribe.get("oral_map_records"):
             labels.append("口述地图")
+        if hasattr(self, "_forbidden_edge_route_proof_context_support"):
+            _, route_labels, _, _ = self._forbidden_edge_route_proof_context_support(tribe, "fog_trail")
+            labels.extend(route_labels)
         if tribe.get("world_riddle_records"):
             labels.append("谜语旧读")
         return labels[-4:]
@@ -186,6 +189,19 @@ class GameFogTrailMixin:
         if wood_cost:
             reward_parts.insert(0, f"木材-{wood_cost}")
         support_labels = self._fog_trail_support_labels(tribe, action_key)
+        route_proof_reference = None
+        route_proof_guardian = None
+        if hasattr(self, "_record_forbidden_edge_route_proof_reference"):
+            route_proof_reference, route_proof_guardian = self._record_forbidden_edge_route_proof_reference(
+                tribe,
+                "fog_trail",
+                trail.get("label", "雾区探路"),
+                member_name,
+                action.get("label", "探路")
+            )
+            if route_proof_reference:
+                tribe["discovery_progress"] = int(tribe.get("discovery_progress", 0) or 0) + 1
+                reward_parts.append("路证辨路+1")
         memory = None
         if hasattr(self, "_record_map_memory"):
             memory = self._record_map_memory(
@@ -226,11 +242,33 @@ class GameFogTrailMixin:
             "supportLabels": support_labels,
             "rewardParts": reward_parts,
             "mapMemoryId": memory.get("id") if memory else "",
+            "routeProofReference": route_proof_reference,
+            "routeProofGuardian": route_proof_guardian,
             "createdAt": now.isoformat()
         }
+        oral_reference = None
+        oral_lineage = None
+        if hasattr(self, "_record_oral_map_context_reference"):
+            oral_reference, oral_lineage = self._record_oral_map_context_reference(
+                tribe,
+                "fog_trail",
+                trail.get("label", "雾区探路"),
+                member_name,
+                action.get("label", "探路")
+            )
+            record["oralMapReference"] = oral_reference
+            record["oralMapLineage"] = oral_lineage
         tribe.setdefault("fog_trail_records", []).append(record)
         tribe["fog_trail_records"] = tribe["fog_trail_records"][-TRIBE_FOG_TRAIL_RECORD_LIMIT:]
         detail = f"{member_name}在{trail.get('sourceLabel', '雾区')}完成{action.get('label', '雾区探路')}，{'、'.join(reward_parts) or '记住了一段雾中路线'}。"
+        if oral_reference:
+            detail += f" 引用了{oral_reference.get('actionLabel', '口述地图')}。"
+        if oral_reference and oral_reference.get("narratorTitle"):
+            detail += f" {member_name}获得短时“讲路师”称号。"
+        if route_proof_reference:
+            detail += f" 同时引用{route_proof_reference.get('label', '禁地路证')}辨清雾路。"
+        if route_proof_guardian:
+            detail += f" {route_proof_guardian.get('memberName', member_name)}获得短时“路证守护者”称号。"
         self._add_tribe_history(tribe, "exploration", "雾区探路", detail, player_id, {"kind": "fog_trail", "record": record, "trail": trail})
         await self._notify_tribe(tribe_id, detail)
         await self._publish_world_rumor(

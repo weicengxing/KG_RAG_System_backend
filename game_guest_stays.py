@@ -53,6 +53,7 @@ class GameGuestStayMixin:
                 "relationScore": score,
                 "tradeTrust": trust,
                 "marketPact": market_pact,
+                "tribePersonality": self._public_tribe_personality(other) if hasattr(self, "_public_tribe_personality") else None,
                 "summary": f"关系 {score:+d} / 信任 +{trust}" + (" / 互市约定" if market_pact else "")
             })
         return targets
@@ -66,6 +67,7 @@ class GameGuestStayMixin:
             targets.append({
                 "id": tribe_id,
                 "name": tribe.get("name", "部落营地"),
+                "tribePersonality": self._public_tribe_personality(tribe) if hasattr(self, "_public_tribe_personality") else None,
                 "summary": f"{len(tribe.get('members', {}) or {})} 人 / 声望 {int(tribe.get('renown', 0) or 0)}"
             })
         return targets[:TRIBE_GUEST_STAY_WANDERER_TARGET_LIMIT]

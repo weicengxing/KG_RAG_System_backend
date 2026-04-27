@@ -7,53 +7,62 @@ from game_config import *
 class GameTravelerSongMixin:
     def _active_traveler_songs(self, tribe: dict) -> list:
         now = datetime.now()
-        active = []
-        for song in tribe.get("traveler_songs", []) or []:
-            if not isinstance(song, dict) or song.get("status") != "active":
-                continue
-            try:
-                if datetime.fromisoformat(song.get("activeUntil", "")) <= now:
-                    song["status"] = "expired"
-                    song["expiredAt"] = now.isoformat()
-                    continue
-            except (TypeError, ValueError):
-                pass
-            active.append(song)
-        tribe["traveler_songs"] = active[-TRIBE_TRAVELER_SONG_LIMIT:]
-        return tribe["traveler_songs"]
+        return self._active_tribe_items(
+            tribe,
+            "traveler_songs",
+            TRIBE_TRAVELER_SONG_LIMIT,
+            status="active",
+            mark_expired_status="expired",
+            on_expire=lambda song: song.setdefault("expiredAt", now.isoformat()),
+            now=now
+        )
 
     def _active_traveler_song_hints(self, tribe: dict) -> list:
         now = datetime.now()
-        hints = []
-        for hint in tribe.get("traveler_song_hints", []) or []:
-            if not isinstance(hint, dict) or hint.get("status") == "used":
-                continue
-            try:
-                if datetime.fromisoformat(hint.get("activeUntil", "")) <= now:
-                    continue
-            except (TypeError, ValueError):
-                pass
-            hints.append(hint)
-        tribe["traveler_song_hints"] = hints[-TRIBE_TRAVELER_SONG_LIMIT:]
-        return tribe["traveler_song_hints"]
+        return self._active_tribe_items(
+            tribe,
+            "traveler_song_hints",
+            TRIBE_TRAVELER_SONG_LIMIT,
+            inactive_statuses={"used", "expired"},
+            mark_expired_status="expired",
+            on_expire=lambda hint: hint.setdefault("expiredAt", now.isoformat()),
+            now=now
+        )
 
     def _active_traveler_song_tunes(self, tribe: dict) -> list:
         now = datetime.now()
-        tunes = []
-        for tune in tribe.get("traveler_song_tunes", []) or []:
-            if not isinstance(tune, dict) or tune.get("status", "active") != "active":
+        tunes = self._active_tribe_items(
+            tribe,
+            "traveler_song_tunes",
+            TRIBE_TRAVELER_SONG_TUNE_LIMIT,
+            status="active",
+            mark_expired_status="expired",
+            on_expire=lambda tune: tune.setdefault("expiredAt", now.isoformat()),
+            now=now
+        )
+        for tune in tunes:
+            self._active_traveler_tune_lineage_bonus(tune, now)
+            self._active_old_song_adoptions(tune, now)
+        return tunes
+
+    def _active_old_song_adoptions(self, tune: dict, now: datetime | None = None) -> list:
+        now = now or datetime.now()
+        active = []
+        for item in tune.get("oldSongAdoptions", []) or []:
+            if not isinstance(item, dict) or item.get("status", "active") != "active":
                 continue
             try:
-                if datetime.fromisoformat(tune.get("activeUntil", "")) <= now:
-                    tune["status"] = "expired"
-                    tune["expiredAt"] = now.isoformat()
+                if datetime.fromisoformat(item.get("activeUntil", "")) <= now:
+                    item["status"] = "expired"
+                    item["expiredAt"] = now.isoformat()
                     continue
             except (TypeError, ValueError):
-                pass
-            self._active_traveler_tune_lineage_bonus(tune, now)
-            tunes.append(tune)
-        tribe["traveler_song_tunes"] = tunes[-TRIBE_TRAVELER_SONG_TUNE_LIMIT:]
-        return tribe["traveler_song_tunes"]
+                item["status"] = "expired"
+                item["expiredAt"] = now.isoformat()
+                continue
+            active.append(item)
+        tune["oldSongAdoptions"] = active[-TRIBE_OLD_SONG_ADOPTION_LIMIT:]
+        return tune["oldSongAdoptions"]
 
     def _active_traveler_tune_lineage_bonus(self, tune: dict, now: datetime | None = None) -> dict | None:
         bonus = tune.get("lineageBonus")
@@ -67,7 +76,9 @@ class GameTravelerSongMixin:
                     bonus["expiredAt"] = (now or datetime.now()).isoformat()
                     return None
             except (TypeError, ValueError):
-                return bonus
+                bonus["status"] = "expired"
+                bonus["expiredAt"] = (now or datetime.now()).isoformat()
+                return None
         return bonus
 
     def _active_traveler_tune_lineage_bonuses(self, tribe: dict) -> list:
@@ -104,6 +115,10 @@ class GameTravelerSongMixin:
                 item["lineageBonusLabel"] = bonus.get("label", "传唱加成")
                 item["lineageBonusSummary"] = bonus.get("summary", "")
                 item["lineageBonusActiveUntil"] = bonus.get("activeUntil")
+            old_song_adoptions = self._active_old_song_adoptions(tune)
+            if old_song_adoptions:
+                item["oldSongAdoptions"] = old_song_adoptions
+                item["oldSongAdoption"] = old_song_adoptions[-1]
             public.append(item)
         return public
 
@@ -350,6 +365,117 @@ class GameTravelerSongMixin:
             })
         return sources
 
+    def _schedule_old_song_adoption(self, tribe: dict, source_kind: str, source_id: str, source_label: str, summary: str = "", other_tribe_id: str = "") -> dict | None:
+        if not tribe or not source_id:
+            return None
+        tunes = [
+            tune for tune in self._active_traveler_song_tunes(tribe)
+            if self._active_traveler_tune_lineage_bonus(tune)
+        ]
+        if not tunes:
+            return None
+        tune = tunes[-1]
+        adoptions = self._active_old_song_adoptions(tune)
+        dedupe_id = f"{source_kind}:{source_id}"
+        if any(item.get("dedupeId") == dedupe_id for item in adoptions):
+            return None
+        now = datetime.now()
+        adoption = {
+            "id": f"old_song_adoption_{tune.get('id')}_{int(now.timestamp() * 1000)}_{random.randint(100, 999)}",
+            "status": "active",
+            "dedupeId": dedupe_id,
+            "sourceKind": source_kind,
+            "sourceId": source_id,
+            "sourceLabel": source_label or "新近事件",
+            "label": f"{tune.get('styleLabel', '公开曲牌')}采信",
+            "summary": summary or "新近事件正在引用一段已成谱系的旧歌，成员可以决定采信、校订或暂存。",
+            "tuneId": tune.get("id"),
+            "tuneLabel": tune.get("label", "公开曲牌"),
+            "bonusLabel": (tune.get("lineageBonus") or {}).get("label", "传唱加成"),
+            "otherTribeId": other_tribe_id or tune.get("otherTribeId", ""),
+            "otherTribeName": self.tribes.get(other_tribe_id, {}).get("name", "") if other_tribe_id and hasattr(self, "tribes") else tune.get("otherTribeName", ""),
+            "createdAt": now.isoformat(),
+            "activeUntil": datetime.fromtimestamp(now.timestamp() + TRIBE_OLD_SONG_ADOPTION_ACTIVE_MINUTES * 60).isoformat()
+        }
+        tune["oldSongAdoptions"] = [*adoptions, adoption][-TRIBE_OLD_SONG_ADOPTION_LIMIT:]
+        return adoption
+
+    def _relieve_old_song_boundary_pressure(self, tribe: dict, action: dict, reward_parts: list) -> None:
+        pressure_relief = int(action.get("warPressureRelief", 0) or 0)
+        if not pressure_relief:
+            return
+        changed = 0
+        for relation in (tribe.get("boundary_relations", {}) or {}).values():
+            if not isinstance(relation, dict):
+                continue
+            before = int(relation.get("warPressure", 0) or 0)
+            after = max(0, before - pressure_relief)
+            relation["warPressure"] = after
+            relation["canDeclareWar"] = after >= TRIBE_SKIRMISH_WAR_PRESSURE_THRESHOLD
+            if action.get("temperatureTone"):
+                relation["temperatureTone"] = action.get("temperatureTone")
+            changed += before - after
+        if changed and not any(part.startswith("战争压力-") for part in reward_parts):
+            reward_parts.append(f"战争压力-{changed}")
+
+    async def resolve_old_song_adoption(self, player_id: str, tune: dict, action_key: str, action: dict):
+        tribe_id = self.player_tribes.get(player_id)
+        tribe = self.tribes.get(tribe_id)
+        if not tribe:
+            await self._send_tribe_error(player_id, "请先加入一个部落")
+            return
+        adoption = next((item for item in self._active_old_song_adoptions(tune) if item.get("status") == "active"), None)
+        if not adoption:
+            await self._send_tribe_error(player_id, "这段曲牌暂时没有可采信的旧歌任务")
+            return
+        member = tribe.get("members", {}).get(player_id, {})
+        member_name = member.get("name", "成员")
+        now = datetime.now()
+        other_tribe_id = adoption.get("otherTribeId", "") or tune.get("otherTribeId", "")
+        reward_parts = self._traveler_tune_lineage_reward_parts(tribe, {"key": action_key, **action}, other_tribe_id)
+        if not other_tribe_id:
+            self._relieve_old_song_boundary_pressure(tribe, action, reward_parts)
+        adoption["status"] = "resolved"
+        adoption["resolvedAt"] = now.isoformat()
+        adoption["resolvedByName"] = member_name
+        adoption["actionKey"] = action_key
+        adoption["actionLabel"] = action.get("label", "采信")
+        record = {
+            "id": f"old_song_adoption_record_{tribe_id}_{int(now.timestamp() * 1000)}_{random.randint(100, 999)}",
+            "tuneId": tune.get("id"),
+            "tuneLabel": tune.get("label", "公开曲牌"),
+            "styleLabel": tune.get("styleLabel", "旧歌"),
+            "sourceKind": adoption.get("sourceKind"),
+            "sourceId": adoption.get("sourceId"),
+            "sourceLabel": adoption.get("sourceLabel", "新近事件"),
+            "actionKey": action_key,
+            "actionLabel": action.get("label", "采信"),
+            "memberName": member_name,
+            "lineageCount": tune.get("lineageCount", len(tune.get("lineageRefs", []) or [])),
+            "lineageTarget": TRIBE_TRAVELER_TUNE_LINEAGE_TARGET,
+            "bonusLabel": adoption.get("bonusLabel", ""),
+            "bonusSummary": adoption.get("summary", ""),
+            "rewardParts": reward_parts,
+            "oldSongAdoption": True,
+            "createdAt": now.isoformat()
+        }
+        tribe.setdefault("old_song_adoption_records", []).append(record)
+        tribe["old_song_adoption_records"] = tribe["old_song_adoption_records"][-TRIBE_TRAVELER_TUNE_LINEAGE_RECORD_LIMIT:]
+        tribe.setdefault("traveler_tune_lineage_records", []).append(record)
+        tribe["traveler_tune_lineage_records"] = tribe["traveler_tune_lineage_records"][-TRIBE_TRAVELER_TUNE_LINEAGE_RECORD_LIMIT:]
+        detail = f"{member_name}对“{tune.get('label', '公开曲牌')}”选择{action.get('label', '采信')}，用于{adoption.get('sourceLabel', '新近事件')}。"
+        if reward_parts:
+            detail += f" {'、'.join(reward_parts)}。"
+        self._add_tribe_history(tribe, "culture", "旧歌采信", detail, player_id, {"kind": "old_song_adoption", "record": record, "adoption": adoption})
+        await self._publish_world_rumor(
+            "old_song_adoption",
+            "旧歌采信",
+            f"{tribe.get('name', '部落')}把一段公开曲牌用于{adoption.get('sourceLabel', '新近事件')}：{action.get('label', '采信')}。",
+            {"tribeId": tribe_id, "tuneId": tune.get("id"), "sourceKind": adoption.get("sourceKind"), "actionKey": action_key}
+        )
+        await self._notify_tribe(tribe_id, detail)
+        await self.broadcast_tribe_state(tribe_id)
+
     async def reference_traveler_song_tune(self, player_id: str, tune_id: str, action_key: str):
         tribe_id = self.player_tribes.get(player_id)
         tribe = self.tribes.get(tribe_id)
@@ -363,6 +489,9 @@ class GameTravelerSongMixin:
         tune = next((item for item in self._active_traveler_song_tunes(tribe) if item.get("id") == tune_id), None)
         if not tune:
             await self._send_tribe_error(player_id, "这段公开曲牌已经散去")
+            return
+        if action.get("oldSongAdoption"):
+            await self.resolve_old_song_adoption(player_id, tune, action_key, action)
             return
         refs = [item for item in tune.get("lineageRefs", []) or [] if isinstance(item, dict)]
         if any(ref.get("memberId") == player_id and ref.get("actionKey") == action_key for ref in refs):

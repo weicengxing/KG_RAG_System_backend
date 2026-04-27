@@ -351,23 +351,13 @@ class GameConflictMixin:
         return active[-3:]
 
     def _active_small_conflicts(self, tribe: dict) -> list:
-        active = []
-        now = datetime.now()
-        for conflict in tribe.get("small_conflicts", []) or []:
-            if not isinstance(conflict, dict) or conflict.get("status") != "active":
-                continue
-            active_until = conflict.get("activeUntil")
-            if active_until:
-                try:
-                    if datetime.fromisoformat(active_until) < now:
-                        conflict["status"] = "expired"
-                        continue
-                except (TypeError, ValueError):
-                    pass
-            active.append(conflict)
-        if len(active) != len(tribe.get("small_conflicts", []) or []):
-            tribe["small_conflicts"] = active[-TRIBE_SKIRMISH_LIMIT:]
-        return active[-TRIBE_SKIRMISH_LIMIT:]
+        return self._active_tribe_items(
+            tribe,
+            "small_conflicts",
+            TRIBE_SKIRMISH_LIMIT,
+            status="active",
+            mark_expired_status="expired"
+        )
 
     def _public_small_conflicts(self, tribe: dict) -> list:
         tribe_id = tribe.get("id")
@@ -487,139 +477,6 @@ class GameConflictMixin:
         await self.broadcast_tribe_state(tribe_id)
         await self.broadcast_tribe_state(other_tribe_id)
 
-    async def start_small_conflict(self, player_id: str, outcome_id: str):
-        tribe_id = self.player_tribes.get(player_id)
-        tribe = self.tribes.get(tribe_id)
-        if not tribe:
-            await self._send_tribe_error(player_id, "请先加入一个部落")
-            return
-        outcome = next((
-            item for item in tribe.get("boundary_outcomes", []) or []
-            if isinstance(item, dict)
-            and item.get("id") == outcome_id
-            and item.get("status") == "pending"
-        ), None)
-        if not outcome:
-            await self._send_tribe_error(player_id, "只能围绕待处理的边境争端发起小规模冲突")
-            return
-        if outcome.get("kind") != "resource_site_contest" and outcome.get("state") != "hostile":
-            await self._send_tribe_error(player_id, "只有资源点争执或敌意边境可以升级为小规模冲突")
-            return
-        other_tribe_id = outcome.get("otherTribeId")
-        other_tribe = self.tribes.get(other_tribe_id)
-        if not other_tribe:
-            await self._send_tribe_error(player_id, "对方部落已经不在这片边境")
-            return
-
-        if outcome.get("kind") == "resource_site_contest":
-            own_target = self._small_conflict_scout_site(tribe, outcome.get("siteId"))
-            other_target = self._small_conflict_scout_site(other_tribe, outcome.get("otherSiteId") or outcome.get("contestSiteId"))
-            if not own_target:
-                await self._send_tribe_error(player_id, "这处争夺资源点已经失效，无法继续集结")
-                return
-            target_kind = "resource_site"
-            title = "资源点集结争夺"
-            site_label = outcome.get("siteLabel") or outcome.get("title", "资源点")
-            summary = f"围绕 {site_label} 的短时争夺已经开始，成员可报名参战。"
-            own_target_id = outcome.get("siteId")
-            other_target_id = outcome.get("otherSiteId") or outcome.get("contestSiteId")
-        elif outcome.get("kind") == "war_goal_echo":
-            echo_target_kind = outcome.get("targetKind") or "boundary_flag"
-            if echo_target_kind == "cave_entrance":
-                own_target = self._small_conflict_cave_target(tribe, other_tribe, outcome)
-                other_target = self._small_conflict_cave_target(other_tribe, tribe, outcome) if own_target else None
-            else:
-                own_target = self._small_conflict_boundary_target(tribe, other_tribe, outcome)
-                other_target = self._small_conflict_boundary_target(other_tribe, tribe, outcome)
-            if not own_target:
-                await self._send_tribe_error(player_id, "需要靠近可争夺的边境目标，才能引燃战争余震")
-                return
-            target_kind = echo_target_kind
-            title = outcome.get("echoLabel") or outcome.get("title") or "战争余波集结"
-            site_label = own_target.get("label") or outcome.get("title", "战争余波")
-            summary = outcome.get("summary") or f"{site_label} 的战后余波升级为短时集结。"
-            own_target_id = own_target.get("id")
-            other_target_id = (other_target or own_target).get("id")
-            outcome["targetId"] = own_target_id
-        else:
-            own_target = self._small_conflict_boundary_target(tribe, other_tribe, outcome)
-            other_target = self._small_conflict_boundary_target(other_tribe, tribe, outcome)
-            if not own_target:
-                await self._send_tribe_error(player_id, "需要先在这条敌意边境插下旗帜，才能发起集结")
-                return
-            target_kind = own_target.get("kind", "boundary_flag")
-            title = "道路集结争夺" if target_kind == "boundary_road" else "旗帜集结争夺"
-            site_label = own_target.get("label") or outcome.get("title", "边境")
-            summary = f"{site_label} 的边境争执升级为短时集结，双方成员需要靠近己方目标参战。"
-            own_target_id = own_target.get("id")
-            other_target_id = (other_target or {}).get("id")
-            outcome["targetId"] = own_target_id
-
-        duplicate = self._small_conflict_duplicate(tribe, other_tribe, outcome)
-        if duplicate:
-            await self._send_tribe_error(player_id, "这场边境争端已经进入集结")
-            return
-
-        now_text = datetime.now().isoformat()
-        active_until = datetime.fromtimestamp(datetime.now().timestamp() + TRIBE_SKIRMISH_ACTIVE_MINUTES * 60).isoformat()
-        conflict_id = f"skirmish_{int(datetime.now().timestamp() * 1000)}_{random.randint(100, 999)}"
-        base = {
-            "id": conflict_id,
-            "kind": target_kind,
-            "targetKind": target_kind,
-            "status": "active",
-            "outcomeId": outcome_id,
-            "siteId": own_target_id,
-            "otherSiteId": other_target_id,
-            "x": float(own_target.get("x", 0) or 0),
-            "z": float(own_target.get("z", 0) or 0),
-            "siteLabel": site_label,
-            "title": title,
-            "summary": summary,
-            "scoreTarget": max(3, TRIBE_SKIRMISH_SCORE_TARGET - 1) if outcome.get("kind") == "war_goal_echo" else TRIBE_SKIRMISH_SCORE_TARGET,
-            "warGoalKind": outcome.get("warGoalKind"),
-            "echoLabel": outcome.get("echoLabel"),
-            "echoContributionBonus": int(outcome.get("echoContributionBonus", 0) or 0),
-            "scores": {tribe_id: 0, other_tribe_id: 0},
-            "participants": {},
-            "createdBy": player_id,
-            "createdAt": now_text,
-            "activeUntil": active_until
-        }
-        own_record = {
-            **base,
-            "tribeId": tribe_id,
-            "targetSiteId": own_target_id if target_kind == "resource_site" else None,
-            "targetFlagId": own_target.get("flagId") if target_kind == "boundary_flag" else None,
-            "targetRoadId": own_target_id if target_kind == "boundary_road" else None,
-            "otherTribeId": other_tribe_id,
-            "otherTribeName": other_tribe.get("name", "其他部落")
-        }
-        other_record = {
-            **base,
-            "tribeId": other_tribe_id,
-            "targetSiteId": other_target_id if target_kind == "resource_site" else None,
-            "targetFlagId": (other_target or {}).get("flagId") if target_kind == "boundary_flag" else None,
-            "targetRoadId": other_target_id if target_kind == "boundary_road" else None,
-            "siteId": other_target_id,
-            "otherSiteId": own_target_id,
-            "x": float((other_target or own_target).get("x", own_target.get("x", 0)) or 0),
-            "z": float((other_target or own_target).get("z", own_target.get("z", 0)) or 0),
-            "otherTribeId": tribe_id,
-            "otherTribeName": tribe.get("name", "其他部落")
-        }
-        tribe.setdefault("small_conflicts", []).append(own_record)
-        tribe["small_conflicts"] = tribe["small_conflicts"][-TRIBE_SKIRMISH_LIMIT:]
-        other_tribe.setdefault("small_conflicts", []).append(other_record)
-        other_tribe["small_conflicts"] = other_tribe["small_conflicts"][-TRIBE_SKIRMISH_LIMIT:]
-
-        member = tribe.get("members", {}).get(player_id, {})
-        detail = f"{member.get('name', '成员')} 将 {site_label} 升级为小规模集结，双方成员可以报名参战。"
-        self._add_tribe_history(tribe, "governance", "发起小规模冲突", detail, player_id, {"kind": "small_conflict", "conflictId": conflict_id, "targetKind": target_kind})
-        await self._notify_tribe(tribe_id, detail)
-        await self._notify_tribe(other_tribe_id, f"{tribe.get('name', '其他部落')} 在边境发起小规模集结，你们可以报名回应。")
-        await self.broadcast_tribe_state(tribe_id)
-        await self.broadcast_tribe_state(other_tribe_id)
 
     async def join_small_conflict(self, player_id: str, conflict_id: str):
         tribe_id = self.player_tribes.get(player_id)
@@ -689,92 +546,6 @@ class GameConflictMixin:
         await self.broadcast_tribe_state(conflict.get("tribeId"))
         await self.broadcast_tribe_state(conflict.get("otherTribeId"))
 
-    async def resolve_small_conflict(self, player_id: str, conflict_id: str):
-        tribe, conflict, other_tribe, other_conflict = self._find_small_conflict_pair(conflict_id)
-        if not conflict or conflict.get("status") != "active":
-            await self._send_tribe_error(player_id, "这场小规模冲突已经结束")
-            return
-        scores = dict(conflict.get("scores") or {})
-        tribe_id = conflict.get("tribeId")
-        other_tribe_id = conflict.get("otherTribeId")
-        own_score = int(scores.get(tribe_id, 0) or 0)
-        other_score = int(scores.get(other_tribe_id, 0) or 0)
-        winner_id = tribe_id if own_score >= other_score else other_tribe_id
-        loser_id = other_tribe_id if winner_id == tribe_id else tribe_id
-        winner = self.tribes.get(winner_id)
-        loser = self.tribes.get(loser_id)
-        side_records = {
-            item.get("tribeId"): item
-            for item in (conflict, other_conflict)
-            if isinstance(item, dict) and item.get("tribeId")
-        }
-        now_text = datetime.now().isoformat()
-        for item in (conflict, other_conflict):
-            if item:
-                item["status"] = "resolved"
-                item["winnerTribeId"] = winner_id
-                item["resolvedAt"] = now_text
-        if winner and winner_record.get("targetKind") in {"boundary_flag", "boundary_road"}:
-            site_result_parts.extend(self._apply_small_conflict_boundary_result(winner, loser, winner_record))
-        elif winner:
-            winner["renown"] = int(winner.get("renown", 0) or 0) + TRIBE_SKIRMISH_RENOWN_REWARD
-            winner["food"] = int(winner.get("food", 0) or 0) + TRIBE_SKIRMISH_FOOD_REWARD
-        if loser and winner_record.get("targetKind") not in {"boundary_flag", "boundary_road"}:
-            progress = loser.setdefault("boundary_relations", {}).setdefault(winner_id, {})
-            progress["score"] = max(-9, int(progress.get("score", 0) or 0) - 1)
-            progress["lastAction"] = "small_conflict_lost"
-            progress["lastActionAt"] = now_text
-        if winner:
-            progress = winner.setdefault("boundary_relations", {}).setdefault(loser_id, {})
-            progress["score"] = max(-9, int(progress.get("score", 0) or 0) - 1)
-            progress["lastAction"] = "small_conflict_won"
-            progress["lastActionAt"] = now_text
-        detail = f"{winner.get('name', '部落') if winner else '一方'} 在 {conflict.get('siteLabel', '资源点')} 的小规模冲突中占上风，获得声望和补给。"
-        site_result_parts = []
-        winner_record = side_records.get(winner_id) or conflict
-        loser_record = side_records.get(loser_id) or other_conflict or conflict
-        if winner:
-            promoted = self._promote_small_conflict_winner_site(
-                winner,
-                winner_record.get("targetSiteId") or winner_record.get("siteId"),
-                player_id,
-                now_text
-            )
-            site_result_parts.append("胜方获得短期控制点" if promoted else "胜方控制时间延长")
-        if loser:
-            ceded = self._cede_small_conflict_loser_site(
-                loser,
-                loser_record.get("targetSiteId") or loser_record.get("siteId")
-            )
-            if ceded:
-                site_result_parts.append("败方让渡相关资源点")
-        site_ids = {
-            conflict.get("siteId"),
-            conflict.get("otherSiteId"),
-            conflict.get("targetSiteId"),
-            conflict.get("targetFlagId"),
-            conflict.get("targetRoadId"),
-            (other_conflict or {}).get("siteId"),
-            (other_conflict or {}).get("otherSiteId"),
-            (other_conflict or {}).get("targetSiteId"),
-            (other_conflict or {}).get("targetFlagId"),
-            (other_conflict or {}).get("targetRoadId")
-        }
-        site_ids = {item for item in site_ids if item}
-        if winner:
-            self._mark_small_conflict_outcomes(winner, loser_id, site_ids, now_text)
-        if loser:
-            self._mark_small_conflict_outcomes(loser, winner_id, site_ids, now_text)
-        if site_result_parts:
-            detail += " " + "，".join(site_result_parts) + "。"
-
-        for target_id in {tribe_id, other_tribe_id}:
-            target = self.tribes.get(target_id)
-            if target:
-                self._add_tribe_history(target, "governance", "小规模冲突结算", detail, player_id, {"kind": "small_conflict", "conflictId": conflict_id, "winnerTribeId": winner_id})
-                await self._notify_tribe(target_id, detail)
-                await self.broadcast_tribe_state(target_id)
-        await self._broadcast_current_map()
 
     def _active_formal_wars(self, tribe: dict) -> list:
         return [
@@ -1282,80 +1053,6 @@ class GameConflictMixin:
             for item in (tribe.get("camp", {}).get("buildings", []) or [])
         )
 
-    def _create_war_revival_branch_tasks(self, tribe: dict, task: dict, now_text: str):
-        other_tribe_id = task.get("otherTribeId")
-        other_name = task.get("otherTribeName", "其他部落")
-        branch_group = f"revival_branch_{task.get('warId')}_{tribe.get('id')}"
-        goal_profile = self._war_goal_followup_profile(task)
-        has_storage = self._tribe_has_building_type(tribe, "tribe_storage")
-        has_road = self._tribe_has_building_type(tribe, "tribe_road")
-        has_fence = self._tribe_has_building_type(tribe, "tribe_fence")
-        has_flag = bool(tribe.get("territory_flags"))
-        granary_food = TRIBE_WAR_REVIVAL_BRANCH_FOOD_REWARD + (TRIBE_WAR_REVIVAL_STORAGE_FOOD_BONUS if has_storage else 0) + int(goal_profile.get("granaryFoodBonus", 0) or 0)
-        granary_trade = TRIBE_WAR_REVIVAL_BRANCH_TRADE_REWARD + (TRIBE_WAR_REVIVAL_ROAD_TRADE_BONUS if has_road else 0) + int(goal_profile.get("granaryTradeBonus", 0) or 0)
-        oath_renown = TRIBE_WAR_REVIVAL_BRANCH_OATH_RENOWN + (TRIBE_WAR_REVIVAL_FLAG_RENOWN_BONUS if has_flag else 0) + int(goal_profile.get("oathRenownBonus", 0) or 0)
-        oath_relief = 1 + (TRIBE_WAR_REVIVAL_FENCE_FATIGUE_BONUS if has_fence else 0)
-        granary_bonus = []
-        if has_storage:
-            granary_bonus.append(f"仓库食物+{TRIBE_WAR_REVIVAL_STORAGE_FOOD_BONUS}")
-        if has_road:
-            granary_bonus.append(f"道路贸易+{TRIBE_WAR_REVIVAL_ROAD_TRADE_BONUS}")
-        if int(goal_profile.get("granaryFoodBonus", 0) or 0):
-            granary_bonus.append(f"{goal_profile.get('goalLabel')}食物+{goal_profile.get('granaryFoodBonus')}")
-        if int(goal_profile.get("granaryTradeBonus", 0) or 0):
-            granary_bonus.append(f"{goal_profile.get('goalLabel')}贸易+{goal_profile.get('granaryTradeBonus')}")
-        oath_bonus = []
-        if has_flag:
-            oath_bonus.append(f"旗帜声望+{TRIBE_WAR_REVIVAL_FLAG_RENOWN_BONUS}")
-        if has_fence:
-            oath_bonus.append(f"围栏战疲缓解+{TRIBE_WAR_REVIVAL_FENCE_FATIGUE_BONUS}")
-        if int(goal_profile.get("oathRenownBonus", 0) or 0):
-            oath_bonus.append(f"{goal_profile.get('goalLabel')}声望+{goal_profile.get('oathRenownBonus')}")
-        branches = [
-            {
-                "id": f"{branch_group}_granary",
-                "status": "pending",
-                "branchKind": "granary",
-                "branchGroup": branch_group,
-                "otherTribeId": other_tribe_id,
-                "otherTribeName": other_name,
-                "title": "粮仓复兴",
-                "summary": f"把与 {other_name} 战后散乱的粮线重新收拢，优先恢复食物和贸易信誉。",
-                "foodCost": 0,
-                "woodCost": TRIBE_WAR_REVIVAL_WOOD_COST,
-                "renownReward": 1,
-                "fatigueRelief": 0,
-                "foodReward": granary_food,
-                "tradeReward": granary_trade,
-                "buildingBonusLabel": "、".join(granary_bonus),
-                "warId": task.get("warId"),
-                "createdAt": now_text
-            },
-            {
-                "id": f"{branch_group}_oath",
-                "status": "pending",
-                "branchKind": "oath",
-                "branchGroup": branch_group,
-                "otherTribeId": other_tribe_id,
-                "otherTribeName": other_name,
-                "title": "重立战誓",
-                "summary": f"召集族人重述与 {other_name} 一战的教训，优先恢复声望并保留反击意志。",
-                "foodCost": TRIBE_WAR_REVIVAL_FOOD_COST // 2,
-                "woodCost": 0,
-                "renownReward": oath_renown,
-                "fatigueRelief": oath_relief,
-                "warPressure": TRIBE_WAR_REVIVAL_BRANCH_PRESSURE,
-                "buildingBonusLabel": "、".join(oath_bonus),
-                "warId": task.get("warId"),
-                "createdAt": now_text
-            }
-        ]
-        existing = [
-            item for item in (tribe.get("war_revival_tasks", []) or [])
-            if not (isinstance(item, dict) and item.get("branchGroup") == branch_group)
-        ]
-        existing.extend(branches)
-        tribe["war_revival_tasks"] = existing[-6:]
 
     def _create_war_revival_branch_tasks(self, tribe: dict, task: dict, now_text: str):
         other_tribe_id = task.get("otherTribeId")
@@ -1454,6 +1151,7 @@ class GameConflictMixin:
             "truce": "主动停战",
             "mediated": "调停停战"
         }
+        goal_profile = self._war_goal_followup_profile(war)
         for source_id, target_id in ((tribe_id, other_tribe_id), (other_tribe_id, tribe_id)):
             source = self.tribes.get(source_id)
             target = self.tribes.get(target_id)
@@ -2352,6 +2050,31 @@ class GameConflictMixin:
             summary = f"围绕 {site_label} 的短时争夺已经开始，成员可报名参战。"
             own_target_id = outcome.get("siteId")
             other_target_id = outcome.get("otherSiteId") or outcome.get("contestSiteId")
+        elif outcome.get("kind") == "war_goal_echo":
+            echo_target_kind = outcome.get("targetKind") or "boundary_flag"
+            if echo_target_kind == "cave_entrance":
+                own_target = self._small_conflict_cave_target(tribe, other_tribe, outcome)
+                other_target = self._small_conflict_cave_target(other_tribe, tribe, outcome) if own_target else None
+            elif echo_target_kind == "resource_site":
+                own_target = self._small_conflict_scout_site(tribe, outcome.get("siteId"))
+                other_target = self._small_conflict_scout_site(other_tribe, outcome.get("otherSiteId") or outcome.get("contestSiteId")) if own_target else None
+            else:
+                own_target = self._small_conflict_boundary_target(tribe, other_tribe, outcome)
+                other_target = self._small_conflict_boundary_target(other_tribe, tribe, outcome)
+            if not own_target:
+                await self._send_tribe_error(player_id, "需要靠近可争夺的边境目标，才能引燃战争余震")
+                return
+            target_kind = echo_target_kind
+            title = outcome.get("echoLabel") or outcome.get("title") or "战争余波集结"
+            site_label = own_target.get("label") or outcome.get("title", "战争余波")
+            summary = outcome.get("summary") or f"{site_label} 的战后余波升级为短时集结。"
+            own_target_id = own_target.get("id")
+            other_target_id = (other_target or own_target).get("id")
+            outcome["targetId"] = own_target_id
+            if target_kind == "cave_entrance":
+                own_target_id = own_target.get("id")
+                other_target_id = (other_target or own_target).get("id")
+                outcome["caveId"] = own_target_id
         else:
             own_target = self._small_conflict_cave_target(tribe, other_tribe, outcome)
             other_target = self._small_conflict_cave_target(other_tribe, tribe, outcome) if own_target else None
@@ -2399,7 +2122,10 @@ class GameConflictMixin:
             "siteLabel": site_label,
             "title": title,
             "summary": summary,
-            "scoreTarget": TRIBE_SKIRMISH_SCORE_TARGET,
+            "scoreTarget": max(3, TRIBE_SKIRMISH_SCORE_TARGET - 1) if outcome.get("kind") == "war_goal_echo" else TRIBE_SKIRMISH_SCORE_TARGET,
+            "warGoalKind": outcome.get("warGoalKind"),
+            "echoLabel": outcome.get("echoLabel"),
+            "echoContributionBonus": int(outcome.get("echoContributionBonus", 0) or 0),
             "scores": {tribe_id: 0, other_tribe_id: 0},
             "participants": {},
             "createdBy": player_id,
@@ -2528,6 +2254,19 @@ class GameConflictMixin:
         if loser:
             self._mark_small_conflict_outcomes(loser, winner_id, site_ids, now_text)
         self._record_small_conflict_war_pressure(winner_id, loser_id, winner_record, now_text)
+        if hasattr(self, "_record_map_tile_trace"):
+            for target_id in {tribe_id, other_tribe_id}:
+                target = self.tribes.get(target_id)
+                if target:
+                    self._record_map_tile_trace(
+                        target,
+                        "old_battlefield",
+                        float((side_records.get(target_id) or conflict).get("x", conflict.get("x", 0)) or 0),
+                        float((side_records.get(target_id) or conflict).get("z", conflict.get("z", 0)) or 0),
+                        f"small_conflict:{conflict_id}:{target_id}",
+                        winner.get("name", "部落") if winner else "部落",
+                        label=f"{conflict.get('siteLabel', '争夺点')}旧战场"
+                    )
 
         detail = f"{winner.get('name', '部落') if winner else '一方'} 在 {conflict.get('siteLabel', '争夺点')} 的小规模冲突中占上风，获得声望。"
         if site_result_parts:

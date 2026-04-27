@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import List, Optional
 from datetime import datetime
 import database
-from utils import decode_token_with_exp
+from utils import decode_token_with_exp, extract_user_info_from_payload
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, HTTPException, Depends, status, UploadFile, File, Header
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -1032,6 +1032,8 @@ async def get_current_user_id(authorization: str = Header(None)) -> str:
     """从 Header 获取 Token 并解析出 user_id"""
     if not authorization:
         raise HTTPException(status_code=401, detail="Missing Token")
+    if db is None:
+        raise HTTPException(status_code=503, detail="Database not initialized")
 
     token = authorization.split(" ")[1] if " " in authorization else authorization
     payload, is_expired, error = decode_token_with_exp(token)
@@ -1039,15 +1041,31 @@ async def get_current_user_id(authorization: str = Header(None)) -> str:
     if not payload or is_expired:
         raise HTTPException(status_code=401, detail="Token invalid or expired")
 
-    username = payload.get("username") or payload.get("sub")
+    user_id, username = extract_user_info_from_payload(payload)
+    if user_id:
+        user_id = str(user_id)
+        try:
+            if database.get_user_by_id(user_id):
+                return user_id
+        except Exception as exc:
+            logger.warning(f"Neo4j 用户校验失败，回退 Mongo 用户副本: {exc}")
+        mongo_user = await db.users.find_one({"_id": user_id})
+        if mongo_user:
+            return user_id
+
     if not username:
         raise HTTPException(status_code=401, detail="Invalid token payload")
 
-    # 从 MongoDB 查询用户获取 _id
+    try:
+        neo_user = database.get_user(username)
+        if neo_user and neo_user.get("id"):
+            return str(neo_user["id"])
+    except Exception as exc:
+        logger.warning(f"Neo4j 用户名查询失败，回退 Mongo 用户副本: {exc}")
+
     user = await db.users.find_one({"username": username})
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-
     return str(user["_id"])
 
 # ==================== API 接口 ====================

@@ -166,12 +166,20 @@ class ChangePasswordSchema(BaseModel):
     password_strength: int = 2
 
 # CORS 配置保持不变...
-origins = ["http://localhost:5173", "http://localhost:8080" ,"https://kg-rag-system-frontend.pages.dev"]
+origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5174",
+    "http://localhost:8080",
+    "http://127.0.0.1:8080",
+    "https://kg-rag-system-frontend.pages.dev",
+]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
     allow_credentials=True,
-    allow_origin_regex=r"https://systemfrontend.*\.cool",
+    allow_origin_regex=r"^(https://systemfrontend.*\.cool|http://(localhost|127\.0\.0\.1):\d+)$",
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -439,6 +447,10 @@ app.include_router(pvz_router, prefix="/api", tags=["植物大战僵尸"])
 # 注册植物大战僵尸多人对战路由
 from routes.pvz_multiplayer import router as pvz_multiplayer_router
 app.include_router(pvz_multiplayer_router, prefix="/api", tags=["植物大战僵尸多人对战"])
+
+# 注册双人格斗路由
+from routes.duel_fighter import router as duel_fighter_router
+app.include_router(duel_fighter_router, prefix="/api", tags=["双人格斗"])
 # 定义请求体模型
 class UserAuth(BaseModel):
     username: str
@@ -608,6 +620,65 @@ async def create_mongo_user(user_id: str, username: str, email: str):
         "status": "online",
         "created_at": time.time()
     })
+
+
+async def sync_mongo_user_profile(user_id: str, profile_data: dict):
+    """把 Neo4j 用户资料的关键展示字段同步到 Mongo 聊天用户副本。"""
+    if not user_id or db_manager.db is None:
+        return
+
+    update = {"updated_at": time.time()}
+    for key in ("username", "email", "avatar"):
+        value = profile_data.get(key)
+        if value is not None:
+            update[key] = value
+
+    try:
+        await db_manager.db.users.update_one(
+            {"_id": str(user_id)},
+            {"$set": update}
+        )
+    except Exception as e:
+        logger.warning(f"同步 Mongo 用户副本失败: user_id={user_id}, error={e}")
+
+
+async def save_profile_update_payload(data: ProfileUpdateSchema, request: Request) -> dict:
+    """统一处理个人资料保存，避免两个兼容接口各自维护一份逻辑。"""
+    current_username = getattr(request.state, "current_user", None)
+    if not current_username:
+        raise HTTPException(status_code=401, detail="未认证")
+
+    if data.username != current_username:
+        existing = database.get_user(data.username)
+        if existing:
+            raise HTTPException(status_code=400, detail="该用户名已被占用")
+
+    current_user_id = getattr(request.state, "current_user_id", None)
+    if not current_user_id:
+        current_user = database.get_user(current_username)
+        current_user_id = current_user.get("id") if current_user else None
+
+    success, updated_user_or_msg = await db_async_manager.submit_profile_update(
+        current_username, data.dict()
+    )
+    if not success:
+        raise HTTPException(status_code=400, detail=updated_user_or_msg or "保存失败，请稍后重试")
+
+    updated_user = updated_user_or_msg
+    if current_user_id:
+        await sync_mongo_user_profile(str(current_user_id), updated_user)
+
+    profile_completion = calc_profile_completion(updated_user)
+    return {
+        "message": "保存成功",
+        "username": updated_user.get("username"),
+        "email": updated_user.get("email"),
+        "job_title": updated_user.get("job_title", ""),
+        "website": updated_user.get("website", ""),
+        "bio": updated_user.get("bio", ""),
+        "avatar": updated_user.get("avatar", ""),
+        "profile_completion": profile_completion
+    }
 
 
 @app.post("/auth/forgot-password/send-code")
@@ -1068,6 +1139,16 @@ async def upload_avatar(request: Request, file: UploadFile = File(...)):
 
     if not success:
         raise HTTPException(status_code=500, detail="更新头像信息失败")
+
+    current_user_id = getattr(request.state, "current_user_id", None)
+    if not current_user_id:
+        db_user = database.get_user(username)
+        current_user_id = db_user.get("id") if db_user else None
+    if current_user_id:
+        await sync_mongo_user_profile(str(current_user_id), {
+            "username": username,
+            "avatar": unique_filename
+        })
     
     return {"avatar": unique_filename, "message": "头像上传成功"}
 
@@ -1120,69 +1201,12 @@ def delete_account(request: Request):
 @app.put("/auth/update-profile")
 async def update_profile(data: ProfileUpdateSchema, request: Request):
     """保存更改：更新个人资料"""
-    current_username = getattr(request.state, "current_user", None)
-    if not current_username:
-        raise HTTPException(status_code=401, detail="未认证")
-
-    # 简单校验：如果改了用户名，检查新用户名是否已存在
-    if data.username != current_username:
-        existing = database.get_user(data.username)
-        if existing:
-            raise HTTPException(status_code=400, detail="该用户名已被占用")
-
-    success, updated_user_or_msg = await db_async_manager.submit_profile_update(
-        current_username, data.dict()
-    )
-    if not success:
-        raise HTTPException(status_code=400, detail=updated_user_or_msg or "保存失败，请稍后重试")
-
-    updated_user = updated_user_or_msg
-    profile_completion = calc_profile_completion(updated_user)
-    
-    # 返回更新后的数据，前端会用这个更新 Store
-    return {
-        "message": "保存成功",
-        "username": updated_user.get("username"),
-        "email": updated_user.get("email"),
-        "job_title": updated_user.get("job_title", ""),
-        "website": updated_user.get("website", ""),
-        "bio": updated_user.get("bio", ""),
-        "avatar": updated_user.get("avatar", ""),
-        "profile_completion": profile_completion
-    }
+    return await save_profile_update_payload(data, request)
 
 @app.post("/auth/save-profile")
 async def save_profile(data: ProfileUpdateSchema, request: Request):
     """新接口：保存用户在资料页的编辑信息"""
-    current_username = getattr(request.state, "current_user", None)
-    if not current_username:
-        raise HTTPException(status_code=401, detail="未认证")
-
-    # 允许用户名修改，但需要唯一性校验
-    if data.username != current_username:
-        existing = database.get_user(data.username)
-        if existing:
-            raise HTTPException(status_code=400, detail="该用户名已被占用")
-
-    success, updated_user_or_msg = await db_async_manager.submit_profile_update(
-        current_username, data.dict()
-    )
-    if not success:
-        raise HTTPException(status_code=400, detail=updated_user_or_msg or "保存失败，请稍后重试")
-
-    updated_user = updated_user_or_msg
-    profile_completion = calc_profile_completion(updated_user)
-
-    return {
-        "message": "保存成功",
-        "username": updated_user.get("username"),
-        "email": updated_user.get("email"),
-        "job_title": updated_user.get("job_title", ""),
-        "website": updated_user.get("website", ""),
-        "bio": updated_user.get("bio", ""),
-        "avatar": updated_user.get("avatar", ""),
-        "profile_completion": profile_completion
-    }
+    return await save_profile_update_payload(data, request)
 
 @app.on_event("startup")
 async def startup():

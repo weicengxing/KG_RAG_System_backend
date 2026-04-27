@@ -1,9 +1,10 @@
 import asyncio
+import json
 import logging
 import math
 import random
 from datetime import datetime
-from typing import List, Optional
+from typing import Callable, List, Optional, Set
 
 from game_config import *
 
@@ -11,6 +12,229 @@ logger = logging.getLogger("game_server")
 
 
 class GameWorldLogicMixin:
+    def _active_tribe_item(
+        self,
+        tribe: dict,
+        field: str,
+        *,
+        status: Optional[str] = "active",
+        mark_expired_status: Optional[str] = "expired",
+        on_expire: Optional[Callable[[dict], None]] = None,
+        now: Optional[datetime] = None
+    ) -> Optional[dict]:
+        if not tribe:
+            return None
+        item = tribe.get(field)
+        if not isinstance(item, dict):
+            return None
+        if status is not None and item.get("status") != status:
+            return None
+
+        now = now or datetime.now()
+        active_until = item.get("activeUntil")
+        if active_until:
+            try:
+                if datetime.fromisoformat(active_until) <= now:
+                    if mark_expired_status:
+                        item["status"] = mark_expired_status
+                    item["expiredAt"] = now.isoformat()
+                    if on_expire:
+                        on_expire(item)
+                    return None
+            except (TypeError, ValueError):
+                if mark_expired_status:
+                    item["status"] = mark_expired_status
+                item["expiredAt"] = now.isoformat()
+                if on_expire:
+                    on_expire(item)
+                return None
+        return item
+
+    def _active_tribe_items(
+        self,
+        tribe: dict,
+        field: str,
+        limit: Optional[int] = None,
+        *,
+        status: Optional[str] = None,
+        inactive_statuses: Optional[Set[str]] = None,
+        mark_expired_status: Optional[str] = None,
+        on_expire: Optional[Callable[[dict], None]] = None,
+        now: Optional[datetime] = None
+    ) -> List[dict]:
+        if not tribe:
+            return []
+
+        items = tribe.get(field, []) or []
+        if not isinstance(items, list):
+            tribe[field] = []
+            return []
+
+        now = now or datetime.now()
+        inactive_statuses = inactive_statuses or set()
+        active: List[dict] = []
+        changed = False
+
+        for item in items:
+            if not isinstance(item, dict):
+                changed = True
+                continue
+            if status is not None and item.get("status") != status:
+                changed = True
+                continue
+            if item.get("status") in inactive_statuses:
+                changed = True
+                continue
+
+            active_until = item.get("activeUntil")
+            if active_until:
+                try:
+                    if datetime.fromisoformat(active_until) <= now:
+                        if mark_expired_status:
+                            item["status"] = mark_expired_status
+                            item["expiredAt"] = now.isoformat()
+                        if on_expire:
+                            on_expire(item)
+                        changed = True
+                        continue
+                except (TypeError, ValueError):
+                    if mark_expired_status:
+                        item["status"] = mark_expired_status
+                        item["expiredAt"] = now.isoformat()
+                    if on_expire:
+                        on_expire(item)
+                    changed = True
+                    continue
+            active.append(item)
+
+        if limit is not None:
+            active = active[-limit:]
+        if changed or len(active) != len(items):
+            tribe[field] = list(active)
+        return active
+
+    def _format_reward_delta(self, label: str, amount: int, prefix: str = "") -> str:
+        sign = "+" if amount >= 0 else ""
+        return f"{prefix}{label}{sign}{amount}"
+
+    def _apply_tribe_reward(
+        self,
+        tribe: dict,
+        reward: dict,
+        *,
+        prefix: str = "",
+        labels: Optional[dict] = None
+    ) -> List[str]:
+        if not tribe or not reward:
+            return []
+
+        labels = labels or {}
+        parts: List[str] = []
+        storage = tribe.setdefault("storage", {"wood": 0, "stone": 0})
+        for key, label in (("wood", labels.get("wood", "木材")), ("stone", labels.get("stone", "石块"))):
+            amount = int((reward or {}).get(key, 0) or 0)
+            if amount:
+                storage[key] = max(0, int(storage.get(key, 0) or 0) + amount)
+                parts.append(self._format_reward_delta(label, amount, prefix))
+
+        for key, label, tribe_key in (
+            ("food", labels.get("food", "食物"), "food"),
+            ("renown", labels.get("renown", "声望"), "renown"),
+            ("discoveryProgress", labels.get("discoveryProgress", "发现"), "discovery_progress"),
+            ("tradeReputation", labels.get("tradeReputation", "贸易信誉"), "trade_reputation")
+        ):
+            amount = int((reward or {}).get(key, 0) or 0)
+            if amount:
+                current = int(tribe.get(tribe_key, 0) or 0)
+                tribe[tribe_key] = max(0, current + amount) if amount < 0 else current + amount
+                parts.append(self._format_reward_delta(label, amount, prefix))
+        return parts
+
+    def _tribe_map_marker_position(self, center: dict, slot: int, radius: float = 7.5):
+        angle = (slot * 2.399963229728653) % math.tau
+        x = float(center.get("x", 0) or 0) + math.cos(angle) * radius
+        z = float(center.get("z", 0) or 0) + math.sin(angle) * radius
+        return max(-490, min(490, x)), max(-490, min(490, z))
+
+    def _cleanup_tribe_runtime_state(self, tribe: dict) -> bool:
+        if not isinstance(tribe, dict):
+            return False
+        try:
+            before = json.dumps(tribe, sort_keys=True, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            before = repr(tribe)
+
+        cleaner_names = (
+            "_active_scouted_resource_sites",
+            "_active_controlled_resource_sites",
+            "_active_trade_route_sites",
+            "_active_caravan_routes",
+            "_active_nomad_visitors",
+            "_public_nomad_visitor_aftereffects",
+            "_active_mutual_aid_alerts",
+            "_active_alliance_signals",
+            "_public_alliance_signal_influences",
+            "_active_diplomacy_council_sites",
+            "_active_border_theaters",
+            "_active_dispute_witness_stones",
+            "_active_world_event_remnants",
+            "_active_migration_plan",
+            "_active_celebration_echoes",
+            "_active_map_memories",
+            "_active_map_tile_traces",
+            "_active_world_riddles",
+            "_public_world_riddle_influences",
+            "_active_trial_grounds",
+            "_active_forbidden_edges",
+            "_active_forbidden_edge_route_experiences",
+            "_active_fog_trails",
+            "_active_disaster_coop_tasks",
+            "_active_old_camp_echoes",
+            "_active_cave_races",
+            "_active_cave_return_marks",
+            "_active_trail_markers",
+            "_active_named_landmarks",
+            "_active_neutral_sanctuaries",
+            "_active_neutral_sanctuary_blessings",
+            "_active_traveler_songs",
+            "_active_traveler_song_hints",
+            "_active_traveler_song_tunes",
+            "_active_sacred_fire_relay",
+            "_active_camp_shift",
+            "_active_tribe_law",
+            "_active_season_taboo",
+            "_active_standing_ritual",
+            "_active_communal_cook",
+            "_active_drum_rhythm",
+            "_active_mentorship",
+            "_active_weather_forecast",
+            "_active_dream_omen",
+            "_active_ancestor_question",
+            "_active_consensus_fire",
+            "_active_camp_trial",
+            "_active_living_legend_candidates"
+        )
+        for cleaner_name in cleaner_names:
+            cleaner = getattr(self, cleaner_name, None)
+            if not callable(cleaner):
+                continue
+            try:
+                cleaner(tribe)
+            except Exception as exc:
+                logger.warning(f"部落运行态清理跳过 {cleaner_name}: {exc}")
+
+        try:
+            after = json.dumps(tribe, sort_keys=True, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            after = repr(tribe)
+        return before != after
+
+    def _cleanup_all_tribe_runtime_state(self) -> bool:
+        changed = False
+        for tribe in list(getattr(self, "tribes", {}).values()):
+            changed = self._cleanup_tribe_runtime_state(tribe) or changed
+        return changed
+
     def _generate_default_decorations(
         self,
         seed: int,
@@ -456,41 +680,6 @@ class GameWorldLogicMixin:
             beast_marker = self._tribe_beast_marker(tribe)
             if beast_marker:
                 decorations.append(beast_marker)
-            decorations.extend(self._active_scouted_resource_sites(tribe))
-            decorations.extend(self._active_controlled_resource_sites(tribe))
-            decorations.extend(self._active_trade_route_sites(tribe))
-            if hasattr(self, "_active_caravan_routes"):
-                decorations.extend(self._active_caravan_routes(tribe))
-            if hasattr(self, "_active_nomad_visitors"):
-                decorations.extend(self._active_nomad_visitors(tribe))
-            if hasattr(self, "_active_alliance_signals"):
-                decorations.extend(self._active_alliance_signals(tribe))
-            decorations.extend(self._active_diplomacy_council_sites(tribe))
-            decorations.extend(self._active_world_event_remnants(tribe))
-            if hasattr(self, "_active_map_memories"):
-                decorations.extend(self._active_map_memories(tribe))
-            if hasattr(self, "_active_world_riddles"):
-                decorations.extend(self._active_world_riddles(tribe))
-            if hasattr(self, "_active_trial_grounds"):
-                decorations.extend(self._active_trial_grounds(tribe))
-            if hasattr(self, "_active_forbidden_edges"):
-                decorations.extend(self._active_forbidden_edges(tribe))
-            if hasattr(self, "_active_fog_trails"):
-                decorations.extend(self._active_fog_trails(tribe))
-            if hasattr(self, "_active_disaster_coop_tasks"):
-                decorations.extend(self._active_disaster_coop_tasks(tribe))
-            if hasattr(self, "_active_cave_races"):
-                for race in self._active_cave_races(tribe):
-                    race_marker = dict(race)
-                    race_marker["raceId"] = race.get("id")
-                    race_marker["id"] = f"{race.get('id')}_{tribe.get('id')}"
-                    decorations.append(race_marker)
-            if hasattr(self, "_active_trail_markers"):
-                decorations.extend(self._active_trail_markers(tribe))
-            if hasattr(self, "_active_named_landmarks"):
-                decorations.extend(self._active_named_landmarks(tribe))
-            if hasattr(self, "_active_neutral_sanctuaries"):
-                decorations.extend(self._active_neutral_sanctuaries(tribe))
             if hasattr(self, "_active_standing_ritual"):
                 ritual = self._active_standing_ritual(tribe)
                 center = camp.get("center") or {}
@@ -502,6 +691,7 @@ class GameWorldLogicMixin:
                         "label": ritual.get("label", "站位仪式"),
                         "ritualKey": ritual.get("key"),
                         "participantCount": len(ritual.get("participants", []) or []),
+                        "puzzle": self._public_standing_ritual_puzzle(ritual) if hasattr(self, "_public_standing_ritual_puzzle") else None,
                         "x": center.get("x", 0),
                         "z": center.get("z", 0),
                         "y": 0,
@@ -510,54 +700,29 @@ class GameWorldLogicMixin:
         return decorations
 
     def _active_scouted_resource_sites(self, tribe: dict) -> List[dict]:
-        active = []
-        now = datetime.now()
-        for site in tribe.get("scouted_resource_sites", []) or []:
-            if not isinstance(site, dict) or site.get("status") == "secured":
-                continue
-            active_until = site.get("activeUntil")
-            if active_until:
-                try:
-                    if datetime.fromisoformat(active_until) <= now:
-                        continue
-                except (TypeError, ValueError):
-                    pass
-            active.append(site)
-        if len(active) != len(tribe.get("scouted_resource_sites", []) or []):
-            tribe["scouted_resource_sites"] = active[-TRIBE_SCOUT_SITE_LIMIT:]
-        return active[-TRIBE_SCOUT_SITE_LIMIT:]
+        return self._active_tribe_items(
+            tribe,
+            "scouted_resource_sites",
+            TRIBE_SCOUT_SITE_LIMIT,
+            inactive_statuses={"secured"}
+        )
 
     def _active_controlled_resource_sites(self, tribe: dict) -> List[dict]:
-        active = []
-        now = datetime.now()
-        for site in tribe.get("controlled_resource_sites", []) or []:
-            if not isinstance(site, dict):
-                continue
-            active_until = site.get("activeUntil")
-            if active_until:
-                try:
-                    if datetime.fromisoformat(active_until) <= now:
-                        continue
-                except (TypeError, ValueError):
-                    pass
-            active.append(site)
-        if len(active) != len(tribe.get("controlled_resource_sites", []) or []):
-            tribe["controlled_resource_sites"] = active[-TRIBE_CONTROLLED_SITE_LIMIT:]
-        return active[-TRIBE_CONTROLLED_SITE_LIMIT:]
+        return self._active_tribe_items(
+            tribe,
+            "controlled_resource_sites",
+            TRIBE_CONTROLLED_SITE_LIMIT
+        )
 
     def _active_trade_route_sites(self, tribe: dict) -> List[dict]:
-        active = []
         now = datetime.now()
-        for site in tribe.get("trade_route_sites", []) or []:
-            if not isinstance(site, dict):
-                continue
-            active_until = site.get("activeUntil")
-            if active_until:
-                try:
-                    if datetime.fromisoformat(active_until) <= now:
-                        continue
-                except (TypeError, ValueError):
-                    pass
+        active = self._active_tribe_items(
+            tribe,
+            "trade_route_sites",
+            TRIBE_TRADE_ROUTE_SITE_LIMIT,
+            now=now
+        )
+        for site in active:
             market_until = site.get("marketUntil")
             site["isBorderMarket"] = False
             if market_until:
@@ -567,10 +732,7 @@ class GameWorldLogicMixin:
                     site["isBorderMarket"] = False
             if not site["isBorderMarket"] and site.get("label") == "交换通路边市":
                 site["label"] = "交换通路贸易点"
-            active.append(site)
-        if len(active) != len(tribe.get("trade_route_sites", []) or []):
-            tribe["trade_route_sites"] = active[-TRIBE_TRADE_ROUTE_SITE_LIMIT:]
-        return active[-TRIBE_TRADE_ROUTE_SITE_LIMIT:]
+        return active
 
     def _tribe_beast_marker(self, tribe: dict) -> Optional[dict]:
         if int(tribe.get("tamed_beasts", 0) or 0) <= 0:
@@ -701,6 +863,20 @@ class GameWorldLogicMixin:
             beast_marker = self._tribe_beast_marker(tribe)
             if beast_marker:
                 landmarks.append(beast_marker)
+            if hasattr(self, "_active_standing_ritual"):
+                ritual = self._active_standing_ritual(tribe)
+                if ritual and center:
+                    landmarks.append({
+                        "id": f"{tribe_id}_standing_ritual_site",
+                        "tribeId": tribe_id,
+                        "label": ritual.get("label", "站位仪式"),
+                        "x": center.get("x", 0),
+                        "z": center.get("z", 0),
+                        "type": "standing_ritual_site",
+                        "ritualKey": ritual.get("key"),
+                        "participantCount": len(ritual.get("participants", []) or []),
+                        "puzzle": self._public_standing_ritual_puzzle(ritual) if hasattr(self, "_public_standing_ritual_puzzle") else None
+                    })
             for site in self._active_scouted_resource_sites(tribe):
                 landmarks.append({
                     "id": site.get("id"),
@@ -868,8 +1044,8 @@ class GameWorldLogicMixin:
                         "claimedAt": theater.get("createdAt"),
                         "activeUntil": theater.get("activeUntil")
                     })
-            if hasattr(self, "_public_dispute_witness_stones"):
-                for stone in self._public_dispute_witness_stones(tribe):
+            if hasattr(self, "_active_dispute_witness_stones"):
+                for stone in self._active_dispute_witness_stones(tribe):
                     landmarks.append({
                         "id": stone.get("id"),
                         "tribeId": tribe_id,
@@ -953,6 +1129,26 @@ class GameWorldLogicMixin:
                     "claimedAt": memory.get("createdAt"),
                     "activeUntil": memory.get("activeUntil")
                 })
+            if hasattr(self, "_active_map_tile_traces"):
+                for trace in self._active_map_tile_traces(tribe):
+                    landmarks.append({
+                        "id": trace.get("id"),
+                        "tribeId": tribe_id,
+                        "label": trace.get("label", "地块痕迹"),
+                        "x": trace.get("x", 0),
+                        "z": trace.get("z", 0),
+                        "type": "map_tile_trace",
+                        "traceKind": trace.get("kind"),
+                        "summary": trace.get("summary"),
+                        "impactLabel": trace.get("impactLabel"),
+                        "recoveryHint": trace.get("recoveryHint"),
+                        "weatherRippleLabel": trace.get("weatherRippleLabel"),
+                        "rewardLabel": trace.get("rewardLabel"),
+                        "claimedBy": trace.get("actorName"),
+                        "claimedAt": trace.get("createdAt"),
+                        "intensity": trace.get("intensity", 1),
+                        "activeUntil": trace.get("activeUntil")
+                    })
             if hasattr(self, "_active_world_riddles"):
                 for riddle in self._active_world_riddles(tribe):
                     landmarks.append({
@@ -1131,6 +1327,82 @@ class GameWorldLogicMixin:
                         "claimedAt": sanctuary.get("createdAt"),
                         "activeUntil": sanctuary.get("activeUntil")
                     })
+            if center and hasattr(self, "_active_traveler_songs"):
+                for index, song in enumerate(self._active_traveler_songs(tribe)):
+                    x, z = self._tribe_map_marker_position(center, 18 + index)
+                    landmarks.append({
+                        "id": song.get("id"),
+                        "tribeId": tribe_id,
+                        "label": song.get("label", "旅人谣曲"),
+                        "x": song.get("x", x),
+                        "z": song.get("z", z),
+                        "type": "traveler_song",
+                        "summary": song.get("summary"),
+                        "sourceKind": song.get("sourceKind"),
+                        "sourceLabel": song.get("sourceLabel"),
+                        "otherTribeId": song.get("otherTribeId"),
+                        "otherTribeName": song.get("otherTribeName"),
+                        "claimedAt": song.get("createdAt"),
+                        "activeUntil": song.get("activeUntil")
+                    })
+            if center and hasattr(self, "_active_sacred_fire_relay"):
+                relay = self._active_sacred_fire_relay(tribe)
+                if relay:
+                    x, z = self._tribe_map_marker_position(center, 24)
+                    landmarks.append({
+                        "id": relay.get("id"),
+                        "tribeId": tribe_id,
+                        "label": relay.get("destinationLabel") or "圣火接力",
+                        "x": relay.get("x", x),
+                        "z": relay.get("z", z),
+                        "type": "sacred_fire_relay",
+                        "summary": relay.get("summary"),
+                        "destinationKey": relay.get("destinationKey"),
+                        "destinationLabel": relay.get("destinationLabel"),
+                        "carrierCount": len(relay.get("carriers", []) or []),
+                        "target": int(relay.get("target", TRIBE_SACRED_FIRE_RELAY_TARGET_PARTICIPANTS) or TRIBE_SACRED_FIRE_RELAY_TARGET_PARTICIPANTS),
+                        "claimedBy": relay.get("createdByName"),
+                        "claimedAt": relay.get("createdAt"),
+                        "activeUntil": relay.get("activeUntil")
+                    })
+            if center and hasattr(self, "_public_collection_wall"):
+                collections = self._public_collection_wall(tribe)
+                if collections:
+                    latest = collections[-1]
+                    x, z = self._tribe_map_marker_position(center, 25)
+                    landmarks.append({
+                        "id": f"{tribe_id}_collection_wall",
+                        "tribeId": tribe_id,
+                        "label": latest.get("displayLabel") or latest.get("label", "隐秘收藏墙"),
+                        "x": x,
+                        "z": z,
+                        "type": "collection_wall",
+                        "summary": latest.get("summary"),
+                        "collectionLabel": latest.get("label"),
+                        "collectionCount": len(collections),
+                        "claimedBy": latest.get("curatorName"),
+                        "claimedAt": latest.get("createdAt")
+                    })
+            if center and hasattr(self, "_public_shared_puzzle"):
+                puzzle = self._public_shared_puzzle(tribe)
+                fragment_count = int(puzzle.get("fragmentCount", 0) or 0) if isinstance(puzzle, dict) else 0
+                if fragment_count:
+                    x, z = self._tribe_map_marker_position(center, 26)
+                    fragments = puzzle.get("fragments", []) or []
+                    latest = fragments[-1] if fragments else {}
+                    landmarks.append({
+                        "id": f"{tribe_id}_shared_puzzle",
+                        "tribeId": tribe_id,
+                        "label": "共享谜图",
+                        "x": x,
+                        "z": z,
+                        "type": "shared_puzzle_site",
+                        "summary": latest.get("summary") or "部落正在把不同来源的图案拼成共享谜图。",
+                        "fragmentLabel": latest.get("sourceLabel"),
+                        "fragmentCount": fragment_count,
+                        "target": int(puzzle.get("target", 0) or 0),
+                        "ready": bool(puzzle.get("ready"))
+                    })
         return landmarks
 
     def _compose_map_data(self, map_name: Optional[str] = None) -> Optional[dict]:
@@ -1192,6 +1464,8 @@ class GameWorldLogicMixin:
         }
 
     async def _broadcast_current_map(self):
+        if self._cleanup_all_tribe_runtime_state() and hasattr(self, "_save_tribe_state"):
+            self._save_tribe_state()
         map_data = self._compose_map_data(self.current_map_name)
         if not map_data:
             return
@@ -1235,10 +1509,52 @@ class GameWorldLogicMixin:
         }, exclude=[player_id])
         await self.send_aoi_state(player_id)
 
+    def _active_map_tile_trace_profiles(self) -> list:
+        traces = []
+        for tribe in self.tribes.values():
+            if not hasattr(self, "_active_map_tile_traces"):
+                continue
+            for trace in self._active_map_tile_traces(tribe):
+                profile = TRIBE_MAP_TILE_TRACE_PROFILES.get(trace.get("kind"), {}) or {}
+                if profile:
+                    traces.append({"trace": trace, "profile": profile})
+        return traces
+
+    def _apply_map_tile_trace_world_event_bias(self, event_pool: list) -> list:
+        if not event_pool:
+            return event_pool
+        by_key = {event.get("key"): event for event in WORLD_EVENT_LIBRARY}
+        biased = list(event_pool)
+        for item in self._active_map_tile_trace_profiles():
+            trace = item["trace"]
+            profile = item["profile"]
+            intensity = max(1, int(trace.get("intensity", 1) or 1))
+            for event_key in profile.get("eventBiasKeys", []) or []:
+                event = by_key.get(event_key)
+                if event:
+                    biased.extend([event] * min(3, intensity))
+        return biased
+
+    def _map_tile_trace_weather_ripple_label(self, weather_key: str) -> str:
+        labels = []
+        for item in self._active_map_tile_trace_profiles():
+            trace = item["trace"]
+            profile = item["profile"]
+            if weather_key in (profile.get("weatherBias", []) or []):
+                labels.append(trace.get("label", "地块痕迹"))
+        return "、".join(labels[:3])
+
     def _pick_next_weather(self, current: Optional[str]) -> str:
         candidates = [w for w in self.weather_types if w != current]
         if not candidates:
             return current or "sunny"
+        for item in self._active_map_tile_trace_profiles():
+            trace = item["trace"]
+            profile = item["profile"]
+            intensity = max(1, int(trace.get("intensity", 1) or 1))
+            for weather_key in profile.get("weatherBias", []) or []:
+                if weather_key in candidates:
+                    candidates.extend([weather_key] * min(2, intensity))
         return self._weather_rng.choice(candidates)
 
     def _active_migration_season(self, env: dict) -> Optional[dict]:
@@ -1302,6 +1618,7 @@ class GameWorldLogicMixin:
             event_pool = self._apply_dream_omen_world_event_bias(event_pool)
         if hasattr(self, "_apply_ancestor_question_world_event_bias"):
             event_pool = self._apply_ancestor_question_world_event_bias(event_pool)
+        event_pool = self._apply_map_tile_trace_world_event_bias(event_pool)
         event = self._weather_rng.choice(event_pool)
         region = self._weather_rng.choice(WORLD_REGIONS)
         return self._build_world_event(event, region)
@@ -1364,6 +1681,7 @@ class GameWorldLogicMixin:
                 if next_weather == current:
                     continue
 
+                ripple_label = self._map_tile_trace_weather_ripple_label(next_weather)
                 if not self._active_migration_season(env) and self._weather_rng.random() < 0.25:
                     env["migrationSeason"] = self._build_migration_season()
                 celestial_chance = CELESTIAL_WINDOW_CHANCE
@@ -1378,6 +1696,11 @@ class GameWorldLogicMixin:
                     if hasattr(self, "_mark_world_riddle_influence_used"):
                         self._mark_world_riddle_influence_used("celestial", env["celestialWindow"].get("title", "罕见天象"))
                 env["weather"] = next_weather
+                env["tileTraceWeatherRipple"] = {
+                    "weather": next_weather,
+                    "label": ripple_label,
+                    "summary": f"{ripple_label}影响了这一轮天气余波。"
+                } if ripple_label else None
                 env["resourceTide"] = self._pick_resource_tide(env)
                 env["seasonObjective"] = self._build_season_objective()
                 event_count = 2 if self._active_migration_season(env) else 1

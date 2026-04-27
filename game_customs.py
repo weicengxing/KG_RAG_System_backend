@@ -4,6 +4,99 @@ from game_config import *
 
 
 class GameCustomMixin:
+    def _tribe_list_count(self, tribe: dict, key: str) -> int:
+        return len([item for item in (tribe.get(key, []) or []) if isinstance(item, dict)])
+
+    def _tribe_history_score(self, tribe: dict, event_types: set | None = None, kinds: set | None = None, keywords: list | None = None) -> int:
+        score = 0
+        for item in (tribe.get("history", []) or [])[-30:]:
+            if not isinstance(item, dict):
+                continue
+            related = item.get("related") if isinstance(item.get("related"), dict) else {}
+            text = f"{item.get('title', '')} {item.get('detail', '')}"
+            if event_types and item.get("type") in event_types:
+                score += 1
+            if kinds and related.get("kind") in kinds:
+                score += 1
+            if keywords and any(keyword in text for keyword in keywords):
+                score += 1
+        return score
+
+    def _tribe_relation_stats(self, tribe: dict) -> dict:
+        stats = {"tradeTrust": 0, "warPressure": 0, "goodRelations": 0, "badRelations": 0}
+        for relation in (tribe.get("boundary_relations", {}) or {}).values():
+            if not isinstance(relation, dict):
+                continue
+            score = int(relation.get("score", 0) or 0)
+            trust = int(relation.get("tradeTrust", 0) or 0)
+            pressure = int(relation.get("warPressure", 0) or 0)
+            stats["tradeTrust"] += trust
+            stats["warPressure"] += pressure
+            if score >= 2 or trust >= 2:
+                stats["goodRelations"] += 1
+            if score <= -2 or pressure >= 2:
+                stats["badRelations"] += 1
+        return stats
+
+    def _public_tribe_personality(self, tribe: dict) -> dict:
+        state = tribe.get("custom_tree", {}) if isinstance(tribe.get("custom_tree"), dict) else {}
+        custom_scores = state.get("scores", {}) if isinstance(state.get("scores"), dict) else {}
+        relation_stats = self._tribe_relation_stats(tribe)
+        scores = {
+            "hearthkeeper": int(custom_scores.get("hearth", 0) or 0)
+                + self._tribe_list_count(tribe, "communal_cook_history")
+                + self._tribe_list_count(tribe, "standing_ritual_history")
+                + self._tribe_history_score(tribe, {"ritual"}, keywords=["营火", "烹饪", "护火"]),
+            "trailwise": int(custom_scores.get("tidal", 0) or 0)
+                + self._tribe_list_count(tribe, "map_memories")
+                + self._tribe_list_count(tribe, "trail_marker_history")
+                + self._tribe_list_count(tribe, "oral_map_records")
+                + self._tribe_history_score(tribe, {"cave", "exploration", "world_event"}, keywords=["洞", "路", "地图", "遗迹"]),
+            "merchant": int(custom_scores.get("merchant", 0) or 0)
+                + int(tribe.get("trade_reputation", 0) or 0)
+                + self._tribe_list_count(tribe, "trade_credit_records")
+                + self._tribe_list_count(tribe, "market_pacts")
+                + relation_stats["tradeTrust"],
+            "warlike": int(custom_scores.get("warlike", 0) or 0)
+                + self._tribe_list_count(tribe, "small_conflicts")
+                + self._tribe_list_count(tribe, "formal_wars")
+                + relation_stats["warPressure"]
+                + relation_stats["badRelations"],
+            "songkeeper": self._tribe_list_count(tribe, "traveler_song_records")
+                + self._tribe_list_count(tribe, "traveler_song_tunes")
+                + self._tribe_list_count(tribe, "traveler_tune_lineage_records")
+                + self._tribe_list_count(tribe, "oral_epics")
+                + self._tribe_history_score(tribe, {"culture", "ritual"}, keywords=["旧歌", "曲牌", "口述", "史诗"]),
+            "evidence": int(custom_scores.get("oathbound", 0) or 0)
+                + self._tribe_list_count(tribe, "common_judge_records")
+                + self._tribe_list_count(tribe, "dispute_witness_records")
+                + self._tribe_list_count(tribe, "accepted_history_facts")
+                + self._tribe_history_score(tribe, {"governance", "diplomacy"}, keywords=["裁判", "证据", "见证", "事实"])
+        }
+        traits = []
+        for key, config in TRIBE_PERSONALITY_TRAITS.items():
+            score = int(scores.get(key, 0) or 0)
+            traits.append({
+                "key": key,
+                "label": config.get("label", key),
+                "summary": config.get("summary", ""),
+                "score": score,
+                "active": score >= TRIBE_PERSONALITY_THRESHOLD
+            })
+        traits.sort(key=lambda item: (-int(item.get("score", 0) or 0), item.get("key", "")))
+        active = [item for item in traits if item.get("active")]
+        visible = active[:4] if active else [item for item in traits if int(item.get("score", 0) or 0) > 0][:3]
+        dominant = visible[0] if visible else None
+        label_text = "、".join(item.get("label", "") for item in visible) if visible else "尚未成形"
+        return {
+            "dominant": dominant,
+            "traits": visible,
+            "allTraits": traits,
+            "threshold": TRIBE_PERSONALITY_THRESHOLD,
+            "summary": f"当前性格：{label_text}",
+            "diplomacyText": label_text
+        }
+
     def _custom_tree_state(self, tribe: dict) -> dict:
         state = tribe.setdefault("custom_tree", {})
         scores = state.setdefault("scores", {})

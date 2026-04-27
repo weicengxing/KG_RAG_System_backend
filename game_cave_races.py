@@ -6,27 +6,19 @@ from game_config import *
 
 class GameCaveRaceMixin:
     def _active_cave_races(self, tribe: dict) -> list:
-        active = []
         now = datetime.now()
-        changed = False
-        for race in tribe.get("cave_races", []) or []:
-            if not isinstance(race, dict) or race.get("status") in {"resolved", "expired"}:
-                continue
-            active_until = race.get("activeUntil")
-            if active_until:
-                try:
-                    if datetime.fromisoformat(active_until) <= now:
-                        race["status"] = "expired"
-                        race["expiredAt"] = now.isoformat()
-                        changed = True
-                        continue
-                except (TypeError, ValueError):
-                    pass
+        active = self._active_tribe_items(
+            tribe,
+            "cave_races",
+            TRIBE_CAVE_RACE_LIMIT,
+            inactive_statuses={"resolved", "expired"},
+            mark_expired_status="expired",
+            on_expire=lambda race: race.setdefault("expiredAt", now.isoformat()),
+            now=now
+        )
+        for race in active:
             race["type"] = "cave_rescue_clue" if race.get("status") == "rescue" else "rare_cave_race"
-            active.append(race)
-        if changed:
-            tribe["cave_races"] = active[-TRIBE_CAVE_RACE_LIMIT:]
-        return active[-TRIBE_CAVE_RACE_LIMIT:]
+        return active
 
     def _public_cave_races(self, tribe: dict) -> list:
         public = []
@@ -621,9 +613,21 @@ class GameCaveRaceMixin:
         rescue["completedAt"] = datetime.now().isoformat()
         record = self._record_cave_rescue_aftermath(tribe, race, rescue, method, member_name, reward_parts)
         return_mark = self._create_cave_return_mark(tribe, race, rescue, method, member_name)
+        tile_trace = None
+        if hasattr(self, "_record_map_tile_trace"):
+            tile_trace = self._record_map_tile_trace(
+                tribe,
+                "safe_cave_path",
+                float(race.get("x", 0) or 0),
+                float(race.get("z", 0) or 0),
+                f"cave_rescue:{race_id}",
+                member_name
+            )
         detail = f"{member_name}用{method.get('label', '营救方式')}完成{race.get('label', '稀有洞穴')}营救，救回{rescue.get('missingMemberName', '队友')}，{'、'.join(reward_parts) or '留下洞口记号'}。"
         if memory:
             detail += " 洞口多了一处可重访的活地图记忆。"
+        if tile_trace:
+            detail += " 洞口地块沉淀成一段安全洞路。"
         if record.get("puzzleFragmentCreated"):
             detail += " 失踪线索也补成了一片共享谜图。"
         if record.get("collectionReady"):

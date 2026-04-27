@@ -1,4 +1,4 @@
-from datetime import datetime
+﻿from datetime import datetime
 import random
 
 from game_config import (
@@ -103,30 +103,7 @@ class GameCelestialMixin:
         return sorted(public_scores, key=lambda item: item.get("score", 0), reverse=True)
 
     def _apply_celestial_reward(self, tribe: dict, reward: dict) -> list:
-        reward_parts = []
-        storage = tribe.setdefault("storage", {"wood": 0, "stone": 0})
-        for key, label in (("wood", "木材"), ("stone", "石块")):
-            amount = int((reward or {}).get(key, 0) or 0)
-            if amount:
-                storage[key] = max(0, int(storage.get(key, 0) or 0) + amount)
-                reward_parts.append(f"{label}+{amount}")
-        food = int((reward or {}).get("food", 0) or 0)
-        if food:
-            tribe["food"] = max(0, int(tribe.get("food", 0) or 0) + food)
-            reward_parts.append(f"食物+{food}")
-        discovery = int((reward or {}).get("discoveryProgress", 0) or 0)
-        if discovery:
-            tribe["discovery_progress"] = int(tribe.get("discovery_progress", 0) or 0) + discovery
-            reward_parts.append(f"发现+{discovery}")
-        trade = int((reward or {}).get("tradeReputation", 0) or 0)
-        if trade:
-            tribe["trade_reputation"] = max(0, int(tribe.get("trade_reputation", 0) or 0) + trade)
-            reward_parts.append(f"贸易信誉+{trade}")
-        renown = int((reward or {}).get("renown", 0) or 0)
-        if renown:
-            tribe["renown"] = int(tribe.get("renown", 0) or 0) + renown
-            reward_parts.append(f"声望+{renown}")
-        return reward_parts
+        return self._apply_tribe_reward(tribe, reward)
 
     def _apply_celestial_relations(self, tribe: dict, branch: dict) -> list:
         relation_parts = []

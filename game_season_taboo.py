@@ -100,6 +100,7 @@ class GameSeasonTabooMixin:
         if not taboo:
             return None
         config = TRIBE_SEASON_TABOO_OPTIONS.get(taboo.get("key"), {})
+        temptation_options = self._season_taboo_temptation_options(taboo, config)
         return {
             "id": taboo.get("id"),
             "key": taboo.get("key"),
@@ -111,6 +112,7 @@ class GameSeasonTabooMixin:
             "contextRewardLabel": taboo.get("contextRewardLabel", ""),
             "observeLabel": config.get("observeLabel", "践行禁忌"),
             "breakLabel": config.get("breakLabel", "破戒取急用"),
+            "temptationOptions": temptation_options,
             "progress": int(taboo.get("progress", 0) or 0),
             "target": int(taboo.get("target", TRIBE_SEASON_TABOO_PROGRESS_TARGET) or TRIBE_SEASON_TABOO_PROGRESS_TARGET),
             "observerNames": list(taboo.get("observerNames", []) or [])[-4:],
@@ -120,11 +122,96 @@ class GameSeasonTabooMixin:
             "activeUntil": taboo.get("activeUntil")
         }
 
+    def _reward_summary_text(self, reward: dict | None) -> str:
+        labels = {
+            "wood": "木材",
+            "stone": "石块",
+            "food": "食物",
+            "renown": "声望",
+            "renownReward": "声望",
+            "discoveryProgress": "发现",
+            "discoveryReward": "发现",
+            "tradeReputation": "贸易",
+            "tradeReward": "贸易",
+            "pressureRelief": "战争压力缓解",
+            "warPressureRelief": "战争压力缓解"
+        }
+        parts = []
+        for key, label in labels.items():
+            value = int((reward or {}).get(key, 0) or 0)
+            if value:
+                parts.append(f"{label}+{value}")
+        return "、".join(parts)
+
+    def _season_taboo_temptation_options(self, taboo: dict, config: dict) -> list[dict]:
+        options = []
+        for item in config.get("temptations", []) or []:
+            if not isinstance(item, dict):
+                continue
+            reward = dict(item.get("reward", {}) or {})
+            options.append({
+                "key": item.get("key"),
+                "label": item.get("label") or config.get("breakLabel", "破戒取急用"),
+                "summary": item.get("summary") or config.get("breakSummary", ""),
+                "rewardLabel": self._reward_summary_text(reward),
+                "evidenceLabel": item.get("evidenceLabel") or item.get("label") or "破戒证据",
+                "lawHint": "可能触发律令补救" if item.get("lawEventKey") else ""
+            })
+        if options:
+            return options
+        reward = dict(config.get("breakReward", {}) or {})
+        return [{
+            "key": "default",
+            "label": config.get("breakLabel", "破戒取急用"),
+            "summary": config.get("breakSummary", ""),
+            "rewardLabel": self._reward_summary_text(reward),
+            "evidenceLabel": "破戒证据"
+        }]
+
     def _public_season_taboo_remedies(self, tribe: dict) -> list:
         return [
             item for item in (tribe.get("season_taboo_remedies", []) or [])
             if isinstance(item, dict) and item.get("status") == "pending"
         ][-TRIBE_SEASON_ATONEMENT_TASK_LIMIT:]
+
+    def _public_season_taboo_evidence(self, tribe: dict) -> list:
+        if not tribe:
+            return []
+        now = datetime.now()
+        active = []
+        for item in tribe.get("season_taboo_evidence", []) or []:
+            if not isinstance(item, dict):
+                continue
+            if not self._active_until_still_valid(item, now):
+                item["status"] = "expired"
+                item["expiredAt"] = now.isoformat()
+                continue
+            active.append({
+                "id": item.get("id"),
+                "tabooId": item.get("tabooId", ""),
+                "tabooLabel": item.get("tabooLabel", "季节禁忌"),
+                "label": item.get("label", "破戒证据"),
+                "summary": item.get("summary", ""),
+                "status": item.get("status", "active"),
+                "actorName": item.get("actorName", ""),
+                "rewardLabel": item.get("rewardLabel", ""),
+                "lawHint": item.get("lawHint", ""),
+                "commonJudgeHint": item.get("commonJudgeHint", ""),
+                "mythClaimId": item.get("mythClaimId", ""),
+                "otherTribeId": item.get("otherTribeId", ""),
+                "otherTribeName": item.get("otherTribeName", ""),
+                "oldGrudgeHint": item.get("oldGrudgeHint", ""),
+                "oldGrudgeWakeTaskId": item.get("oldGrudgeWakeTaskId", ""),
+                "judgedByName": item.get("judgedByName", ""),
+                "remediedByName": item.get("remediedByName", ""),
+                "createdAt": item.get("createdAt"),
+                "activeUntil": item.get("activeUntil")
+            })
+        tribe["season_taboo_evidence"] = [
+            item for item in (tribe.get("season_taboo_evidence", []) or [])
+            if isinstance(item, dict) and item.get("status") != "expired"
+        ][-TRIBE_SEASON_TABOO_EVIDENCE_LIMIT:]
+        return active[-TRIBE_SEASON_TABOO_EVIDENCE_LIMIT:]
 
     def _public_atonement_tokens(self, tribe: dict) -> list:
         if not tribe:
@@ -415,11 +502,14 @@ class GameSeasonTabooMixin:
         taboo.setdefault("observerIds", []).append(player_id)
         taboo.setdefault("observerNames", []).append(member_name)
         taboo["progress"] = int(taboo.get("progress", 0) or 0) + 1
+        member["trust_marks"] = int(member.get("trust_marks", 0) or 0) + 1
         context = taboo.get("context") or {}
         reward_parts = self._apply_season_taboo_reward(
             tribe,
             self._merge_season_taboo_rewards(config.get("observeReward", {}), context.get("observeReward", {}))
         )
+        reward_parts.append("守戒信用+1")
+        reward_parts.extend(self._record_season_taboo_custom(tribe, player_id, taboo.get("label", "践行季节禁忌")))
         blessed_now = False
         if not taboo.get("blessed") and int(taboo.get("progress", 0) or 0) >= int(taboo.get("target", TRIBE_SEASON_TABOO_PROGRESS_TARGET) or TRIBE_SEASON_TABOO_PROGRESS_TARGET):
             taboo["blessed"] = True
@@ -447,7 +537,60 @@ class GameSeasonTabooMixin:
         await self._notify_tribe(tribe_id, detail)
         await self.broadcast_tribe_state(tribe_id)
 
-    async def break_season_taboo(self, player_id: str):
+    def _season_taboo_temptation_config(self, config: dict, temptation_key: str = "") -> dict:
+        temptations = [item for item in (config.get("temptations", []) or []) if isinstance(item, dict)]
+        selected = next((item for item in temptations if item.get("key") == temptation_key), None)
+        if selected:
+            return selected
+        if temptations:
+            return temptations[0]
+        return {
+            "key": "default",
+            "label": config.get("breakLabel", "破戒取急用"),
+            "summary": config.get("breakSummary", ""),
+            "reward": dict(config.get("breakReward", {}) or {}),
+            "evidenceLabel": "破戒证据"
+        }
+
+    def _season_taboo_boundary_target(self, tribe: dict) -> tuple[str, dict | None]:
+        relations = [
+            (other_id, relation)
+            for other_id, relation in (tribe.get("boundary_relations", {}) or {}).items()
+            if isinstance(relation, dict) and other_id in getattr(self, "tribes", {})
+        ]
+        if not relations:
+            return "", None
+        relations.sort(key=lambda item: (-int(item[1].get("warPressure", 0) or 0), int(item[1].get("score", 0) or 0)))
+        return relations[0]
+
+    def _record_season_taboo_custom(self, tribe: dict, player_id: str, source_label: str) -> list[str]:
+        if not hasattr(self, "_record_tribe_custom_choice"):
+            return []
+        record = self._record_tribe_custom_choice(tribe, "oathbound", source_label, player_id)
+        if not record:
+            return []
+        return ["守誓风俗+1" + ("，成为主导风俗" if record.get("becameDominant") else "")]
+
+    def _record_season_taboo_evidence(self, tribe: dict, taboo: dict, temptation: dict, member_name: str, reward_parts: list[str]) -> dict:
+        now = datetime.now()
+        evidence = {
+            "id": f"season_taboo_evidence_{tribe.get('id')}_{int(now.timestamp() * 1000)}",
+            "tabooId": taboo.get("id", ""),
+            "tabooLabel": taboo.get("label", "季节禁忌"),
+            "label": temptation.get("evidenceLabel") or temptation.get("label") or "破戒证据",
+            "summary": f"{member_name} 选择“{temptation.get('label', '破戒取急用')}”，获得{'、'.join(reward_parts) if reward_parts else '短时优势'}。",
+            "actorName": member_name,
+            "temptationKey": temptation.get("key", ""),
+            "rewardLabel": self._reward_summary_text(temptation.get("reward", {}) or {}),
+            "createdAt": now.isoformat(),
+            "activeUntil": datetime.fromtimestamp(now.timestamp() + TRIBE_SEASON_TABOO_EVIDENCE_ACTIVE_MINUTES * 60).isoformat(),
+            "status": "active"
+        }
+        tribe.setdefault("season_taboo_evidence", []).append(evidence)
+        tribe["season_taboo_evidence"] = tribe["season_taboo_evidence"][-TRIBE_SEASON_TABOO_EVIDENCE_LIMIT:]
+        return evidence
+
+    async def break_season_taboo(self, player_id: str, temptation_key: str = ""):
         tribe_id = self.player_tribes.get(player_id)
         tribe = self.tribes.get(tribe_id)
         if not tribe:
@@ -462,13 +605,59 @@ class GameSeasonTabooMixin:
             return
         config = TRIBE_SEASON_TABOO_OPTIONS.get(taboo.get("key"), {})
         member = tribe.get("members", {}).get(player_id, {})
-        reward_parts = self._apply_season_taboo_reward(tribe, config.get("breakReward", {}))
+        temptation = self._season_taboo_temptation_config(config, temptation_key)
+        reward_parts = self._apply_season_taboo_reward(tribe, temptation.get("reward", config.get("breakReward", {})))
         now_text = datetime.now().isoformat()
         taboo["broken"] = True
         taboo["brokenAt"] = now_text
         taboo["brokenBy"] = player_id
+        taboo["brokenByName"] = member.get("name", "成员")
+        taboo["brokenTemptationKey"] = temptation.get("key", "")
+        taboo["brokenTemptationLabel"] = temptation.get("label", config.get("breakLabel", "破戒取急用"))
         break_count = int(tribe.get("season_taboo_break_count", 0) or 0) + 1
         tribe["season_taboo_break_count"] = break_count
+        evidence = self._record_season_taboo_evidence(tribe, taboo, temptation, member.get("name", "成员"), reward_parts)
+        evidence["commonJudgeHint"] = "可由中立部落共同裁判"
+        if hasattr(self, "_open_myth_claim"):
+            camp_center = (tribe.get("camp") or {}).get("center") or {}
+            myth = self._open_myth_claim(
+                tribe,
+                "taboo_break",
+                evidence.get("label", "破戒证据"),
+                f"{evidence.get('label', '破戒证据')}已经公开，族人可以把它解释为火种护佑、旧路显现、互市佳兆或守边誓言。",
+                float(camp_center.get("x", 0) or 0),
+                float(camp_center.get("z", 0) or 0),
+                evidence.get("id", ""),
+                member.get("name", "成员")
+            )
+            if myth:
+                evidence["mythClaimId"] = myth.get("id", "")
+        law_parts = []
+        if temptation.get("lawEventKey") and hasattr(self, "apply_tribe_law_violation"):
+            law_parts = self.apply_tribe_law_violation(
+                tribe,
+                player_id,
+                temptation.get("lawEventKey"),
+                temptation.get("label", "破戒诱惑")
+            )
+            if law_parts:
+                evidence["lawHint"] = "、".join(law_parts)
+        if temptation.get("lawEventKey") == "boundary_press":
+            other_id, relation = self._season_taboo_boundary_target(tribe)
+            if other_id and relation is not None:
+                other = self.tribes.get(other_id, {})
+                relation["warPressure"] = min(10, int(relation.get("warPressure", 0) or 0) + 1)
+                relation["canDeclareWar"] = int(relation.get("warPressure", 0) or 0) >= TRIBE_SKIRMISH_WAR_PRESSURE_THRESHOLD
+                relation["lastAction"] = "season_taboo_boundary_press"
+                relation["lastActionAt"] = now_text
+                evidence["otherTribeId"] = other_id
+                evidence["otherTribeName"] = other.get("name", "邻近部落")
+                evidence["oldGrudgeHint"] = f"边界战争压力+1，可进入旧怨封存"
+                if hasattr(self, "_wake_old_grudge_after_pressure"):
+                    wake = self._wake_old_grudge_after_pressure(tribe, other_id, evidence.get("label", "破戒证据"))
+                    if wake:
+                        evidence["oldGrudgeWakeTaskId"] = wake.get("id", "")
+                        evidence["oldGrudgeHint"] = "边界压力触发旧怨苏醒"
         remedy_config = dict(config.get("remedy") or {})
         remedy = {
             "id": f"season_taboo_remedy_{taboo.get('id')}",
@@ -478,12 +667,17 @@ class GameSeasonTabooMixin:
             "summary": remedy_config.get("summary", "破戒已经公开，需要成员完成补救任务。"),
             "tabooId": taboo.get("id"),
             "tabooLabel": taboo.get("label", "季节禁忌"),
+            "temptationLabel": temptation.get("label", config.get("breakLabel", "破戒取急用")),
+            "evidenceId": evidence.get("id"),
+            "sourceLabel": evidence.get("label"),
             "createdAt": now_text,
             **remedy_config
         }
         tribe.setdefault("season_taboo_remedies", []).append(remedy)
         tribe["season_taboo_remedies"] = tribe["season_taboo_remedies"][-TRIBE_SEASON_ATONEMENT_TASK_LIMIT:]
-        detail = f"{member.get('name', '成员')} {config.get('breakLabel', '破戒取急用')}：{config.get('breakSummary', '')} {'、'.join(reward_parts) or '已记录'}。补救任务“{remedy['title']}”已公开。"
+        detail = f"{member.get('name', '成员')} 受诱惑选择“{temptation.get('label', config.get('breakLabel', '破戒取急用'))}”：{temptation.get('summary', config.get('breakSummary', ''))} {'、'.join(reward_parts) or '已记录'}，留下公开证据“{evidence.get('label', '破戒证据')}”。补救任务“{remedy['title']}”已公开。"
+        if law_parts:
+            detail += f" 律令也记下了：{'、'.join(law_parts)}。"
         if break_count >= TRIBE_SEASON_ATONEMENT_BREAK_THRESHOLD:
             atonement = self._open_tribe_atonement_task(
                 tribe,
@@ -494,7 +688,13 @@ class GameSeasonTabooMixin:
             )
             if atonement:
                 detail += f" 连续破戒已触发赎罪任务“{atonement.get('title', '公开赎罪')}”。"
-        self._add_tribe_history(tribe, "governance", "季节破戒", detail, player_id, {"kind": "season_taboo_break", "tabooId": taboo.get("id"), "remedy": remedy})
+        self._add_tribe_history(tribe, "governance", "禁忌破戒诱惑", detail, player_id, {"kind": "season_taboo_temptation", "tabooId": taboo.get("id"), "temptationKey": temptation.get("key"), "evidence": evidence, "remedy": remedy})
+        await self._publish_world_rumor(
+            "season",
+            "破戒证据",
+            f"{tribe.get('name', '部落')} 的{taboo.get('label', '季节禁忌')}留下破戒证据：{evidence.get('label', '证据')}。",
+            {"tribeId": tribe_id, "tabooId": taboo.get("id"), "evidenceId": evidence.get("id")}
+        )
         await self._notify_tribe(tribe_id, detail)
         await self.broadcast_tribe_state(tribe_id)
 
@@ -521,6 +721,7 @@ class GameSeasonTabooMixin:
             await self._send_tribe_error(player_id, f"补救需要木材 {wood_cost}")
             return
         reward_parts = self._apply_season_taboo_reward(tribe, remedy)
+        reward_parts.extend(self._record_season_taboo_custom(tribe, player_id, remedy.get("title", "季节补救")))
         other_tribe_id = remedy.get("otherTribeId")
         if other_tribe_id:
             relation = tribe.setdefault("boundary_relations", {}).setdefault(other_tribe_id, {})
@@ -544,6 +745,15 @@ class GameSeasonTabooMixin:
         remedy["status"] = "completed"
         remedy["completedAt"] = datetime.now().isoformat()
         remedy["completedBy"] = player_id
+        remedy["completedByName"] = (tribe.get("members", {}).get(player_id, {}) or {}).get("name", "成员")
+        evidence_id = remedy.get("evidenceId")
+        for evidence in tribe.get("season_taboo_evidence", []) or []:
+            if isinstance(evidence, dict) and evidence.get("id") == evidence_id:
+                evidence["status"] = "remedied"
+                evidence["remediedAt"] = remedy["completedAt"]
+                evidence["remediedBy"] = player_id
+                evidence["remediedByName"] = remedy["completedByName"]
+                break
         taboo = tribe.get("season_taboo")
         if isinstance(taboo, dict) and taboo.get("id") == remedy.get("tabooId"):
             taboo["broken"] = False
