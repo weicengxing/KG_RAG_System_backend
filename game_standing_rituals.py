@@ -1,3 +1,4 @@
+import math
 from datetime import datetime
 
 from game_config import *
@@ -34,8 +35,73 @@ class GameStandingRitualMixin:
             "participantCount": len(participants),
             "target": int(ritual.get("target", TRIBE_STANDING_RITUAL_TARGET_PARTICIPANTS) or TRIBE_STANDING_RITUAL_TARGET_PARTICIPANTS),
             "minParticipants": TRIBE_STANDING_RITUAL_MIN_PARTICIPANTS,
+            "landmarkRadius": TRIBE_STANDING_RITUAL_LANDMARK_RADIUS,
+            "landmarkBonuses": TRIBE_STANDING_RITUAL_LANDMARK_BONUSES,
             "createdAt": ritual.get("createdAt"),
             "activeUntil": ritual.get("activeUntil")
+        }
+
+    def _standing_ritual_landmark_kind(self, tribe_id: str | None, landmark: dict) -> str | None:
+        landmark_type = landmark.get("type")
+        label = str(landmark.get("label", ""))
+        landmark_tribe_id = landmark.get("tribeId")
+        if landmark_type == "tribe_totem" and (not landmark_tribe_id or landmark_tribe_id == tribe_id):
+            return "totem"
+        if landmark_type == "cave_entrance":
+            return "cave"
+        if landmark_type == "diplomacy_council_site":
+            return "council"
+        if landmark_type == "trade_route_site" and (landmark.get("isBorderMarket") or "边市" in label):
+            return "market"
+        return None
+
+    def _standing_ritual_location_bonus(self, tribe: dict, player_id: str) -> dict | None:
+        player = self.players.get(player_id, {}) if hasattr(self, "players") else {}
+        try:
+            player_x = float(player.get("x", 0) or 0)
+            player_z = float(player.get("z", 0) or 0)
+        except (TypeError, ValueError):
+            return None
+
+        tribe_id = tribe.get("id")
+        landmarks = []
+        if hasattr(self, "_get_base_landmarks"):
+            landmarks.extend(self._get_base_landmarks())
+        if hasattr(self, "_get_dynamic_tribe_landmarks"):
+            landmarks.extend(self._get_dynamic_tribe_landmarks())
+
+        nearest = None
+        nearest_distance = float("inf")
+        for landmark in landmarks:
+            if not isinstance(landmark, dict):
+                continue
+            kind = self._standing_ritual_landmark_kind(tribe_id, landmark)
+            if not kind:
+                continue
+            try:
+                dx = float(landmark.get("x", 0) or 0) - player_x
+                dz = float(landmark.get("z", 0) or 0) - player_z
+            except (TypeError, ValueError):
+                continue
+            distance = math.sqrt(dx * dx + dz * dz)
+            if distance < nearest_distance:
+                nearest = (kind, landmark, distance)
+                nearest_distance = distance
+
+        if not nearest or nearest_distance > TRIBE_STANDING_RITUAL_LANDMARK_RADIUS:
+            return None
+        kind, landmark, distance = nearest
+        config = TRIBE_STANDING_RITUAL_LANDMARK_BONUSES.get(kind, {})
+        if not config:
+            return None
+        return {
+            "kind": kind,
+            "label": config.get("label", "地标站位"),
+            "summary": config.get("summary", ""),
+            "landmarkId": landmark.get("id"),
+            "landmarkLabel": landmark.get("label", "附近地标"),
+            "distance": round(distance, 1),
+            "reward": dict(config.get("reward", {}))
         }
 
     def _apply_standing_ritual_reward(self, tribe: dict, reward: dict) -> list:
@@ -141,12 +207,37 @@ class GameStandingRitualMixin:
             "joinedAt": datetime.now().isoformat()
         }
         ritual.setdefault("participantIds", []).append(player_id)
-        ritual.setdefault("participants", []).append(participant)
         reward_parts = self._apply_standing_ritual_reward(tribe, stance)
+        location_bonus = self._standing_ritual_location_bonus(tribe, player_id)
+        if location_bonus:
+            bonus_parts = self._apply_standing_ritual_reward(tribe, location_bonus.get("reward", {}))
+            reward_parts.extend(bonus_parts)
+            participant["locationBonus"] = {
+                "kind": location_bonus.get("kind"),
+                "label": location_bonus.get("label"),
+                "landmarkLabel": location_bonus.get("landmarkLabel"),
+                "distance": location_bonus.get("distance"),
+                "rewardParts": bonus_parts
+            }
+        ritual.setdefault("participants", []).append(participant)
         detail = f"{participant['name']} 以{participant['stanceLabel']}加入{ritual.get('label', '站位仪式')}，当前 {len(ritual.get('participants', []))} / {ritual.get('target', 0)}。"
+        if location_bonus:
+            detail += f" 靠近{location_bonus.get('landmarkLabel', '地标')}触发{location_bonus.get('label', '地标加成')}。"
         if reward_parts:
             detail += f" {'、'.join(reward_parts)}。"
-        self._add_tribe_history(tribe, "ritual", "加入站位仪式", detail, player_id, {"kind": "standing_ritual_join", "ritualId": ritual.get("id"), "stanceKey": stance_key})
+        self._add_tribe_history(
+            tribe,
+            "ritual",
+            "加入站位仪式",
+            detail,
+            player_id,
+            {
+                "kind": "standing_ritual_join",
+                "ritualId": ritual.get("id"),
+                "stanceKey": stance_key,
+                "locationBonus": participant.get("locationBonus")
+            }
+        )
         await self._notify_tribe(tribe_id, detail)
         await self.broadcast_tribe_state(tribe_id)
 

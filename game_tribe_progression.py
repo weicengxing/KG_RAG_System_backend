@@ -508,6 +508,8 @@ class GameTribeProgressionMixin:
                 progress["lastAction"] = "border_market_open"
                 progress["lastActionAt"] = now.isoformat()
             self._append_trade_route_market_task(target_tribe, route_site, now.isoformat())
+            if hasattr(self, "_append_nomad_caravan_route"):
+                self._append_nomad_caravan_route(target_tribe, route_site, now)
             self._record_map_memory(
                 target_tribe,
                 "border_market",
@@ -633,6 +635,16 @@ class GameTribeProgressionMixin:
             target_tribe["market_pacts"] = target_tribe["market_pacts"][-TRIBE_MARKET_PACT_LIMIT:]
             if target_id == tribe_id:
                 created = pact
+        if hasattr(self, "_open_covenant_messenger_task_pair"):
+            self._open_covenant_messenger_task_pair(
+                tribe,
+                other_tribe,
+                "market_pact",
+                shared_id,
+                "互市信使",
+                f"{tribe.get('name', '部落')} 与 {other_tribe.get('name', '邻近部落')} 定下互市约定，需要成员把木牌、干鱼或石印送到对岸，让约定被双方承认。",
+                now_text
+            )
         return created
 
     def _diplomacy_council_signals(self, tribe: dict) -> list:
@@ -921,6 +933,16 @@ class GameTribeProgressionMixin:
                 pact_created = self._create_market_pact(tribe, other_tribe, task_id, now_text)
             else:
                 pact_failed = True
+        if task.get("kind") == "truce_talk" and other_tribe and hasattr(self, "_open_covenant_messenger_task_pair"):
+            self._open_covenant_messenger_task_pair(
+                tribe,
+                other_tribe,
+                "boundary_truce",
+                task_id,
+                "停争信使",
+                f"与 {task.get('otherTribeName', '邻近部落')} 的停争谈判已经整理出礼物和口信，需要成员亲自护送，免得短暂停火又退回猜疑。",
+                now_text
+            )
         task["status"] = "completed"
         task["completedBy"] = player_id
         task["completedAt"] = now_text
@@ -944,6 +966,8 @@ class GameTribeProgressionMixin:
             reward_bits.append(f"互市约定{TRIBE_MARKET_PACT_MINUTES}分钟")
         elif pact_failed:
             reward_bits.append("互市约定未成")
+        if task.get("kind") == "truce_talk" and other_tribe:
+            reward_bits.append("停争信使待护送")
         detail = f"{member.get('name', '成员')} 处理{task.get('title', '边界后续')}：{'、'.join(reward_bits) or '边界局势稳定'}。"
         history_related = {"kind": "boundary_followup", "taskId": task_id, "otherTribeId": other_tribe_id}
         if pact_created:

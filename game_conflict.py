@@ -1677,6 +1677,18 @@ class GameConflictMixin:
         self._record_war_ally_memory(supporter, betrayal_record)
         self._record_war_ally_memory(old_side, betrayal_record)
         self._create_war_ally_followup_tasks(betrayal_record, now_text)
+        if hasattr(self, "_open_tribe_atonement_task"):
+            self._open_tribe_atonement_task(
+                supporter,
+                "betrayal",
+                "战争背刺",
+                "",
+                old_side_id,
+                old_side.get("name", "旧盟友"),
+                betrayal_record.get("id", "")
+            )
+        if hasattr(self, "_open_betrayal_history_fact_claim"):
+            self._open_betrayal_history_fact_claim(betrayal_record)
         return f" 但这也背弃了先前对 {old_side.get('name', '旧盟友')} 的战争承诺。"
 
     async def support_formal_war(self, player_id: str, war_id: str, side_tribe_id: str):
@@ -1879,9 +1891,14 @@ class GameConflictMixin:
         fatigue_count = self._apply_formal_war_fatigue(war, winner_id, loser_id, now_text)
         self._create_war_revival_task(loser_id, winner_id, war, now_text)
         self._create_war_diplomacy_tasks(tribe_id, other_tribe_id, war, now_text, "resolved")
+        history_fact_opened = False
+        if hasattr(self, "_open_war_history_fact_claim"):
+            history_fact_opened = bool(self._open_war_history_fact_claim(war, winner, loser, "formal_war"))
         if fatigue_count:
             reward_parts.append(f"参战者留下战疲{fatigue_count}人")
         detail = f"{winner.get('name', '一方') if winner else '一方'} 在正式部落战争中取得优势，双方进入短暂停战。{'、'.join(reward_parts)}。"
+        if history_fact_opened:
+            detail += " 双方开始争夺这场战争如何写入编年史。"
         for target_id in {tribe_id, other_tribe_id}:
             target = self.tribes.get(target_id)
             if target:
@@ -2098,6 +2115,18 @@ class GameConflictMixin:
             relation["lastAction"] = "formal_war_truce_honored"
             label = "履行停战"
             detail = f"{member.get('name', '成员')} 代表 {tribe.get('name', '部落')} 履行停战约定，消耗食物{food_cost}，关系与贸易信任回升。"
+            other_tribe = self.tribes.get(other_tribe_id)
+            if other_tribe and hasattr(self, "_open_covenant_messenger_task_pair"):
+                self._open_covenant_messenger_task_pair(
+                    tribe,
+                    other_tribe,
+                    "war_truce",
+                    diplomacy_id,
+                    "停战信使",
+                    f"与 {task.get('otherTribeName', '邻近部落')} 的停战已经履约，需要成员把信物送过边界，让这段停战不只停在公告里。",
+                    now_text
+                )
+                detail += " 新的停战信使已经出发，成员可继续护送信物巩固这段约定。"
         else:
             tribe["renown"] = int(tribe.get("renown", 0) or 0) + int(task.get("grievanceRenown", TRIBE_WAR_GRIEVANCE_RENOWN) or 0)
             relation["score"] = max(-9, int(relation.get("score", 0) or 0) - 1)
@@ -2106,6 +2135,18 @@ class GameConflictMixin:
             relation["lastAction"] = "formal_war_grievance"
             label = "停战追责"
             detail = f"{member.get('name', '成员')} 代表 {tribe.get('name', '部落')} 公开追责停战余怨，声望上升但边境仇怨保留。"
+            if hasattr(self, "_open_tribe_atonement_task"):
+                atonement = self._open_tribe_atonement_task(
+                    tribe,
+                    "truce_grievance",
+                    "停战追责",
+                    player_id,
+                    other_tribe_id,
+                    task.get("otherTribeName", "停战对象"),
+                    diplomacy_id
+                )
+                if atonement:
+                    detail += f" 部落也留下了“{atonement.get('title', '停战补誓')}”赎罪任务，之后可再修复这段停战。"
         relation["lastActionAt"] = now_text
         task["status"] = action
         task["completedBy"] = player_id

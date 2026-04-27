@@ -459,8 +459,30 @@ class GameWorldLogicMixin:
             decorations.extend(self._active_scouted_resource_sites(tribe))
             decorations.extend(self._active_controlled_resource_sites(tribe))
             decorations.extend(self._active_trade_route_sites(tribe))
+            if hasattr(self, "_active_caravan_routes"):
+                decorations.extend(self._active_caravan_routes(tribe))
+            if hasattr(self, "_active_nomad_visitors"):
+                decorations.extend(self._active_nomad_visitors(tribe))
             decorations.extend(self._active_diplomacy_council_sites(tribe))
             decorations.extend(self._active_world_event_remnants(tribe))
+            if hasattr(self, "_active_map_memories"):
+                decorations.extend(self._active_map_memories(tribe))
+            if hasattr(self, "_active_standing_ritual"):
+                ritual = self._active_standing_ritual(tribe)
+                center = camp.get("center") or {}
+                if ritual and center:
+                    decorations.append({
+                        "id": f"{tribe.get('id')}_standing_ritual_site",
+                        "tribeId": tribe.get("id"),
+                        "type": "standing_ritual_site",
+                        "label": ritual.get("label", "站位仪式"),
+                        "ritualKey": ritual.get("key"),
+                        "participantCount": len(ritual.get("participants", []) or []),
+                        "x": center.get("x", 0),
+                        "z": center.get("z", 0),
+                        "y": 0,
+                        "size": 1.0
+                    })
         return decorations
 
     def _active_scouted_resource_sites(self, tribe: dict) -> List[dict]:
@@ -720,6 +742,36 @@ class GameWorldLogicMixin:
                     "lastCollectedBy": site.get("lastCollectedBy"),
                     "sharedRouteId": site.get("sharedRouteId")
                 })
+            if hasattr(self, "_active_caravan_routes"):
+                for route in self._active_caravan_routes(tribe):
+                    landmarks.append({
+                        "id": route.get("id"),
+                        "tribeId": tribe_id,
+                        "label": route.get("label", "游牧商队"),
+                        "x": route.get("x", 0),
+                        "z": route.get("z", 0),
+                        "type": "nomad_caravan",
+                        "summary": route.get("summary"),
+                        "focusLabel": route.get("focusLabel"),
+                        "otherTribeId": route.get("otherTribeId"),
+                        "otherTribeName": route.get("otherTribeName"),
+                        "activeUntil": route.get("activeUntil"),
+                        "claimedAt": route.get("createdAt")
+                    })
+            if hasattr(self, "_active_nomad_visitors"):
+                for visitor in self._active_nomad_visitors(tribe):
+                    landmarks.append({
+                        "id": visitor.get("id"),
+                        "tribeId": tribe_id,
+                        "label": visitor.get("label", "神秘旅人"),
+                        "x": visitor.get("x", 0),
+                        "z": visitor.get("z", 0),
+                        "type": "nomad_visitor",
+                        "summary": visitor.get("summary"),
+                        "giftLabel": visitor.get("giftLabel"),
+                        "activeUntil": visitor.get("activeUntil"),
+                        "claimedAt": visitor.get("createdAt")
+                    })
             for site in self._active_diplomacy_council_sites(tribe):
                 landmarks.append({
                     "id": site.get("id"),
@@ -752,6 +804,21 @@ class GameWorldLogicMixin:
                     "claimedBy": remnant.get("createdBy"),
                     "claimedAt": remnant.get("createdAt"),
                     "activeUntil": remnant.get("activeUntil")
+                })
+            migration_plan = self._active_migration_plan(tribe) if hasattr(self, "_active_migration_plan") else None
+            if migration_plan:
+                landmarks.append({
+                    "id": migration_plan.get("id"),
+                    "tribeId": tribe_id,
+                    "label": migration_plan.get("siteLabel") or migration_plan.get("label", "迁徙季行动点"),
+                    "x": migration_plan.get("x", 0),
+                    "z": migration_plan.get("z", 0),
+                    "type": "migration_plan_site",
+                    "planKey": migration_plan.get("key"),
+                    "summary": migration_plan.get("summary"),
+                    "progress": int(migration_plan.get("progress", 0) or 0),
+                    "target": int(migration_plan.get("target", TRIBE_MIGRATION_PLAN_PROGRESS_TARGET) or TRIBE_MIGRATION_PLAN_PROGRESS_TARGET),
+                    "activeUntil": migration_plan.get("activeUntil")
                 })
             for memory in self._active_map_memories(tribe):
                 landmarks.append({
@@ -793,6 +860,14 @@ class GameWorldLogicMixin:
                     environment["migrationSeason"] = None
             except (TypeError, ValueError):
                 environment["migrationSeason"] = None
+        celestial_window = environment.get("celestialWindow") or {}
+        celestial_until = celestial_window.get("activeUntil") if isinstance(celestial_window, dict) else None
+        if celestial_until:
+            try:
+                if datetime.fromisoformat(celestial_until) <= datetime.now():
+                    environment["celestialWindow"] = None
+            except (TypeError, ValueError):
+                environment["celestialWindow"] = None
         active_events = []
         for event in environment.get("worldEvents", []) or []:
             active_until = event.get("activeUntil") if isinstance(event, dict) else None
@@ -910,6 +985,12 @@ class GameWorldLogicMixin:
         }
 
     def _pick_world_event(self, env: Optional[dict] = None) -> dict:
+        if hasattr(self, "_pick_visitor_hint_world_event"):
+            hinted_event = self._pick_visitor_hint_world_event()
+            if hinted_event:
+                ruin_regions = [region for region in WORLD_REGIONS if region.get("type") == "region_ruin"] or WORLD_REGIONS
+                duration = WORLD_EVENT_RARE_RUIN_DURATION_MINUTES if hinted_event.get("key") == "rare_ruin" else None
+                return self._build_world_event(hinted_event, self._weather_rng.choice(ruin_regions), duration)
         event_pool = list(WORLD_EVENT_LIBRARY)
         if self._active_migration_season(env or {}):
             herd_event = next((item for item in WORLD_EVENT_LIBRARY if item.get("key") == "herd"), None)
@@ -979,19 +1060,33 @@ class GameWorldLogicMixin:
 
                 if not self._active_migration_season(env) and self._weather_rng.random() < 0.25:
                     env["migrationSeason"] = self._build_migration_season()
+                celestial_chance = CELESTIAL_WINDOW_CHANCE
+                if hasattr(self, "_visitor_aftereffect_bonus"):
+                    celestial_chance += self._visitor_aftereffect_bonus("celestial")
+                if not self._active_celestial_window(env) and self._weather_rng.random() < celestial_chance:
+                    env["celestialWindow"] = self._build_celestial_window(env)
+                    if hasattr(self, "_mark_visitor_aftereffect_used"):
+                        self._mark_visitor_aftereffect_used("celestial", env["celestialWindow"].get("title", "罕见天象"))
                 env["weather"] = next_weather
                 env["resourceTide"] = self._pick_resource_tide(env)
                 env["seasonObjective"] = self._build_season_objective()
                 event_count = 2 if self._active_migration_season(env) else 1
                 env["worldEvents"] = [self._pick_world_event(env) for _ in range(event_count)]
+                if hasattr(self, "_resolve_weather_forecasts"):
+                    await self._resolve_weather_forecasts(next_weather, current)
                 map_data["environment"] = env
                 map_data["updated_at"] = datetime.now().isoformat()
+                visitor_spawned = 0
+                if hasattr(self, "_maybe_spawn_nomad_visitors"):
+                    visitor_spawned = await self._maybe_spawn_nomad_visitors()
 
                 await self.broadcast({
                     "type": "environment_update",
                     "mapName": self.current_map_name,
                     "environment": env
                 })
+                if visitor_spawned:
+                    await self._broadcast_current_map()
         except asyncio.CancelledError:
             return
         except Exception as e:

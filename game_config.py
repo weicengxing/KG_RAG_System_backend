@@ -5,6 +5,36 @@ SEASON_HISTORY_PATH = GAME_DATA_DIR / "game_seasons.json"
 TRIBE_STATE_PATH = GAME_DATA_DIR / "game_tribes.json"
 
 WEATHER_TYPES = ["sunny", "rain", "snow", "fog"]
+WEATHER_LABELS = {
+    "sunny": "晴朗海风",
+    "rain": "雨幕森林",
+    "snow": "细雪海岸",
+    "fog": "薄雾岛屿"
+}
+TRIBE_WEATHER_FORECAST_ACTIVE_MINUTES = 8
+TRIBE_WEATHER_FORECAST_RECENT_LIMIT = 5
+TRIBE_WEATHER_FORECAST_SIGNS = {
+    "cloud": {
+        "label": "看云脚",
+        "summary": "云脚低压，族人猜下一阵会转成雨幕。",
+        "predictWeather": "rain"
+    },
+    "smoke": {
+        "label": "辨烟柱",
+        "summary": "烟柱直立，族人猜海风会放晴。",
+        "predictWeather": "sunny"
+    },
+    "frost": {
+        "label": "摸霜痕",
+        "summary": "草尖发白，族人猜细雪会压到海岸。",
+        "predictWeather": "snow"
+    },
+    "tide": {
+        "label": "听潮线",
+        "summary": "潮声发闷，族人猜薄雾会从岸边升起。",
+        "predictWeather": "fog"
+    }
+}
 DEFAULT_SHORE_RADIUS = 95.0
 PLAYER_RADIUS = 0.7
 PLAYER_CONFLICT_DISTANCE = 4.5
@@ -178,6 +208,38 @@ TRIBE_FEAST_FOOD_COST = 18
 TRIBE_FEAST_DURATION_MINUTES = 8
 TRIBE_FEAST_GATHER_BONUS = 1
 TRIBE_FEAST_RENOWN_BONUS = 6
+TRIBE_COMMUNAL_COOK_ACTIVE_MINUTES = 20
+TRIBE_COMMUNAL_COOK_TARGET = 3
+TRIBE_COMMUNAL_COOK_HISTORY_LIMIT = 6
+TRIBE_COMMUNAL_COOK_RECIPES = {
+    "hearth_stew": {
+        "label": "围火杂炖",
+        "summary": "把公共食物煮成一锅能让采集队继续出发的热汤。",
+        "foodCost": 3,
+        "woodCost": 2,
+        "reward": {"food": 6, "renown": 3}
+    },
+    "market_broth": {
+        "label": "边市香汤",
+        "summary": "把剩余食材和边市口信一起煮开，让交换更容易被记住。",
+        "foodCost": 4,
+        "woodCost": 1,
+        "reward": {"tradeReputation": 2, "renown": 2}
+    },
+    "trail_porridge": {
+        "label": "寻路稠粥",
+        "summary": "为远行者准备耐放的稠粥，把洞口和旧路故事揉进餐前分工。",
+        "foodCost": 4,
+        "woodCost": 2,
+        "reward": {"discoveryProgress": 1, "renown": 2}
+    }
+}
+TRIBE_COMMUNAL_COOK_INGREDIENTS = {
+    "wood": {"label": "补柴", "summary": "消耗公共木材，让火势稳定。", "woodCost": 1, "renown": 1},
+    "grain": {"label": "添粮", "summary": "消耗公共食物，让这锅饭更厚实。", "foodCost": 1, "food": 1},
+    "stone": {"label": "立热石", "summary": "消耗公共石块，让锅边留下可复用的热石。", "stoneCost": 1, "discoveryProgress": 1},
+    "story": {"label": "讲来历", "summary": "不消耗资源，把谁带来了什么写进宴会记忆。", "renown": 1, "tradeReputation": 1}
+}
 TRIBE_TRADE_MAX_ACTIVE = 5
 TRIBE_TRADE_RENOWN_BONUS = 3
 TRIBE_FLAG_MAX = 4
@@ -235,6 +297,171 @@ TRIBE_MARKET_PACT_TRADE_DISCOUNT = 1
 TRIBE_MARKET_PACT_TRADE_REPUTATION_BONUS = 1
 TRIBE_MARKET_PACT_JOINT_WATCH_TRADE_TRUST = 1
 TRIBE_MARKET_PACT_CONTEST_RELIEF = 1
+TRIBE_NOMAD_CARAVAN_ACTIVE_MINUTES = 14
+TRIBE_NOMAD_CARAVAN_LIMIT = 4
+TRIBE_NOMAD_CARAVAN_ACTIONS = {
+    "escort": {
+        "label": "护送商队",
+        "summary": "派人护送中立商队穿过边界，把边市热度转成安全名声。",
+        "renown": 4,
+        "tradeReputation": 1,
+        "relationDelta": 1,
+        "tradeTrustDelta": 1
+    },
+    "host": {
+        "label": "招待商队",
+        "summary": "拿出少量公共食物招待商队，换来沿途补给和互市口碑。",
+        "foodCost": 2,
+        "food": 5,
+        "tradeReputation": 2,
+        "relationDelta": 1
+    },
+    "invite_stop": {
+        "label": "争取停靠",
+        "summary": "把商队留在边市多停一晚，尝试沉淀新的互市约定。",
+        "tradeReputation": 1,
+        "renown": 2,
+        "tradeTrustDelta": 2,
+        "pactChanceBonus": 0.2
+    }
+}
+TRIBE_NOMAD_VISITOR_ACTIVE_MINUTES = 18
+TRIBE_NOMAD_VISITOR_LIMIT = 4
+TRIBE_NOMAD_VISITOR_CHANCE = 0.28
+TRIBE_NOMAD_VISITOR_AFTEREFFECT_MINUTES = 24
+TRIBE_NOMAD_VISITOR_AFTEREFFECT_LIMIT = 6
+TRIBE_NOMAD_VISITOR_LIBRARY = {
+    "curio_trader": {
+        "label": "贝壳行商",
+        "title": "贝壳行商来访",
+        "summary": "一名带着贝壳、干草药和远方口信的行商从地图边缘靠近营地。",
+        "giftLabel": "奇货与口信",
+        "defaultAction": "barter"
+    },
+    "omen_speaker": {
+        "label": "预兆讲述者",
+        "title": "预兆讲述者来访",
+        "summary": "披着旧兽皮的讲述者声称看见天象与遗迹之间的联系。",
+        "giftLabel": "预言与旧图",
+        "defaultAction": "listen"
+    },
+    "lost_clan": {
+        "label": "流浪氏族",
+        "title": "流浪氏族停步",
+        "summary": "一小支流浪氏族在边缘火堆旁停下，带来纠纷、手艺和交换机会。",
+        "giftLabel": "纠纷与手艺",
+        "defaultAction": "mediate"
+    },
+    "craft_keeper": {
+        "label": "失落技艺守者",
+        "title": "失落技艺守者来访",
+        "summary": "年长的守者带来旧石器的修补方法，想换取食物和安全过夜。",
+        "giftLabel": "失落手艺",
+        "defaultAction": "learn_craft"
+    }
+}
+TRIBE_NOMAD_VISITOR_ACTIONS = {
+    "barter": {
+        "label": "交换奇货",
+        "summary": "拿出少量公共食物交换奇货和远方口信。",
+        "foodCost": 2,
+        "food": 3,
+        "tradeReputation": 2,
+        "renown": 1,
+        "afterLabel": "奇货口信"
+    },
+    "listen": {
+        "label": "听取预言",
+        "summary": "请来访者讲述预兆，换取发现进度并开启可争论的解释。",
+        "renown": 2,
+        "discoveryProgress": 1,
+        "openMyth": True,
+        "afterLabel": "预言余音"
+    },
+    "mediate": {
+        "label": "调解纠纷",
+        "summary": "帮流浪者调解路上纠纷，把紧张故事转成部落名声。",
+        "renown": 3,
+        "pressureRelief": 1,
+        "relationDelta": 1,
+        "afterLabel": "调解口碑"
+    },
+    "learn_craft": {
+        "label": "学习手艺",
+        "summary": "用木石和食物换取失落修补手艺。",
+        "foodCost": 1,
+        "woodCost": 1,
+        "stoneCost": 1,
+        "wood": 3,
+        "stone": 3,
+        "renown": 2,
+        "afterLabel": "手艺记号"
+    }
+}
+TRIBE_NOMAD_VISITOR_AFTEREFFECT_ACTIONS = {
+    "guest_lodge": {
+        "label": "短期客居",
+        "summary": "给流浪氏族留一处夜火，换来补给、手艺和友好口碑。",
+        "foodCost": 2,
+        "wood": 4,
+        "stone": 2,
+        "tradeReputation": 1,
+        "renown": 2,
+        "relationDelta": 1
+    },
+    "mediate_dispute": {
+        "label": "纠纷调停",
+        "summary": "公开调停来访者带来的路上纠纷，降低边界误会。",
+        "renown": 3,
+        "relationDelta": 1,
+        "tradeTrustDelta": 1,
+        "pressureRelief": 1
+    },
+    "preserve_prophecy": {
+        "label": "保存预言",
+        "summary": "把旅人的预兆刻成短句，提前牵引下一次天象或遗迹线索。",
+        "stoneCost": 1,
+        "discoveryProgress": 1,
+        "renown": 1
+    }
+}
+TRIBE_APPRENTICE_EXCHANGE_ACTIVE_MINUTES = 30
+TRIBE_APPRENTICE_EXCHANGE_LIMIT = 6
+TRIBE_APPRENTICE_EXCHANGE_RECENT_LIMIT = 5
+TRIBE_APPRENTICE_EXCHANGE_MIN_RELATION = 2
+TRIBE_APPRENTICE_EXCHANGE_MIN_TRADE_TRUST = 2
+TRIBE_APPRENTICE_EXCHANGE_ACTIONS = {
+    "customs": {
+        "label": "学习风俗",
+        "summary": "互派年轻成员记录对方的篝火礼节，短时提高仪式采集加成。",
+        "renown": 3,
+        "relationDelta": 1,
+        "tradeTrustDelta": 1,
+        "ritualGatherBonus": 1,
+        "buffLabel": "风俗学徒",
+        "buffSummary": "下一次丰收篝火采集加成额外 +1。"
+    },
+    "building": {
+        "label": "学习建筑",
+        "summary": "让学徒跟着对方修整营地，短时降低部落建造消耗。",
+        "renown": 2,
+        "relationDelta": 1,
+        "buildCostDiscountPercent": 10,
+        "buffLabel": "建筑学徒",
+        "buffSummary": "部落建造木材和石块消耗降低 10%。"
+    },
+    "trade": {
+        "label": "学习贸易",
+        "summary": "交换边市口信和记账方式，短时提高完成贸易后的信誉。",
+        "renown": 2,
+        "tradeReputation": 1,
+        "relationDelta": 1,
+        "tradeTrustDelta": 2,
+        "tradeReputationBonus": 1,
+        "buffLabel": "贸易学徒",
+        "buffSummary": "完成部落贸易时额外获得贸易信誉 +1。"
+    }
+}
 TRIBE_DIPLOMACY_COUNCIL_SIGNAL_TARGET = 2
 TRIBE_DIPLOMACY_COUNCIL_MINUTES = 18
 TRIBE_DIPLOMACY_COUNCIL_LIMIT = 3
@@ -266,6 +493,190 @@ TRIBE_DIPLOMACY_COUNCIL_ACTIONS = {
         "tradeTrustDelta": -1,
         "warPressureRelief": 1,
         "closeMarketPacts": True
+    }
+}
+TRIBE_COVENANT_MESSENGER_ACTIVE_MINUTES = 16
+TRIBE_COVENANT_MESSENGER_LIMIT = 6
+TRIBE_COVENANT_MESSENGER_PROGRESS_TARGET = 1
+TRIBE_COVENANT_MESSENGER_RENOWN = 2
+TRIBE_COVENANT_MESSENGER_TRADE = 1
+TRIBE_COVENANT_MESSENGER_RELATION = 1
+TRIBE_COVENANT_MESSENGER_TRUST = 1
+TRIBE_COVENANT_MESSENGER_OUTCOMES = {
+    "clear_path": {
+        "key": "clear_path",
+        "label": "顺利送达",
+        "summary": "信物被双方公开承认，口头约定落成了可回看的旧痕。",
+        "weight": 5
+    },
+    "misunderstanding": {
+        "key": "misunderstanding",
+        "label": "途中误会",
+        "summary": "信使在边界被误会拦下，解释清楚后反而让双方记住了这次承诺。",
+        "renownBonus": 1,
+        "relationBonus": -1,
+        "weight": 2
+    },
+    "third_party_talk": {
+        "key": "third_party_talk",
+        "label": "第三方截谈",
+        "summary": "路上遇到旁观部落截谈，消息传得更远，互市口碑也随之扩散。",
+        "tradeBonus": 1,
+        "weight": 2
+    },
+    "extra_gain": {
+        "key": "extra_gain",
+        "label": "额外外交收益",
+        "summary": "信使顺路带回额外回礼，让这份约定比预想更热络。",
+        "tradeBonus": 1,
+        "trustBonus": 1,
+        "weight": 2
+    }
+}
+TRIBE_FAR_REPLY_DELAY_MINUTES = 2
+TRIBE_FAR_REPLY_ACTIVE_MINUTES = 24
+TRIBE_FAR_REPLY_LIMIT = 6
+TRIBE_FAR_REPLY_RECENT_LIMIT = 5
+TRIBE_FAR_REPLY_ACTIONS = {
+    "welcome": {
+        "label": "迎回口信",
+        "summary": "把远方带回的感谢和故事讲给营火旁的人听。",
+        "renown": 2,
+        "tradeReputation": 1
+    },
+    "send_gift": {
+        "label": "送出回礼",
+        "summary": "拿出少量公共食物作为回礼，让旧约继续升温。",
+        "foodCost": 2,
+        "renown": 1,
+        "relationDelta": 1,
+        "tradeTrustDelta": 1
+    },
+    "clarify": {
+        "label": "澄清误会",
+        "summary": "公开解释远方回信里的误读，避免口信变成新怨。",
+        "renown": 1,
+        "relationDelta": 2,
+        "warPressureRelief": 1
+    },
+    "open_trade": {
+        "label": "接下新交易",
+        "summary": "把回信里的新请求变成下一轮可兑现的互市线索。",
+        "tradeReputation": 2,
+        "tradeTrustDelta": 1,
+        "discoveryProgress": 1
+    }
+}
+TRIBE_FAR_REPLY_OUTCOMES = {
+    "messenger": [
+        {
+            "key": "thanks",
+            "label": "感谢回声",
+            "summary": "送出的信物被远方公开承认，对方托人带回感谢。",
+            "actions": ["welcome", "send_gift"],
+            "renownBonus": 1,
+            "tradeBonus": 1,
+            "weight": 4
+        },
+        {
+            "key": "misread_token",
+            "label": "旧痕误读",
+            "summary": "有人把旧信物讲成另一种版本，需要营地重新澄清。",
+            "actions": ["clarify", "welcome"],
+            "relationBonus": -1,
+            "weight": 2
+        },
+        {
+            "key": "new_trade",
+            "label": "新交易口风",
+            "summary": "远方把信物转成新的交换请求，等待部落接话。",
+            "actions": ["open_trade", "send_gift"],
+            "tradeBonus": 1,
+            "weight": 3
+        }
+    ],
+    "visitor": [
+        {
+            "key": "distant_thanks",
+            "label": "旅人谢意",
+            "summary": "离开的旅人托路人带回谢意，说营地的接待已经传到远处。",
+            "actions": ["welcome", "open_trade"],
+            "renownBonus": 1,
+            "weight": 4
+        },
+        {
+            "key": "help_request",
+            "label": "远方求援",
+            "summary": "旅人的旧路上又出现缺粮和迷路者，回信请求部落给出回应。",
+            "actions": ["send_gift", "clarify"],
+            "discoveryBonus": 1,
+            "weight": 2
+        },
+        {
+            "key": "rumor_map",
+            "label": "旧图回片",
+            "summary": "旅人寄回一片旧图，暗示新的遗迹或边路传闻。",
+            "actions": ["open_trade", "welcome"],
+            "discoveryBonus": 1,
+            "weight": 3
+        }
+    ],
+    "apprentice": [
+        {
+            "key": "lesson_return",
+            "label": "学徒归信",
+            "summary": "短期学徒把学到的规矩写成回信，双方都能继续引用这段经历。",
+            "actions": ["welcome", "send_gift"],
+            "relationBonus": 1,
+            "weight": 4
+        },
+        {
+            "key": "custom_request",
+            "label": "风俗求问",
+            "summary": "对方想继续请教营地风俗，回信可以转成新的信任。",
+            "actions": ["welcome", "open_trade"],
+            "trustBonus": 1,
+            "weight": 3
+        },
+        {
+            "key": "lesson_misread",
+            "label": "学法误会",
+            "summary": "学徒把一段规矩理解错了，双方需要公开澄清。",
+            "actions": ["clarify", "welcome"],
+            "relationBonus": -1,
+            "weight": 2
+        }
+    ]
+}
+TRIBE_PERSONAL_TOKEN_ACTIVE_MINUTES = 45
+TRIBE_PERSONAL_TOKEN_LIMIT = 8
+TRIBE_PERSONAL_TOKEN_RECENT_LIMIT = 5
+TRIBE_PERSONAL_DEBT_LIMIT = 6
+TRIBE_PERSONAL_TOKEN_TRUST_REWARD = 1
+TRIBE_PERSONAL_TOKEN_DEBT_TRUST_PENALTY = 1
+TRIBE_PERSONAL_DEBT_WOOD_COST = 2
+TRIBE_PERSONAL_DEBT_FOOD_COST = 1
+TRIBE_PERSONAL_TOKEN_OPTIONS = {
+    "camp_help": {
+        "label": "营地帮手信物",
+        "summary": "承诺帮营地补一把手，把私人承诺转成公共贡献。",
+        "renown": 1,
+        "contribution": 3,
+        "wood": 2
+    },
+    "border_watch": {
+        "label": "守边照看信物",
+        "summary": "承诺替部落看一段边界，兑现后留下守望名声。",
+        "renown": 2,
+        "contribution": 2,
+        "warPressureRelief": 1
+    },
+    "story_witness": {
+        "label": "见证旧事信物",
+        "summary": "承诺把一件旧事讲清楚，兑现后补进部落记忆。",
+        "renown": 1,
+        "contribution": 1,
+        "discoveryProgress": 1
     }
 }
 PLAYER_NEWCOMER_KEY_RENOWN_MAX = 2
@@ -352,6 +763,31 @@ TRIBE_EMERGENCY_CHOICE_ACTIONS = {
         "abandonedTitle": "救援补救",
         "abandonedSummary": "部落选择先争夺后，救援没有第一时间赶到。成员可以补送食物和人手，把错过的善意补回来。",
         "followup": {"foodCost": 2, "renownReward": 3, "foodReward": 4, "discoveryReward": 1}
+    }
+}
+TRIBE_MUTUAL_AID_ALERT_ACTIVE_MINUTES = 14
+TRIBE_MUTUAL_AID_ALERT_LIMIT = 6
+TRIBE_MUTUAL_AID_ALERT_PROGRESS_TARGET = 1
+TRIBE_MUTUAL_AID_MIN_RELATION = 2
+TRIBE_MUTUAL_AID_MIN_TRADE_TRUST = 2
+TRIBE_MUTUAL_AID_ALERT_ACTIONS = {
+    "rescue_party": {
+        "label": "派出救援",
+        "summary": "派成员循着火烟赶去帮忙，把危急事件变成可被记住的人情。",
+        "responder": {"renown": 3, "tradeReputation": 1, "relationDelta": 1, "tradeTrustDelta": 1},
+        "source": {"food": 3, "renown": 1, "relationDelta": 1, "tradeTrustDelta": 1, "pressureRelief": 1}
+    },
+    "send_supplies": {
+        "label": "送出补给",
+        "summary": "消耗少量公共食物，把对方最缺的一口气补上。",
+        "responder": {"foodCost": 2, "renown": 2, "tradeReputation": 1, "relationDelta": 1, "tradeTrustDelta": 2},
+        "source": {"food": 6, "relationDelta": 1, "tradeTrustDelta": 2}
+    },
+    "night_watch": {
+        "label": "守望接应",
+        "summary": "在边缘守夜、举火、辨认脚印，降低后续冲突和失踪风险。",
+        "responder": {"renown": 2, "discoveryProgress": 1, "relationDelta": 1, "tradeTrustDelta": 1},
+        "source": {"renown": 1, "discoveryProgress": 1, "relationDelta": 1, "pressureRelief": 2}
     }
 }
 TRIBE_OATH_RENOWN_BONUS = 5
@@ -501,6 +937,59 @@ TRIBE_BEAST_TASK_REWARDS = {
     "haul": {"label": "驮运", "wood": 6, "stone": 6, "summary": "驯养幼兽帮助搬运散落物资。"}
 }
 TRIBE_BEAST_TASK_FEEDBACK_SECONDS = 90
+TRIBE_BEAST_SPECIALTIES.update({
+    "sniffer": {"label": "洞穴嗅探", "taskKey": "sniff", "summary": "洞穴嗅探任务额外推进发现。", "discoveryBonus": 1},
+    "omen": {"label": "祭典吉兆", "taskKey": "omen", "summary": "祭典吉兆任务额外带来声望和贸易信誉。", "renownBonus": 2, "tradeBonus": 1}
+})
+TRIBE_BEAST_TASK_REWARDS.update({
+    "sniff": {"label": "洞穴嗅探", "discoveryProgress": 1, "renown": 2, "summary": "幼兽沿着潮湿气味寻找洞口线索，推进部落发现。"},
+    "omen": {"label": "祭典吉兆", "renown": 3, "tradeReputation": 1, "summary": "幼兽绕火与图腾巡行，把近期仪式转成公开吉兆。"}
+})
+TRIBE_BEAST_RITUAL_LINK_LIMIT = 4
+TRIBE_BEAST_RITUAL_LINKS = {
+    "season:no_hunt": {
+        "label": "禁猎护群",
+        "summary": "禁猎季让幼兽更会预警和守边。",
+        "taskKeys": ["guard", "sniff"],
+        "reward": {"renown": 2, "discoveryProgress": 1}
+    },
+    "season:guard_fire": {
+        "label": "护火嗅烟",
+        "summary": "护火季让幼兽记住火味，适合守营和祭典吉兆。",
+        "taskKeys": ["guard", "omen"],
+        "reward": {"renown": 2}
+    },
+    "season:harvest_dance": {
+        "label": "丰收驮运",
+        "summary": "丰收舞让幼兽偏向驮运和庆典巡行。",
+        "taskKeys": ["haul", "omen"],
+        "reward": {"food": 2, "tradeReputation": 1}
+    },
+    "ritual:totem": {
+        "label": "图腾吉兆",
+        "summary": "图腾站位后，幼兽的祭典吉兆更容易被族人承认。",
+        "taskKeys": ["omen"],
+        "reward": {"renown": 4}
+    },
+    "ritual:cave": {
+        "label": "洞口嗅探",
+        "summary": "洞口列队后，幼兽更容易记住洞穴气味。",
+        "taskKeys": ["sniff"],
+        "reward": {"discoveryProgress": 2, "renown": 1}
+    },
+    "ritual:market": {
+        "label": "边市驮运",
+        "summary": "边市迎客后，幼兽更适合驮运和辨认互市气味。",
+        "taskKeys": ["haul", "omen"],
+        "reward": {"tradeReputation": 1, "food": 2}
+    },
+    "ritual:council": {
+        "label": "议场预警",
+        "summary": "议场席位让幼兽更会守住营地秩序。",
+        "taskKeys": ["guard"],
+        "reward": {"renown": 3}
+    }
+}
 TRIBE_HERD_ACTIONS = {
     "drive": {"label": "驱赶", "foodMultiplier": 0.65, "renownBonus": 5, "summary": "驱赶兽群保护领地，声望更高。"},
     "hunt": {"label": "追猎", "foodMultiplier": 1.45, "renownBonus": 0, "summary": "追猎兽群换取更多食物。"},
@@ -609,6 +1098,32 @@ RESOURCE_TIDE_GATHER_BONUS = 1
 MIGRATION_SEASON_DURATION_MINUTES = 18
 MIGRATION_SEASON_TIDE_BONUS = 1
 MIGRATION_SEASON_HERD_WEIGHT = 4
+TRIBE_MIGRATION_PLAN_ACTIVE_MINUTES = 16
+TRIBE_MIGRATION_PLAN_PROGRESS_TARGET = 3
+TRIBE_MIGRATION_PLAN_HISTORY_LIMIT = 5
+TRIBE_MIGRATION_PLAN_OPTIONS = {
+    "hold_camp": {
+        "label": "守旧营",
+        "summary": "把迁徙季当成补给窗口，守住旧营火和仓库，整理柴草与食物。",
+        "siteLabel": "旧营守火点",
+        "siteType": "migration_hold_camp",
+        "reward": {"wood": 6, "food": 4, "renown": 4}
+    },
+    "temporary_camp": {
+        "label": "开临时营",
+        "summary": "在迁徙路线附近立起短时营点，让成员围绕季节目标和大地馈赠收拢资源。",
+        "siteLabel": "迁徙临时营",
+        "siteType": "migration_temporary_camp",
+        "reward": {"food": 8, "discoveryProgress": 1, "renown": 5}
+    },
+    "caravan": {
+        "label": "迁徙车队",
+        "summary": "组织成员沿着兽群和旧路护送物资，把迁徙季变成一次公开远行。",
+        "siteLabel": "迁徙车队路线",
+        "siteType": "migration_caravan",
+        "reward": {"food": 4, "tradeReputation": 1, "discoveryProgress": 1, "renown": 5}
+    }
+}
 WORLD_EVENT_DURATION_MINUTES = 7
 WORLD_EVENT_RARE_RUIN_DURATION_MINUTES = 10
 WORLD_EVENT_RUIN_CHAIN_THRESHOLD = 3
@@ -621,12 +1136,21 @@ TRIBE_MAP_MEMORY_REWARDS = {
     "cave_first": {"renown": 2, "discoveryProgress": 1},
     "war_aftermath": {"renown": 2},
     "border_market": {"tradeReputation": 1, "renown": 1},
-    "oral_epic": {"renown": 2}
+    "oral_epic": {"renown": 2},
+    "season_taboo": {"renown": 1, "discoveryProgress": 1}
 }
 TRIBE_MYTH_CLAIM_ACTIVE_MINUTES = 45
 TRIBE_MYTH_CLAIM_LIMIT = 6
 TRIBE_DOMINANT_MYTH_LIMIT = 5
 TRIBE_MYTH_INFLUENCE_TARGET = 3
+TRIBE_HISTORY_FACT_ACTIVE_MINUTES = 50
+TRIBE_HISTORY_FACT_LIMIT = 6
+TRIBE_ACCEPTED_HISTORY_FACT_LIMIT = 5
+TRIBE_HISTORY_FACT_INFLUENCE_TARGET = 3
+TRIBE_HISTORY_FACT_NEUTRAL_INFLUENCE = 2
+TRIBE_HISTORY_FACT_RENOWN = 3
+TRIBE_HISTORY_FACT_MEDIATOR_RENOWN = 2
+TRIBE_HISTORY_FACT_MEDIATOR_TRADE = 1
 TRIBE_MYTH_INTERPRETATIONS = {
     "hearth": {
         "label": "火种护佑",
@@ -653,6 +1177,71 @@ SEASON_OBJECTIVE_DURATION_MINUTES = 12
 SEASON_CHAIN_TARGET = 3
 SEASON_CELEBRATION_RENOWN_BONUS = 14
 SEASON_CELEBRATION_FOOD_BONUS = 12
+CELESTIAL_WINDOW_DURATION_MINUTES = 14
+CELESTIAL_WINDOW_CHANCE = 0.18
+CELESTIAL_WINDOWS = [
+    {
+        "key": "comet_trail",
+        "title": "彗尾横空",
+        "summary": "长尾星划过天空，旧路、洞口和未被承认的故事短暂变亮。",
+        "branchKeys": ["first_explorer", "mediator", "betrayer"]
+    },
+    {
+        "key": "red_moon",
+        "title": "赤月之夜",
+        "summary": "月色压低营火，边境誓言、停战说法和暗处承诺都更容易被记住。",
+        "branchKeys": ["mediator", "betrayer", "first_explorer"]
+    },
+    {
+        "key": "star_rain",
+        "title": "星雨落野",
+        "summary": "细碎星光落在不同地貌上，所有部落都能借它写下一次赛季传说。",
+        "branchKeys": ["first_explorer", "mediator", "betrayer"]
+    }
+]
+CELESTIAL_BRANCHES = {
+    "first_explorer": {
+        "label": "观星探路",
+        "summary": "把天象解释成远行信号，推进发现，并竞争本次天象的首探者记录。",
+        "legendKey": "first_explorer",
+        "reward": {"discoveryProgress": 2, "renown": 3},
+        "firstReward": {"discoveryProgress": 1, "renown": 2}
+    },
+    "mediator": {
+        "label": "星下调停",
+        "summary": "借共同天象缓和边界压力，积累调停者传说。",
+        "legendKey": "mediator",
+        "reward": {"tradeReputation": 1, "renown": 3},
+        "relationDelta": 1,
+        "tradeTrustDelta": 1,
+        "pressureRelief": 1
+    },
+    "betrayer": {
+        "label": "暗星誓言",
+        "summary": "把天象当作隐秘承诺，声望来得快，也会留下背刺者传说的影子。",
+        "legendKey": "betrayer",
+        "reward": {"renown": 6},
+        "relationDelta": -1,
+        "warPressure": 1
+    }
+}
+SEASON_LEGEND_TITLES = {
+    "first_explorer": {
+        "title": "首探者",
+        "summary": "最早把本赛季的天象、洞穴或远行线索带回部落的人。",
+        "keywords": ["首探", "洞穴", "发现", "观星探路", "迁徙"]
+    },
+    "mediator": {
+        "title": "调停者",
+        "summary": "多次把战争、边境或争执转成可以共同承认的说法。",
+        "keywords": ["调停", "停战", "议和", "星下调停", "互助"]
+    },
+    "betrayer": {
+        "title": "背刺者",
+        "summary": "在盟友、停战或暗处承诺之间留下危险名声。",
+        "keywords": ["背刺", "暗星誓言", "追责", "旧怨"]
+    }
+}
 SEASON_CELEBRATION_CHOICES = {
     "feast": {"label": "宴饮", "summary": "把庆典办成共享食物的长席。", "food": 24, "renown": 6, "buff": {"type": "feast", "title": "宴饮余韵", "gatherBonus": 1}},
     "ritual": {"label": "祭祀", "summary": "把庆典献给图腾与旧日记忆。", "renown": 18, "discoveryProgress": 1, "buff": {"type": "ritual", "title": "祭祀余韵", "discoveryBonus": 1}},
@@ -663,6 +1252,57 @@ TRIBE_SEASON_TABOO_ACTIVE_MINUTES = 30
 TRIBE_SEASON_TABOO_PROGRESS_TARGET = 3
 TRIBE_SEASON_TABOO_LIMIT = 4
 TRIBE_SEASON_TABOO_REMEDY_LIMIT = 5
+TRIBE_SEASON_ATONEMENT_BREAK_THRESHOLD = 2
+TRIBE_SEASON_ATONEMENT_TASK_LIMIT = 6
+TRIBE_ATONEMENT_TOKEN_LIMIT = 6
+TRIBE_ATONEMENT_TOKEN_ACTIVE_MINUTES = 18
+TRIBE_SEASON_ATONEMENT_TASKS = {
+    "taboo_break": {
+        "title": "补火赎罪",
+        "summary": "连续破戒让禁忌失去分量，成员可公开补火、赔礼并重新承认季节承诺。",
+        "foodCost": 1,
+        "woodCost": 2,
+        "renownReward": 4,
+        "discoveryReward": 1
+    },
+    "memory": {
+        "title": "重访旧痕赎罪",
+        "summary": "把破戒、背刺或追责带回活地图旧痕旁重新讲述，修补部落公开记忆。",
+        "foodCost": 1,
+        "woodCost": 1,
+        "renownReward": 3,
+        "discoveryReward": 1,
+        "tradeReward": 1
+    },
+    "ritual": {
+        "title": "共同仪式赎罪",
+        "summary": "借最近的多人站位或祭典余韵公开赔礼，让冲突重新进入共同仪式秩序。",
+        "foodCost": 2,
+        "woodCost": 1,
+        "renownReward": 4,
+        "tradeReward": 1
+    },
+    "betrayal": {
+        "title": "赔礼赎罪",
+        "summary": "背刺留下了公开裂痕，成员可送出赔礼并重整旧盟友关系。",
+        "foodCost": 3,
+        "renownReward": 3,
+        "tradeReward": 1,
+        "relationDelta": 1,
+        "tradeTrustDelta": 1,
+        "pressureRelief": 1
+    },
+    "truce_grievance": {
+        "title": "停战补誓",
+        "summary": "停战追责留下新仇怨，成员可公开补誓，避免旧怨继续滚成大战。",
+        "foodCost": 2,
+        "woodCost": 1,
+        "renownReward": 3,
+        "relationDelta": 1,
+        "tradeTrustDelta": 1,
+        "pressureRelief": 1
+    }
+}
 TRIBE_SEASON_TABOO_OPTIONS = {
     "no_hunt": {
         "label": "禁猎季",
@@ -698,10 +1338,48 @@ TRIBE_SEASON_TABOO_OPTIONS = {
         "remedy": {"title": "补跳丰收舞", "summary": "把被中断的舞步补完，让这次抢收重新回到共同庆典里。", "foodCost": 1, "renownReward": 3, "tradeReward": 1}
     }
 }
+TRIBE_SEASON_TABOO_CONTEXTS = {
+    "old_battlefield_no_hunt": {
+        "tabooKey": "no_hunt",
+        "label": "旧战场禁猎",
+        "summary": "族人把旧战场附近暂时让给沉默与巡望，不在血痕未冷处追猎。",
+        "memoryKinds": ["war_aftermath"],
+        "mythSourceKinds": ["war_aftermath"],
+        "sourceKeywords": ["战后", "旧战", "战场", "战争"],
+        "observeReward": {"renown": 1},
+        "blessing": {"renown": 2, "warPressureRelief": 1},
+        "mythSummary": "旧战场禁猎形成祝福后，族人开始争论这究竟是火种护佑、守边誓言还是旧路显现。"
+    },
+    "border_market_harvest": {
+        "tabooKey": "harvest_dance",
+        "label": "边市丰收舞",
+        "summary": "边市旧痕尚热，成员把丰收舞跳成互市前的欢迎与分食。",
+        "memoryKinds": ["border_market"],
+        "mythSourceKinds": ["border_market", "trade_route_market"],
+        "sourceKeywords": ["边市", "互市", "贸易", "交换"],
+        "interpretationKeys": ["trade"],
+        "observeReward": {"tradeReputation": 1},
+        "blessing": {"food": 3, "tradeReputation": 1},
+        "mythSummary": "边市丰收舞让交换与收获绑在一起，族人可以继续争论这是否预示互市佳兆。"
+    },
+    "ruin_guard_fire": {
+        "tabooKey": "guard_fire",
+        "label": "遗迹护火",
+        "summary": "遗迹、洞口或旧诗旁的火被认真看守，族人相信火光能照出下一段旧路。",
+        "memoryKinds": ["cave_first", "oral_epic", "event_trace"],
+        "mythSourceKinds": ["world_event", "rare_ruin", "oral_epic"],
+        "sourceKeywords": ["遗迹", "稀有遗迹", "洞口", "洞穴", "旧事", "史诗"],
+        "interpretationKeys": ["hearth", "trail"],
+        "observeReward": {"discoveryProgress": 1},
+        "blessing": {"discoveryProgress": 1, "renown": 2},
+        "mythSummary": "遗迹护火把火种与旧路连在一起，族人可以把它讲成护佑、显现或守边誓言。"
+    }
+}
 TRIBE_STANDING_RITUAL_ACTIVE_MINUTES = 25
 TRIBE_STANDING_RITUAL_MIN_PARTICIPANTS = 2
 TRIBE_STANDING_RITUAL_TARGET_PARTICIPANTS = 3
 TRIBE_STANDING_RITUAL_HISTORY_LIMIT = 5
+TRIBE_STANDING_RITUAL_LANDMARK_RADIUS = 18
 TRIBE_STANDING_RITUAL_OPTIONS = {
     "totem": {
         "label": "图腾环站",
@@ -733,6 +1411,28 @@ TRIBE_STANDING_RITUAL_STANCES = {
     "fire": {"label": "持火者", "summary": "消耗少量木材，强化声望和守望意味。", "woodCost": 2, "renown": 2},
     "grain": {"label": "携粮者", "summary": "消耗少量食物，强化宴饮、边市或救援意味。", "foodCost": 2, "tradeReputation": 1},
     "stone": {"label": "立石者", "summary": "消耗少量石材，强化洞口、议场和历史记号。", "stoneCost": 2, "discoveryProgress": 1}
+}
+TRIBE_STANDING_RITUAL_LANDMARK_BONUSES = {
+    "totem": {
+        "label": "图腾近旁",
+        "summary": "靠近本部落图腾或公共图腾站位，额外沉淀共同声望。",
+        "reward": {"renown": 2}
+    },
+    "cave": {
+        "label": "洞口列阵",
+        "summary": "靠近洞口站位，额外推进洞穴嗅探与发现线索。",
+        "reward": {"discoveryProgress": 1, "renown": 1}
+    },
+    "market": {
+        "label": "边市迎线",
+        "summary": "靠近开放边市或交换通路站位，额外修复贸易信任。",
+        "reward": {"tradeReputation": 1, "food": 1}
+    },
+    "council": {
+        "label": "议场席边",
+        "summary": "靠近大议会会场站位，额外巩固外交秩序。",
+        "reward": {"tradeReputation": 1, "renown": 1}
+    }
 }
 SEASON_OBJECTIVES = {
     "region_forest": {"title": "林地采种", "summary": "采集迁徙季节留下的坚果与嫩枝。", "food": 8, "wood": 10, "renown": 4},

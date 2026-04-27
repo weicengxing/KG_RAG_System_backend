@@ -284,6 +284,19 @@ class GameEmergencyChoiceMixin:
         task["completedAt"] = now_text
         member = tribe.get("members", {}).get(player_id, {})
         detail = f"{member.get('name', '成员')} 完成{task.get('title', '紧急补救')}：{'、'.join(reward_parts) or '部落情绪稳定'}。"
+        other_tribe_id = task.get("otherTribeId")
+        other_tribe = self.tribes.get(other_tribe_id) if other_tribe_id else None
+        if other_tribe and hasattr(self, "_open_covenant_messenger_task_pair"):
+            self._open_covenant_messenger_task_pair(
+                tribe,
+                other_tribe,
+                "disaster_relief",
+                task_id,
+                "救灾信使",
+                f"{task.get('title', '紧急补救')}处理后，部落可以把救援口信送给 {task.get('otherTribeName', '邻近部落')}，把共同救灾从临时应急变成可追认的人情。",
+                now_text
+            )
+            detail += " 一件救灾信物也被整理出来，等待成员护送。"
         self._add_tribe_history(tribe, "governance", "紧急补救", detail, player_id, {"kind": "emergency_followup", "taskId": task_id, "sourceChoiceId": task.get("sourceChoiceId")})
         await self._notify_tribe(tribe_id, detail)
         await self.broadcast_tribe_state(tribe_id)
