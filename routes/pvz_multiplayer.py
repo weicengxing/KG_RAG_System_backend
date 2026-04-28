@@ -326,15 +326,26 @@ async def pvz_websocket(
                 })
                 
             elif message_type == "game_over":
-                # 游戏结束，广播给所有玩家
+                # 手动结束视为发起方认输，服务端计算胜方，随后立即解散房间
+                winner = "zombie" if role == "plant" else "plant"
+                loser = role
                 await ws_manager.broadcast_to_room(room_id, "event.game_over", {
                     "room_id": room_id,
-                    "winner": payload.get("winner"),
-                    "reason": payload.get("reason")
+                    "winner": winner,
+                    "loser": loser,
+                    "reason": payload.get("reason") or f"{loser}_surrender",
+                    "room_closed": True
                 })
-                
-                # 更新房间状态
-                await simple_room_manager.update_room_status(room_id, "finished")
+
+                await simple_room_manager.destroy_room(room_id)
+
+                active_rooms = await simple_room_manager.get_active_rooms()
+                await ws_manager.broadcast_to_lobby("event.room_list_update", {
+                    "rooms": active_rooms,
+                    "message": "房间已解散"
+                })
+                await ws_manager.close_room(room_id, reason="Game over")
+                return
                 
             else:
                 logger.warning(f"未知的消息类型: {message_type}")

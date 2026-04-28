@@ -53,6 +53,19 @@ class SimplePvZWebSocketManager:
             # 如果房间没有连接了，删除房间
             if not self.active_connections[room_id]:
                 del self.active_connections[room_id]
+
+    async def close_room(self, room_id: str, code: int = 1000, reason: str = "Room closed"):
+        """关闭房间内所有WebSocket连接并清理内存状态"""
+        connections = list(self.active_connections.get(room_id, {}).values())
+
+        for connection in connections:
+            try:
+                await connection.close(code=code, reason=reason)
+            except Exception as e:
+                logger.debug(f"关闭房间 {room_id} 连接失败: {e}")
+
+        self.active_connections.pop(room_id, None)
+        self.room_selections.pop(room_id, None)
     
     def disconnect_lobby(self, user_id: str):
         """断开大厅WebSocket连接"""

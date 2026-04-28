@@ -2,7 +2,7 @@
 植物大战僵尸游戏存档数据模型
 """
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Dict, Optional, Any
 from datetime import datetime
 
@@ -68,6 +68,21 @@ class GameStatsResponse(BaseModel):
     success: bool
     message: str
     data: Optional[GameStatsData] = None
+
+
+class PvZConfigPayload(BaseModel):
+    """PVZ配置覆盖数据"""
+    plants: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+    zombies: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+    game: Dict[str, Any] = Field(default_factory=dict)
+
+
+class PvZConfigResponse(BaseModel):
+    """PVZ配置响应"""
+    success: bool
+    message: str
+    is_vip: bool = False
+    data: PvZConfigPayload = Field(default_factory=PvZConfigPayload)
 
 
 # ==================== 多人对战模式数据模型 ====================

@@ -4,13 +4,22 @@
 
 from fastapi import APIRouter, Depends, HTTPException
 from config import REDIS_HOST, REDIS_PORT, REDIS_DB, REDIS_PASSWORD
-from schemas.pvz_schemas import GameStateSave, GameStateResponse, GameStatsData, UpdateGameStatsRequest, GameStatsResponse
+from schemas.pvz_schemas import (
+    GameStateSave,
+    GameStateResponse,
+    GameStatsData,
+    UpdateGameStatsRequest,
+    GameStatsResponse,
+    PvZConfigPayload,
+    PvZConfigResponse,
+)
 from motor.motor_asyncio import AsyncIOMotorClient
 import redis.asyncio as redis
 import json
 from datetime import datetime, timedelta
 import logging
 from auth_deps import get_current_user
+from novel_routes import check_user_vip_status
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +28,109 @@ router = APIRouter()
 # MongoDB连接
 MONGO_URI = "mongodb://localhost:27017"
 mongo_client = AsyncIOMotorClient(MONGO_URI)
+PVZ_CONFIG_DOC_ID = "global"
+
+
+def _sanitize_config_section(section: dict) -> dict:
+    """只接受数值型配置，防止前端写入任意复杂对象。"""
+    sanitized = {}
+    if not isinstance(section, dict):
+        return sanitized
+
+    for item_id, values in section.items():
+      if not isinstance(values, dict):
+          continue
+      clean_values = {}
+      for key, value in values.items():
+          if isinstance(value, bool):
+              continue
+          if isinstance(value, (int, float)):
+              clean_values[key] = value
+      if clean_values:
+          sanitized[str(item_id)] = clean_values
+
+    return sanitized
+
+
+def _sanitize_game_config(values: dict) -> dict:
+    sanitized = {}
+    if not isinstance(values, dict):
+        return sanitized
+
+    for key, value in values.items():
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, (int, float)):
+            sanitized[key] = value
+
+    return sanitized
+
+
+def _sanitize_pvz_config(payload: PvZConfigPayload) -> dict:
+    return {
+        "plants": _sanitize_config_section(payload.plants),
+        "zombies": _sanitize_config_section(payload.zombies),
+        "game": _sanitize_game_config(payload.game),
+    }
+
+
+async def _load_pvz_config_overrides() -> dict:
+    db = mongo_client["chat_app_db"]
+    doc = await db["pvz_config_overrides"].find_one({"_id": PVZ_CONFIG_DOC_ID})
+    if not doc:
+        return {"plants": {}, "zombies": {}, "game": {}}
+    return {
+        "plants": doc.get("plants") or {},
+        "zombies": doc.get("zombies") or {},
+        "game": doc.get("game") or {},
+    }
+
+
+async def _save_pvz_config_overrides(config_data: dict, username: str):
+    db = mongo_client["chat_app_db"]
+    await db["pvz_config_overrides"].update_one(
+        {"_id": PVZ_CONFIG_DOC_ID},
+        {
+            "$set": {
+                **config_data,
+                "updated_by": username,
+                "updated_at": datetime.utcnow(),
+            }
+        },
+        upsert=True,
+    )
+
+
+@router.get("/pvz/config", response_model=PvZConfigResponse)
+async def get_pvz_config(current_user: str = Depends(get_current_user)):
+    """获取PVZ配置覆盖值，并由后端判断当前用户是否VIP。"""
+    is_vip = check_user_vip_status(current_user)
+    config_data = await _load_pvz_config_overrides()
+    return PvZConfigResponse(
+        success=True,
+        message="配置获取成功",
+        is_vip=is_vip,
+        data=PvZConfigPayload(**config_data),
+    )
+
+
+@router.put("/pvz/config", response_model=PvZConfigResponse)
+async def update_pvz_config(
+    payload: PvZConfigPayload,
+    current_user: str = Depends(get_current_user),
+):
+    """VIP用户保存PVZ配置覆盖值。"""
+    if not check_user_vip_status(current_user):
+        raise HTTPException(status_code=403, detail="此功能仅限VIP用户使用")
+
+    config_data = _sanitize_pvz_config(payload)
+    await _save_pvz_config_overrides(config_data, current_user)
+    return PvZConfigResponse(
+        success=True,
+        message="配置已保存",
+        is_vip=True,
+        data=PvZConfigPayload(**config_data),
+    )
 
 
 @router.post("/pvz/save", response_model=GameStateResponse)

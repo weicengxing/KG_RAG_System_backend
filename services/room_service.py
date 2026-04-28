@@ -251,6 +251,30 @@ class SimplePvZRoomManager:
             json.dumps(room_state)
         )
         return True
+
+    async def destroy_room(self, room_id: str) -> bool:
+        """彻底解散房间，并清理房间码、用户映射和活跃房间索引"""
+        room_data = await self.redis.get(f"pvz:room:{room_id}")
+        if not room_data:
+            await self.redis.zrem("pvz:active_rooms", room_id)
+            return False
+
+        room_state = json.loads(room_data)
+        keys_to_delete = [
+            f"pvz:room:{room_id}",
+            f"pvz:room_code:{room_state.get('room_code')}",
+        ]
+
+        for player_key in ("plant_player", "zombie_player"):
+            player_id = room_state.get(player_key)
+            if player_id:
+                keys_to_delete.append(f"pvz:user_room:{player_id}")
+
+        await self.redis.delete(*keys_to_delete)
+        await self.redis.zrem("pvz:active_rooms", room_id)
+
+        logger.info(f"房间 {room_id} 已彻底解散")
+        return True
     
     async def get_active_rooms(self, count: int = 50) -> List[Dict]:
         """获取活跃房间列表"""

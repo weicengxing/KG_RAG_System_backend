@@ -189,7 +189,7 @@ app.add_middleware(
 async def rate_limit_middleware(request: Request, call_next):
     """限流中间件：检查IP、接口和全局限流"""
     # 不需要限流的路径（健康检查、文档等）
-    exempt_paths = ["/", "/docs", "/openapi.json", "/redoc"]
+    exempt_paths = ["/", "/docs", "/openapi.json", "/redoc", "/api/public/ping"]
     path = request.url.path
     
     # 检查是否是豁免路径
@@ -249,7 +249,7 @@ async def jwt_auth_middleware(request: Request, call_next):
         return response
     
     # 不需要认证的路径
-    public_paths = ["/docs", "/openapi.json", "/redoc"]
+    public_paths = ["/docs", "/openapi.json", "/redoc", "/api/public/ping"]
     # 不需要认证的 auth 路径（精确匹配）
     public_auth_paths = [
         "/auth/login",
@@ -455,6 +455,28 @@ app.include_router(duel_fighter_router, prefix="/api", tags=["双人格斗"])
 class UserAuth(BaseModel):
     username: str
     password: str
+
+@app.get("/api/public/ping")
+def public_ping(request: Request):
+    """Public connectivity check for production tunnel/frontend smoke tests."""
+    cf_ray = request.headers.get("CF-Ray")
+    cf_connecting_ip = request.headers.get("CF-Connecting-IP")
+    forwarded_for = request.headers.get("X-Forwarded-For")
+
+    return {
+        "ok": True,
+        "message": "public api reachable",
+        "service": "kg-rag-system-backend",
+        "time": datetime.utcnow().isoformat() + "Z",
+        "auth_required": False,
+        "authorization_header_present": bool(request.headers.get("Authorization")),
+        "cloudflare": {
+            "via_cloudflare": bool(cf_ray),
+            "cf_ray_present": bool(cf_ray),
+            "cf_connecting_ip_present": bool(cf_connecting_ip),
+            "x_forwarded_for_present": bool(forwarded_for),
+        },
+    }
 
 @app.get("/")
 def read_root():
