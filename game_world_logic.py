@@ -1403,6 +1403,21 @@ class GameWorldLogicMixin:
                         "target": int(puzzle.get("target", 0) or 0),
                         "ready": bool(puzzle.get("ready"))
                     })
+            if center and hasattr(self, "_public_myth_divergences"):
+                for index, divergence in enumerate(self._public_myth_divergences(tribe)[-2:]):
+                    x, z = self._tribe_map_marker_position(center, 28 + index)
+                    landmarks.append({
+                        "id": divergence.get("id"),
+                        "tribeId": tribe_id,
+                        "label": divergence.get("label", "神话分歧"),
+                        "x": divergence.get("x") or x,
+                        "z": divergence.get("z") or z,
+                        "type": "myth_divergence",
+                        "summary": divergence.get("summary"),
+                        "sourceLabel": divergence.get("sourceLabel"),
+                        "winnerLabel": divergence.get("winnerLabel"),
+                        "activeUntil": divergence.get("activeUntil")
+                    })
         return landmarks
 
     def _compose_map_data(self, map_name: Optional[str] = None) -> Optional[dict]:
@@ -1555,6 +1570,8 @@ class GameWorldLogicMixin:
             for weather_key in profile.get("weatherBias", []) or []:
                 if weather_key in candidates:
                     candidates.extend([weather_key] * min(2, intensity))
+        if hasattr(self, "_apply_weather_temper_bias"):
+            candidates = self._apply_weather_temper_bias(candidates)
         return self._weather_rng.choice(candidates)
 
     def _active_migration_season(self, env: dict) -> Optional[dict]:
@@ -1701,6 +1718,10 @@ class GameWorldLogicMixin:
                     "label": ripple_label,
                     "summary": f"{ripple_label}影响了这一轮天气余波。"
                 } if ripple_label else None
+                if hasattr(self, "_maybe_spawn_weather_tempers"):
+                    await self._maybe_spawn_weather_tempers(current, next_weather, ripple_label)
+                if hasattr(self, "_settle_weather_temper_biases"):
+                    self._settle_weather_temper_biases(next_weather)
                 env["resourceTide"] = self._pick_resource_tide(env)
                 env["seasonObjective"] = self._build_season_objective()
                 event_count = 2 if self._active_migration_season(env) else 1

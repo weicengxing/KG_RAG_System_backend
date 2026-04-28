@@ -23,6 +23,23 @@ class GameMaskPerformanceMixin:
             if isinstance(item, dict)
         ][-TRIBE_MASK_PERFORMANCE_RECORD_LIMIT:]
 
+    def _active_mask_identity_titles(self, tribe: dict) -> list:
+        return self._active_tribe_items(
+            tribe,
+            "mask_identity_titles",
+            TRIBE_MASK_IDENTITY_TITLE_LIMIT,
+            inactive_statuses={"expired"}
+        )
+
+    def _public_mask_identity_titles(self, tribe: dict) -> list:
+        return [dict(item) for item in self._active_mask_identity_titles(tribe)]
+
+    def _public_mask_identity_title_records(self, tribe: dict) -> list:
+        return [
+            item for item in (tribe.get("mask_identity_title_records", []) or [])
+            if isinstance(item, dict)
+        ][-TRIBE_MASK_IDENTITY_TITLE_RECORD_LIMIT:]
+
     def _public_mask_performance_types(self) -> dict:
         options = {}
         for key, profile in TRIBE_MASK_PERFORMANCE_TYPES.items():
@@ -74,6 +91,142 @@ class GameMaskPerformanceMixin:
             player["personal_renown"] = int(player.get("personal_renown", 0) or 0) + TRIBE_MASK_PERFORMANCE_RESPONSE_RENOWN
             parts.append(f"{participant.get('memberName', '成员')}个人声望+{TRIBE_MASK_PERFORMANCE_RESPONSE_RENOWN}")
         return parts
+
+    def _mask_performance_action_records(self, performance: dict, closer_id: str) -> list:
+        actions = []
+        participants = performance.get("participants", []) or []
+        for index, participant in enumerate(participants):
+            member_id = participant.get("memberId")
+            if member_id == performance.get("initiatorId"):
+                action_label = "起势"
+            elif member_id == closer_id:
+                action_label = "收束"
+            else:
+                action_label = "接拍"
+            actions.append({
+                "memberId": member_id,
+                "memberName": participant.get("memberName", "成员"),
+                "actionLabel": action_label,
+                "step": index + 1,
+                "createdAt": participant.get("createdAt")
+            })
+        return actions
+
+    def _create_mask_title_newcomer_influence(self, tribe_id: str, tribe: dict, title: dict, profile: dict, now: datetime) -> dict | None:
+        context = profile.get("newcomerContext")
+        if not context:
+            return None
+        influence = {
+            "id": f"mask_title_influence_{tribe_id}_{int(now.timestamp() * 1000)}_{random.randint(100, 999)}",
+            "status": "active",
+            "context": context,
+            "label": profile.get("newcomerLabel", title.get("title", "面具称号")),
+            "summary": f"{title.get('title', '面具称号')}会被下一次相关事件引用：{profile.get('summary', '')}",
+            "bonus": 1,
+            "sourceKind": "mask_identity_title",
+            "titleId": title.get("id"),
+            "identityKey": title.get("identityKey"),
+            "identityLabel": title.get("identityLabel"),
+            "createdByName": title.get("participantsText", "成员"),
+            "createdAt": now.isoformat(),
+            "activeUntil": datetime.fromtimestamp(now.timestamp() + TRIBE_NEWCOMER_FATE_INFLUENCE_MINUTES * 60).isoformat()
+        }
+        tribe.setdefault("newcomer_fate_influences", []).append(influence)
+        tribe["newcomer_fate_influences"] = tribe["newcomer_fate_influences"][-TRIBE_NEWCOMER_FATE_INFLUENCE_LIMIT:]
+        return influence
+
+    def _maybe_unlock_mask_identity_title(self, tribe_id: str, tribe: dict, performance: dict, record: dict, now: datetime) -> dict | None:
+        identity_key = performance.get("identityKey")
+        profile = TRIBE_MASK_IDENTITY_TITLE_PROFILES.get(identity_key)
+        if not profile:
+            return None
+        identity_records = [
+            item for item in (tribe.get("mask_performance_records", []) or [])
+            if isinstance(item, dict) and item.get("identityKey") == identity_key and item.get("status") == "completed"
+        ]
+        if len(identity_records) < TRIBE_MASK_IDENTITY_TITLE_UNLOCK_COUNT:
+            return None
+
+        active_titles = self._active_mask_identity_titles(tribe)
+        existing = next((item for item in active_titles if item.get("identityKey") == identity_key), None)
+        participant_names = [
+            item.get("memberName", "成员")
+            for item in (performance.get("participants", []) or [])
+            if isinstance(item, dict)
+        ]
+        base_title = {
+            "status": "active",
+            "identityKey": identity_key,
+            "identityLabel": performance.get("identityLabel", "身份"),
+            "title": profile.get("title", performance.get("identityLabel", "面具称号")),
+            "summary": profile.get("summary", ""),
+            "participants": list(performance.get("participants", []) or []),
+            "participantsText": "、".join(participant_names[-4:]) or "成员",
+            "performanceCount": len(identity_records),
+            "lastPerformanceId": record.get("id"),
+            "lastPerformanceLabel": performance.get("label", "面具身份表演"),
+            "recordIds": [item.get("id") for item in identity_records[-3:] if item.get("id")],
+            "createdAt": existing.get("createdAt") if existing else now.isoformat(),
+            "refreshedAt": now.isoformat(),
+            "activeUntil": datetime.fromtimestamp(now.timestamp() + TRIBE_MASK_IDENTITY_TITLE_ACTIVE_MINUTES * 60).isoformat()
+        }
+        if existing:
+            existing.update(base_title)
+            title = existing
+        else:
+            title = {
+                **base_title,
+                "id": f"mask_identity_title_{tribe_id}_{identity_key}_{int(now.timestamp() * 1000)}_{random.randint(100, 999)}"
+            }
+            active_titles.append(title)
+        tribe["mask_identity_titles"] = active_titles[-TRIBE_MASK_IDENTITY_TITLE_LIMIT:]
+
+        title_record = {
+            "id": f"mask_identity_title_record_{tribe_id}_{int(now.timestamp() * 1000)}_{random.randint(100, 999)}",
+            "titleId": title.get("id"),
+            "title": title.get("title"),
+            "summary": title.get("summary"),
+            "identityKey": identity_key,
+            "identityLabel": title.get("identityLabel"),
+            "performanceId": record.get("id"),
+            "performanceLabel": performance.get("label", "面具身份表演"),
+            "participantsText": title.get("participantsText"),
+            "actionRecords": record.get("actionRecords", []),
+            "performanceCount": title.get("performanceCount", 0),
+            "createdAt": now.isoformat()
+        }
+        tribe.setdefault("mask_identity_title_records", []).append(title_record)
+        tribe["mask_identity_title_records"] = tribe["mask_identity_title_records"][-TRIBE_MASK_IDENTITY_TITLE_RECORD_LIMIT:]
+
+        influence = self._create_mask_title_newcomer_influence(tribe_id, tribe, title, profile, now)
+        if influence:
+            title["newcomerInfluence"] = dict(influence)
+            title_record["newcomerInfluence"] = dict(influence)
+
+        if hasattr(self, "_open_myth_claim"):
+            myth_claim = self._open_myth_claim(
+                tribe,
+                "mask_identity_title",
+                title.get("title", "面具称号"),
+                f"{title.get('identityLabel', '身份')}多次被公开表演接住，部落可以解释这段称号从哪里来。",
+                float(performance.get("x", 0) or 0),
+                float(performance.get("z", 0) or 0),
+                title.get("id", ""),
+                title.get("participantsText", "")
+            )
+            if myth_claim:
+                title["mythClaimId"] = myth_claim.get("id")
+                title_record["mythClaimId"] = myth_claim.get("id")
+                record["mythClaimId"] = myth_claim.get("id")
+
+        record["identityTitle"] = {
+            "id": title.get("id"),
+            "title": title.get("title"),
+            "summary": title.get("summary"),
+            "activeUntil": title.get("activeUntil"),
+            "performanceCount": title.get("performanceCount", 0)
+        }
+        return title
 
     async def start_mask_identity_performance(self, player_id: str, identity_key: str = ""):
         tribe_id = self.player_tribes.get(player_id)
@@ -164,11 +317,22 @@ class GameMaskPerformanceMixin:
             performance["completedAt"] = now.isoformat()
             performance["completedBy"] = player_id
             performance["rewardParts"] = reward_parts
+            performance["actionRecords"] = self._mask_performance_action_records(performance, player_id)
             record = {**performance, "id": f"mask_performance_record_{tribe_id}_{int(now.timestamp() * 1000)}_{random.randint(100, 999)}"}
             tribe.setdefault("mask_performance_records", []).append(record)
             tribe["mask_performance_records"] = tribe["mask_performance_records"][-TRIBE_MASK_PERFORMANCE_RECORD_LIMIT:]
+            title = self._maybe_unlock_mask_identity_title(tribe_id, tribe, performance, record, now)
+            if title:
+                reward_parts.append(f"短时称号：{title.get('title', '面具称号')}")
             detail = f"“{performance.get('label', '面具身份表演')}”完成连携，{member_name}接住最后一拍。{'、'.join(reward_parts) or '表演被记入部落风俗'}。"
             await self._publish_world_rumor("culture", "面具身份表演", f"{tribe.get('name', '部落')}把{performance.get('identityLabel', '身份')}演成了公开场景，附近成员一起响应。", {"tribeId": tribe_id, "performanceId": performance.get("id")})
+            if title:
+                await self._publish_world_rumor(
+                    "culture",
+                    "面具身份称号",
+                    f"{tribe.get('name', '部落')}连续接住{performance.get('identityLabel', '身份')}表演，短时称号“{title.get('title', '面具称号')}”开始流传。",
+                    {"tribeId": tribe_id, "performanceId": performance.get("id"), "titleId": title.get("id"), "mythClaimId": title.get("mythClaimId")}
+                )
         self._add_tribe_history(tribe, "culture", "面具身份表演", detail, player_id, {"kind": "mask_performance", "performance": performance, "participant": participant})
         await self.send_personal_conflict_status(player_id)
         await self._notify_tribe(tribe_id, detail)

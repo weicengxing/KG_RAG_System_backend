@@ -134,6 +134,10 @@ class GameVisitorMixin:
             hint = self._personality_visitor_hint(tribe, key)
             if hint:
                 visitor["personalityHint"] = hint
+        if hasattr(self, "_festival_tradition_visitor_hint"):
+            hint = self._festival_tradition_visitor_hint(tribe)
+            if hint:
+                visitor["festivalTraditionHint"] = hint
         return visitor
 
     async def _maybe_spawn_nomad_visitors(self) -> int:

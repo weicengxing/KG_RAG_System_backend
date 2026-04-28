@@ -50,6 +50,11 @@ class GameNightRiskMixin:
         if recent_weather:
             supports.append({"label": f"近期命中{recent_weather.get('actualWeatherLabel', '天气')}", "relief": 1})
             relief += 1
+        weather_myth = self._weather_temper_myth_source_for(tribe, "nightRiskRelief") if hasattr(self, "_weather_temper_myth_source_for") else None
+        myth_relief = int(((weather_myth or {}).get("effects", {}) or {}).get("nightRiskRelief", 0) or 0)
+        if myth_relief:
+            supports.append({"label": weather_myth.get("label", "天气神话来源"), "relief": myth_relief})
+            relief += myth_relief
 
         standing = self._active_standing_ritual(tribe) if hasattr(self, "_active_standing_ritual") else None
         if standing and len(standing.get("participants", []) or []) >= TRIBE_STANDING_RITUAL_MIN_PARTICIPANTS:

@@ -2,7 +2,6 @@
 游戏 WebSocket 路由
 支持多人在线游戏、实时位置同步、聊天和地图管理
 """
-
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, Query
 from typing import Dict, Set, Optional, List
 import json
@@ -17,7 +16,6 @@ import logging
 # 配置日志
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("game_server")
-
 router = APIRouter()
 
 from game_config import *
@@ -28,6 +26,7 @@ from game_story_events import GameStoryEventsMixin
 from game_myths import GameMythMixin
 from game_season_taboo import GameSeasonTabooMixin
 from game_standing_rituals import GameStandingRitualMixin
+from game_observer_interventions import GameObserverInterventionMixin
 from game_beast_links import GameBeastLinkMixin
 from game_migration import GameMigrationMixin
 from game_celestial import GameCelestialMixin
@@ -78,8 +77,10 @@ from game_collection_wall import GameCollectionWallMixin
 from game_lost_items import GameLostItemMixin
 from game_public_secrets import GamePublicSecretMixin
 from game_renown_pledges import GameRenownPledgeMixin
+from game_oral_contracts import GameOralContractMixin
 from game_customs import GameCustomMixin
 from game_boundary_temperatures import GameBoundaryTemperatureMixin
+from game_boundary_outcomes import GameBoundaryOutcomeMixin
 from game_alliance_signals import GameAllianceSignalMixin
 from game_common_judges import GameCommonJudgeMixin
 from game_dispute_witness import GameDisputeWitnessMixin
@@ -96,11 +97,11 @@ from game_routes_personal import GameRoutePersonalMixin
 from game_routes_tribe_actions import GameRouteTribeActionsMixin
 from game_newcomer_fates import GameNewcomerFateMixin
 from game_mask_performances import GameMaskPerformanceMixin
-class ConnectionManager(GameRouteConnectionMixin, GameRoutePersonalMixin, GameRouteTribeActionsMixin, GameNewcomerFateMixin, GameMaskPerformanceMixin, GameConflictMixin, GameEmergencyChoiceMixin, GameMutualAidAlertMixin, GameStoryEventsMixin, GameSeasonTabooMixin, GameStandingRitualMixin, GameBeastLinkMixin, GameMigrationMixin, GameCelestialMixin, GameHistoryFactMixin, GameCaravanMixin, GameCookingMixin, GameDrumRhythmMixin, GameGroupEmoteMixin, GameDreamOmenMixin, GameAncestorQuestionMixin, GameCampShiftMixin, GameCampCouncilMixin, GameWonderMixin, GameConsensusFireMixin, GameDisasterCoopMixin, GameEchoItemMixin, GameLostTechMixin, GameCraftLegacyMixin, GameSacredFireMixin, GameMentorshipMixin, GameCelebrationMixin, GameNightRiskMixin, GameOldCampEchoMixin, GameBorderTheaterMixin, GameTradeCreditMixin, GameWeatherForecastMixin, GameLawMixin, GameSharedPuzzleMixin, GameRumorTruthMixin, GameWorldRiddleMixin, GameTrialGroundMixin, GameForbiddenEdgeMixin, GameFogTrailMixin, GameReverseVictoryMixin, GameApprenticeExchangeMixin, GameGuestStayMixin, GameCampDebtMixin, GameAshCountMixin, GameMessengerMixin, GamePersonalTokenMixin, GamePersonalOathMixin, GameVisitorMixin, GameFarReturnMixin, GameTravelerSongMixin, GameTrailMarkerMixin, GameSanctuaryMixin, GameCollectionWallMixin, GameLostItemMixin, GamePublicSecretMixin, GameRenownPledgeMixin, GameCustomMixin, GameBoundaryTemperatureMixin, GameAllianceSignalMixin, GameCommonJudgeMixin, GameDisputeWitnessMixin, GameOldGrudgeMixin, GameShadowTaskMixin, GameCaveRaceMixin, GameOralMapMixin, GameNamedLandmarkMixin, GameLivingLegendMixin, GameMythMixin, GameTribeProgressionMixin, GameWorldLogicMixin):
+from game_tribe_festivals import GameTribeFestivalMixin
+class ConnectionManager(GameRouteConnectionMixin, GameRoutePersonalMixin, GameRouteTribeActionsMixin, GameNewcomerFateMixin, GameMaskPerformanceMixin, GameTribeFestivalMixin, GameConflictMixin, GameEmergencyChoiceMixin, GameMutualAidAlertMixin, GameStoryEventsMixin, GameSeasonTabooMixin, GameStandingRitualMixin, GameObserverInterventionMixin, GameBeastLinkMixin, GameMigrationMixin, GameCelestialMixin, GameHistoryFactMixin, GameCaravanMixin, GameCookingMixin, GameDrumRhythmMixin, GameGroupEmoteMixin, GameDreamOmenMixin, GameAncestorQuestionMixin, GameCampShiftMixin, GameCampCouncilMixin, GameWonderMixin, GameConsensusFireMixin, GameDisasterCoopMixin, GameEchoItemMixin, GameLostTechMixin, GameCraftLegacyMixin, GameSacredFireMixin, GameMentorshipMixin, GameCelebrationMixin, GameNightRiskMixin, GameOldCampEchoMixin, GameBorderTheaterMixin, GameTradeCreditMixin, GameWeatherForecastMixin, GameLawMixin, GameSharedPuzzleMixin, GameRumorTruthMixin, GameWorldRiddleMixin, GameTrialGroundMixin, GameForbiddenEdgeMixin, GameFogTrailMixin, GameReverseVictoryMixin, GameApprenticeExchangeMixin, GameGuestStayMixin, GameCampDebtMixin, GameAshCountMixin, GameMessengerMixin, GamePersonalTokenMixin, GamePersonalOathMixin, GameVisitorMixin, GameFarReturnMixin, GameTravelerSongMixin, GameTrailMarkerMixin, GameSanctuaryMixin, GameCollectionWallMixin, GameLostItemMixin, GamePublicSecretMixin, GameRenownPledgeMixin, GameOralContractMixin, GameCustomMixin, GameBoundaryTemperatureMixin, GameBoundaryOutcomeMixin, GameAllianceSignalMixin, GameCommonJudgeMixin, GameDisputeWitnessMixin, GameOldGrudgeMixin, GameShadowTaskMixin, GameCaveRaceMixin, GameOralMapMixin, GameNamedLandmarkMixin, GameLivingLegendMixin, GameMythMixin, GameTribeProgressionMixin, GameWorldLogicMixin):
     def __init__(self):
         # 活跃连接：{player_id: websocket}
         self.active_connections: Dict[str, WebSocket] = {}
-
         # 玩家数据：{player_id: player_data}
         self.players: Dict[str, dict] = {}
         self.tribes: Dict[str, dict] = {}
@@ -114,10 +115,8 @@ class ConnectionManager(GameRouteConnectionMixin, GameRoutePersonalMixin, GameRo
         self.settlement_history: List[dict] = []
         self._settlement_lock = asyncio.Lock()
         self._load_settlement_history()
-
         self.current_map_name = "默认地图"
         self.aoi_radius = 60.0
-
         # 地图数据存储（简单内存存储，实际可用 MongoDB）
         # 约定：地图为全局共享状态，所有在线玩家应看到一致的 decorations。
         default_seed = 20250101
@@ -373,7 +372,7 @@ class ConnectionManager(GameRouteConnectionMixin, GameRoutePersonalMixin, GameRo
 
     def _build_season_snapshot(self, closed_season: str) -> dict:
         tribes = []
-        legend_awards = self._build_season_legend_awards()
+        legend_awards = self._build_season_legend_awards() + (self._festival_tradition_season_awards() if hasattr(self, "_festival_tradition_season_awards") else [])
         legend_by_tribe: Dict[str, List[dict]] = {}
         for award in legend_awards:
             award_tribe_id = award.get("tribeId")
@@ -1091,7 +1090,6 @@ class ConnectionManager(GameRouteConnectionMixin, GameRoutePersonalMixin, GameRo
             "renownStains": int(member.get("renown_stains", 0) or 0),
             "punishCount": int(member.get("punish_count", 0) or 0)
         }
-
     def _public_tribe(self, tribe: dict, include_members: bool = False) -> dict:
         beast_marker = self._tribe_beast_marker(tribe)
         data = {
@@ -1258,8 +1256,7 @@ class ConnectionManager(GameRouteConnectionMixin, GameRoutePersonalMixin, GameRo
             "lostItems": self._public_lost_items(tribe),
             "lostItemActions": TRIBE_LOST_ITEM_ACTIONS,
             "lostItemRecords": self._public_lost_item_records(tribe),
-            "mythClaims": self._active_myth_claims(tribe),
-            "dominantMyths": self._active_dominant_myths(tribe),
+            "mythClaims": self._active_myth_claims(tribe), "dominantMyths": self._active_dominant_myths(tribe), "mythDivergences": self._public_myth_divergences(tribe),
             "historyFactClaims": self._public_history_fact_claims(tribe),
             "acceptedHistoryFacts": self._accepted_history_facts(tribe),
             "emergencyChoice": self._active_emergency_choice(tribe),
@@ -1304,6 +1301,7 @@ class ConnectionManager(GameRouteConnectionMixin, GameRoutePersonalMixin, GameRo
             "seasonTabooRemedies": self._public_season_taboo_remedies(tribe),
             "seasonTabooEvidence": self._public_season_taboo_evidence(tribe),
             "atonementTokens": self._public_atonement_tokens(tribe),
+            "observerOpportunities": self._public_observer_opportunities(tribe), "observerInterventionActions": TRIBE_OBSERVER_INTERVENTION_ACTIONS,
             "standingRitual": self._public_standing_ritual(tribe),
             "standingRitualOptions": {} if self._active_standing_ritual(tribe) else self._standing_ritual_options_for_tribe(tribe),
             "standingRitualStances": TRIBE_STANDING_RITUAL_STANCES,
@@ -1341,6 +1339,7 @@ class ConnectionManager(GameRouteConnectionMixin, GameRoutePersonalMixin, GameRo
             "maskPerformanceTypes": self._public_mask_performance_types(),
             "maskPerformances": self._public_mask_performances(tribe),
             "maskPerformanceRecords": self._public_mask_performance_records(tribe),
+            "maskIdentityTitles": self._public_mask_identity_titles(tribe), "maskIdentityTitleRecords": self._public_mask_identity_title_records(tribe),
             "maskPerformanceConfig": {"radius": TRIBE_MASK_PERFORMANCE_RADIUS, "target": TRIBE_MASK_PERFORMANCE_TARGET, "cooldownSeconds": TRIBE_MASK_PERFORMANCE_COOLDOWN_SECONDS},
             "sacredFireRelay": self._public_sacred_fire_relay(tribe),
             "sacredFireDestinations": {} if self._active_sacred_fire_relay(tribe) else TRIBE_SACRED_FIRE_RELAY_DESTINATIONS,
@@ -1396,8 +1395,8 @@ class ConnectionManager(GameRouteConnectionMixin, GameRoutePersonalMixin, GameRo
             "celestialRecords": self._public_celestial_records(tribe),
             "seasonLegendScores": self._public_season_legend_scores(tribe),
             "weatherForecast": self._public_weather_forecast(tribe),
-            "weatherForecastSigns": self._public_weather_forecast_signs(),
-            "weatherForecastRecords": self._public_weather_forecast_records(tribe),
+            "weatherForecastSigns": self._public_weather_forecast_signs(), "weatherForecastRecords": self._public_weather_forecast_records(tribe),
+            "weatherTempers": self._public_weather_tempers(tribe), "weatherTemperActions": self._public_weather_temper_actions(), "weatherTemperRecords": self._public_weather_temper_records(tribe),
             "nightOutingStatus": self._public_night_outing_status(tribe),
             "nightOutingOptions": self._public_night_outing_options(tribe),
             "nightOutingRecords": self._public_night_outing_records(tribe),
@@ -1525,8 +1524,17 @@ class ConnectionManager(GameRouteConnectionMixin, GameRoutePersonalMixin, GameRo
                 "stake": TRIBE_RENOWN_PLEDGE_STAKE,
                 "failurePenalty": TRIBE_RENOWN_PLEDGE_FAILURE_PENALTY
             },
+            "oralContractOptions": self._public_oral_contract_options(tribe),
+            "oralContracts": self._active_oral_contracts(tribe),
+            "oralContractRecords": self._public_oral_contract_records(tribe),
+            "oralContractRemedies": self._public_oral_contract_remedies(tribe),
+            "oralContractConfig": self._public_oral_contract_config(),
             "tribeCustoms": self._public_tribe_customs(tribe),
             "tribeCustomOptions": self._public_tribe_custom_options(tribe),
+            "tribeFestivals": self._public_tribe_festivals(tribe),
+            "tribeFestivalActions": TRIBE_FESTIVAL_ACTIONS,
+            "tribeFestivalRecords": self._public_tribe_festival_records(tribe),
+            "tribeFestivalTraditions": self._public_tribe_festival_traditions(tribe),
             "tribePersonality": self._public_tribe_personality(tribe),
             "personalityEffectRecords": list(tribe.get("personality_effect_records", []) or [])[-TRIBE_PERSONALITY_EFFECT_RECORD_LIMIT:],
             "reverseVictoryTargets": self._public_reverse_victory_targets(tribe),
@@ -1706,15 +1714,6 @@ class ConnectionManager(GameRouteConnectionMixin, GameRoutePersonalMixin, GameRo
 
         await self.broadcast(self.get_tribes_overview())
         await self._broadcast_current_map()
-
-
-
-
-
-
-
-
-
 
 
 
@@ -2489,37 +2488,33 @@ async def game_websocket(
                         player_id,
                         message.get("tokenId", "")
                     )
-
                 elif message_type == "tribe_call_personal_debt":
                     await manager.call_personal_debt(
                         player_id,
                         message.get("tokenId", "")
                     )
-
                 elif message_type == "tribe_settle_personal_debt":
                     await manager.settle_personal_debt(
                         player_id,
                         message.get("taskId", "")
                     )
-
                 elif message_type == "tribe_start_renown_pledge":
                     await manager.start_renown_pledge(
                         player_id,
                         message.get("pledgeKey", "")
                     )
-
                 elif message_type == "tribe_fulfill_renown_pledge":
                     await manager.fulfill_renown_pledge(
                         player_id,
                         message.get("pledgeId", "")
                     )
-
+                elif message_type == "tribe_oral_contract":
+                    await manager.handle_oral_contract_message(player_id, message)
                 elif message_type == "tribe_complete_dark_oath_remedy":
                     await manager.complete_personal_dark_oath_remedy(
                         player_id,
                         message.get("remedyId", "")
                     )
-
                 elif message_type == "tribe_respond_far_reply":
                     await manager.respond_far_reply(
                         player_id,
@@ -2649,7 +2644,8 @@ async def game_websocket(
                     await manager.support_myth_claim(
                         player_id,
                         message.get("claimId", ""),
-                        message.get("interpretationKey", "")
+                        message.get("interpretationKey", ""),
+                        message.get("methodKey", "")
                     )
 
                 elif message_type == "tribe_support_history_fact":
@@ -2721,7 +2717,9 @@ async def game_websocket(
                     )
 
                 elif message_type == "tribe_complete_standing_ritual":
-                    await manager.complete_standing_ritual(player_id)
+                    await manager.complete_standing_ritual(player_id, message.get("outcomeKey", ""))
+                elif message_type == "tribe_resolve_observer_intervention":
+                    await manager.resolve_observer_intervention(player_id, message.get("targetTribeId", ""), message.get("eventId", ""), message.get("actionKey", ""))
 
                 elif message_type == "tribe_start_migration_plan":
                     await manager.start_migration_plan(
@@ -2763,6 +2761,7 @@ async def game_websocket(
                         player_id,
                         message.get("signKey", "")
                     )
+                elif message_type == "tribe_respond_weather_temper": await manager.respond_weather_temper(player_id, message.get("temperId", ""), message.get("actionKey", ""))
 
                 elif message_type == "tribe_enact_law":
                     await manager.enact_tribe_law(
@@ -2787,6 +2786,8 @@ async def game_websocket(
                         player_id,
                         message.get("customKey", "")
                     )
+                elif message_type == "tribe_join_festival":
+                    await manager.join_tribe_festival(player_id, message.get("festivalId", ""))
 
                 elif message_type == "tribe_record_shared_puzzle_fragment":
                     await manager.record_shared_puzzle_fragment(

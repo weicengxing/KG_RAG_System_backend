@@ -13,6 +13,20 @@ WEATHER_LABELS = {
 }
 TRIBE_WEATHER_FORECAST_ACTIVE_MINUTES = 8
 TRIBE_WEATHER_FORECAST_RECENT_LIMIT = 5
+TRIBE_WEATHER_TEMPER_ACTIVE_MINUTES = 18
+TRIBE_WEATHER_TEMPER_LIMIT = 4
+TRIBE_WEATHER_TEMPER_RECORD_LIMIT = 6
+TRIBE_WEATHER_TEMPER_TARGET = 2
+TRIBE_WEATHER_TEMPER_PROFILES = {
+    "rain": {"label": "雨季偏袒潮岸", "summary": "雨幕连着地块余波，像在偏袒潮岸和湿林。", "preferredWeather": "fog", "reward": {"food": 2, "renown": 1}},
+    "snow": {"label": "寒夜考验守火者", "summary": "细雪压住营火边缘，像在考验守火的人。", "preferredWeather": "sunny", "reward": {"wood": 2, "renown": 1}},
+    "fog": {"label": "雾岛偏爱旧路", "summary": "薄雾贴着旧路和洞口，像在逼族人重新辨认方向。", "preferredWeather": "sunny", "reward": {"discoveryProgress": 1, "renown": 1}},
+    "sunny": {"label": "晴风催促远行", "summary": "晴朗海风把路面吹干，像在催族人离营踏勘。", "preferredWeather": "rain", "reward": {"tradeReputation": 1, "renown": 1}}
+}
+TRIBE_WEATHER_TEMPER_ACTIONS = {
+    "ritual": {"label": "安抚仪式", "summary": "用营火、歌声或小祭安抚天气脾气，让下一轮更容易转向晴朗。", "biasWeather": "sunny", "reward": {"renown": 1}},
+    "forecast": {"label": "顺风预判", "summary": "按风向预判顺着天气脾气借力，让下一轮更容易走向它偏爱的天气。", "usePreferredWeather": True, "reward": {"discoveryProgress": 1}}
+}
 TRIBE_WEATHER_FORECAST_SIGNS = {
     "cloud": {
         "label": "看云脚",
@@ -33,6 +47,74 @@ TRIBE_WEATHER_FORECAST_SIGNS = {
         "label": "听潮线",
         "summary": "潮声发闷，族人猜薄雾会从岸边升起。",
         "predictWeather": "fog"
+    }
+}
+TRIBE_OBSERVER_INTERVENTION_LIMIT = 8
+TRIBE_OBSERVER_OPPORTUNITY_LIMIT = 5
+TRIBE_OBSERVER_INTERVENTION_ACTIONS = {
+    "witness": {"label": "补一句见证", "summary": "把自己看到的细节补进来源链。", "reward": {"renown": 1}},
+    "old_song": {"label": "唱旧歌", "summary": "用旧歌曲调把事件讲成可传唱的版本。", "reward": {"renown": 1, "discoveryProgress": 1}},
+    "supply": {"label": "送补给", "summary": "送出一点食物，让未结算事件多一条互助来源。", "foodCost": 1, "reward": {"food": 1, "tradeReputation": 1}},
+    "trail_mark": {"label": "立路标", "summary": "消耗一点木材留下路标，让结局稍微偏向可追溯。", "woodCost": 1, "reward": {"discoveryProgress": 1}},
+    "mediate_word": {"label": "调停一句话", "summary": "把争执先压成可继续商量的口风。", "reward": {"tradeReputation": 1}}
+}
+TRIBE_OBSERVER_OUTCOME_REWARDS = {
+    "witness": {"renown": 1},
+    "old_song": {"discoveryProgress": 1},
+    "supply": {"food": 1},
+    "trail_mark": {"discoveryProgress": 1},
+    "mediate_word": {"tradeReputation": 1}
+}
+TRIBE_FESTIVAL_ACTIVE_MINUTES = 32
+TRIBE_FESTIVAL_LIMIT = 4
+TRIBE_FESTIVAL_RECORD_LIMIT = 6
+TRIBE_FESTIVAL_HISTORY_SCAN_LIMIT = 18
+TRIBE_FESTIVAL_SOURCE_TARGET = 3
+TRIBE_FESTIVAL_ACTIVITY_TARGET = 2
+TRIBE_FESTIVAL_PERSONAL_RENOWN = 1
+TRIBE_FESTIVAL_ACTIONS = {
+    "join": {"label": "参与节日", "summary": "参加当前节日的轻量活动，凑齐人数后结算公共奖励。"}
+}
+TRIBE_FESTIVAL_PROFILES = {
+    "rescue_day": {
+        "title": "救援日",
+        "summary": "近期多次救援、护送和救灾让营地把互助讲成临时节日。",
+        "sourceLabel": "救援互助",
+        "activityLabel": "巡火送援",
+        "eventTypes": ["cave", "world_event", "trade"],
+        "keywords": ["救援", "营救", "互助", "护送", "救灾", "收留"],
+        "reward": {"renown": 2, "food": 2},
+        "customKey": "hearth"
+    },
+    "market_day": {
+        "title": "互市日",
+        "summary": "近期互市、商队和公开账记频繁出现，营地临时开出交换节。",
+        "sourceLabel": "互市来往",
+        "activityLabel": "摆摊换信",
+        "eventTypes": ["trade"],
+        "keywords": ["贸易", "互市", "商队", "口信", "客居", "债账"],
+        "reward": {"tradeReputation": 2, "food": 1},
+        "customKey": "merchant"
+    },
+    "border_night": {
+        "title": "守边夜",
+        "summary": "近期边界、旧怨和战争压力被反复提起，营地用守夜把紧张压成秩序。",
+        "sourceLabel": "边界守望",
+        "activityLabel": "巡边守夜",
+        "eventTypes": ["conflict", "war", "boundary"],
+        "keywords": ["守边", "边界", "战争", "旧怨", "巡望", "冲突", "调停"],
+        "reward": {"renown": 2, "warPressureRelief": 1},
+        "customKey": "warlike"
+    },
+    "old_song_day": {
+        "title": "旧歌日",
+        "summary": "近期旧歌、口述史和讲述记录密集出现，营地把故事整理成可传唱的节日。",
+        "sourceLabel": "旧歌讲述",
+        "activityLabel": "围火传唱",
+        "eventTypes": ["ritual", "governance", "history"],
+        "keywords": ["旧歌", "传唱", "口述", "故事", "讲述", "曲牌", "传闻"],
+        "reward": {"renown": 2, "discoveryProgress": 1},
+        "customKey": "hearth"
     }
 }
 TRIBE_CUSTOM_TREE_THRESHOLD = 5
@@ -650,6 +732,40 @@ TRIBE_MASK_PERFORMANCE_RADIUS = 18
 TRIBE_MASK_PERFORMANCE_TARGET = 3
 TRIBE_MASK_PERFORMANCE_COOLDOWN_SECONDS = 180
 TRIBE_MASK_PERFORMANCE_RESPONSE_RENOWN = 1
+TRIBE_MASK_IDENTITY_TITLE_UNLOCK_COUNT = 2
+TRIBE_MASK_IDENTITY_TITLE_ACTIVE_MINUTES = 45
+TRIBE_MASK_IDENTITY_TITLE_LIMIT = 6
+TRIBE_MASK_IDENTITY_TITLE_RECORD_LIMIT = 8
+TRIBE_MASK_IDENTITY_TITLE_PROFILES = {
+    "fire_dancer": {
+        "title": "火环领舞",
+        "summary": "连续把火舞者表演接成公共节拍，下一次外交接待会更容易把营地讲成热闹而可靠的火边场。",
+        "newcomerContext": "diplomacy",
+        "newcomerLabel": "火环领舞口风",
+        "mythInterpretation": "hearth"
+    },
+    "pathfinder": {
+        "title": "短路领行",
+        "summary": "寻路者的步伐被多次跟上，下一次探索会多一段可引用的路感。",
+        "newcomerContext": "exploration",
+        "newcomerLabel": "短路领行线索",
+        "mythInterpretation": "trail"
+    },
+    "mason": {
+        "title": "石拍传艺",
+        "summary": "石匠的敲击被多人接拍，下一次禁地或边界整理会多一份稳手支撑。",
+        "newcomerContext": "forbidden_edge",
+        "newcomerLabel": "石拍传艺支撑",
+        "mythInterpretation": "border"
+    },
+    "storyteller": {
+        "title": "火边续声",
+        "summary": "讲述者的旧事被多人续接，下一次外交和神话解释更容易借这段公开讲述起势。",
+        "newcomerContext": "diplomacy",
+        "newcomerLabel": "火边续声伏笔",
+        "mythInterpretation": "hearth"
+    }
+}
 TRIBE_MASK_PERFORMANCE_TYPES = {
     "fire_dancer": {"label": "火舞者表演", "summary": "在营火旁起舞，让附近成员用拍手、守拍或呼号接住节奏。", "customKey": "hearth", "reward": {"renown": 2, "food": 1}, "animation": "cheer"},
     "pathfinder": {"label": "寻路者表演", "summary": "把脚步、路标和方向唱成一段可跟随的短路仪式。", "customKey": "tidal", "reward": {"discoveryProgress": 2, "renown": 1}, "animation": "guard"},
@@ -1706,6 +1822,7 @@ TRIBE_GUEST_STAY_ACTIONS = {
     }
 }
 TRIBE_CAMP_DEBT_ACTIVE_MINUTES = 36
+TRIBE_CAMP_DEBT_REDEEM_WINDOW_RATIO = 0.5
 TRIBE_CAMP_DEBT_LIMIT = 10
 TRIBE_CAMP_DEBT_PENDING_LIMIT = 4
 TRIBE_CAMP_DEBT_RECORD_LIMIT = 6
@@ -1733,6 +1850,38 @@ TRIBE_CAMP_DEBT_ACTIONS = {
         "tradeReputation": 2,
         "relationDelta": 1,
         "tradeTrustDelta": 1
+    },
+    "ritual_redeem": {
+        "label": "仪式偿还",
+        "status": "ritual_redeemed",
+        "summary": "赎回窗口开启后，用公开仪式把亏欠变成火边共同承担。",
+        "windowOnly": True,
+        "foodCost": 1,
+        "renown": 2,
+        "pressureRelief": 1,
+        "customKey": "hearth",
+        "customAmount": 1
+    },
+    "evidence_redeem": {
+        "label": "证据偿还",
+        "status": "evidence_redeemed",
+        "summary": "赎回窗口开启后，用来源链、见证或明账证明债已被接住。",
+        "windowOnly": True,
+        "discoveryProgress": 2,
+        "relationDelta": 1,
+        "customKey": "oathbound",
+        "customAmount": 1
+    },
+    "diplomatic_fulfill": {
+        "label": "外交履约",
+        "status": "diplomatic_fulfilled",
+        "summary": "赎回窗口开启后，把债账兑现成对外承诺，修补关系和互市信任。",
+        "windowOnly": True,
+        "tradeReputation": 2,
+        "relationDelta": 1,
+        "tradeTrustDelta": 1,
+        "customKey": "merchant",
+        "customAmount": 1
     }
 }
 TRIBE_ASH_COUNT_ACTIVE_MINUTES = 32

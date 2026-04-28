@@ -1189,6 +1189,10 @@ class GameRouteTribeActionsMixin:
         if oath_cave_bonus:
             safe_finds += oath_cave_bonus
             food_detail += f" 远行誓约让队伍多带回 +{oath_cave_bonus}。"
+        weather_temper_cave_bonus = self._weather_temper_myth_bonus(tribe, "caveFindsBonus") if hasattr(self, "_weather_temper_myth_bonus") else 0
+        if weather_temper_cave_bonus:
+            safe_finds += weather_temper_cave_bonus
+            food_detail += f" 天气脾气神话让洞口多回声 +{weather_temper_cave_bonus}。"
         discoveries = tribe.setdefault("discoveries", [])
         discovery_key = "deep_cave_echo"
         discovery_depth = max(1, int(route_plan.get("discoveryDepth", 4) or 4))
@@ -1238,6 +1242,7 @@ class GameRouteTribeActionsMixin:
                 "lostTechFindsBonus": lost_tech_cave_bonus,
                 "craftLegacyFindsBonus": craft_legacy_cave_bonus,
                 "oathFindsBonus": oath_cave_bonus,
+                "weatherTemperFindsBonus": weather_temper_cave_bonus,
                 "discoveryUnlocked": discovery_unlocked,
                 "discoveryKey": discovery_key if discovery_unlocked else None,
                 "caveRaceOpened": bool(race_opened),

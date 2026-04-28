@@ -26,7 +26,8 @@ class GameNewcomerFateMixin:
         )
 
     def _public_newcomer_fate_moments(self, tribe: dict) -> list:
-        return [dict(item) for item in self._active_newcomer_fate_moments(tribe)]
+        hint = self._festival_tradition_newcomer_hint(tribe) if hasattr(self, "_festival_tradition_newcomer_hint") else ""
+        return [{**dict(item), "festivalTraditionHint": hint} for item in self._active_newcomer_fate_moments(tribe)]
 
     def _public_newcomer_fate_records(self, tribe: dict) -> list:
         return [
@@ -45,6 +46,10 @@ class GameNewcomerFateMixin:
                 continue
             bonus += int(influence.get("bonus", 1) or 1)
             labels.append(influence.get("label", "新人关键"))
+        if hasattr(self, "_festival_tradition_context_support"):
+            extra_bonus, extra_labels = self._festival_tradition_context_support(tribe, context)
+            bonus += extra_bonus
+            labels.extend(extra_labels)
         return min(2, bonus), labels[-3:]
 
     def _consume_newcomer_fate_influence(self, tribe: dict, context: str) -> dict | None:

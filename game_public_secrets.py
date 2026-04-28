@@ -260,6 +260,9 @@ class GamePublicSecretMixin:
         member = tribe.get("members", {}).get(player_id, {})
         member_name = member.get("name", "成员")
         reward_parts = self._apply_public_secret_reward(tribe, action.get("reward") or {})
+        observer_shift = self._apply_observer_outcome_shift(tribe, "public_secret", secret.get("id")) if hasattr(self, "_apply_observer_outcome_shift") else None
+        if observer_shift:
+            reward_parts.extend(observer_shift.get("rewardParts", []))
         now = datetime.now()
         record = {
             "id": f"public_secret_record_{tribe_id}_{int(now.timestamp() * 1000)}_{random.randint(100, 999)}",
@@ -275,6 +278,7 @@ class GamePublicSecretMixin:
             "memberId": player_id,
             "memberName": member_name,
             "rewardParts": reward_parts,
+            "observerShift": observer_shift,
             "judgeReady": bool(action.get("judgeReady")),
             "storyReady": bool(action.get("storyReady")),
             "revealStatus": "pending",
@@ -294,6 +298,8 @@ class GamePublicSecretMixin:
         detail = f"{member_name}将“{record['title']}”{action.get('label', '处理')}，来源是{record['sourceLabel']}。"
         if reward_parts:
             detail += f" {'、'.join(reward_parts)}。"
+        if observer_shift:
+            detail += f" {observer_shift.get('summary')}"
         self._add_tribe_history(
             tribe,
             "world_event",

@@ -109,7 +109,8 @@ class GameDisasterCoopMixin:
         if not center:
             return None
         rng = self._disaster_coop_rng()
-        kind_key = self._disaster_coop_kind()
+        weather_myth = self._weather_temper_myth_source_for(tribe, "disasterKind") if hasattr(self, "_weather_temper_myth_source_for") else None
+        kind_key = (weather_myth or {}).get("disasterKind") or self._disaster_coop_kind()
         kind = DISASTER_COOP_TYPES.get(kind_key, DISASTER_COOP_TYPES["wildfire"])
         angle = rng.random() * math.tau
         distance = 24 + rng.random() * 36
@@ -220,6 +221,11 @@ class GameDisasterCoopMixin:
         task.setdefault("participantIds", []).append(player_id)
         task.setdefault("participants", []).append(participant)
         task["progress"] = int(task.get("progress", 0) or 0) + int(action.get("progress", 1) or 1)
+        weather_myth = self._weather_temper_myth_source_for(tribe, "disasterProgress") if hasattr(self, "_weather_temper_myth_source_for") else None
+        myth_progress = int(((weather_myth or {}).get("effects", {}) or {}).get("disasterProgress", 0) or 0)
+        if myth_progress:
+            task["progress"] += myth_progress
+            reward_parts.append(f"{weather_myth.get('label', '天气神话来源')}协作+{myth_progress}")
         detail = f"{member_name}在{task.get('label', '大灾协作')}中选择{action.get('label', '协作')}，进度 {task['progress']}/{task.get('target', DISASTER_COOP_TARGET)}。"
         if reward_parts:
             detail += f" {'、'.join(reward_parts)}。"

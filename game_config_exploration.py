@@ -17,6 +17,8 @@ TRIBE_CAVE_RACE_FIRST_REWARD = {"renown": 8, "discoveryProgress": 2, "tradeReput
 TRIBE_CAVE_RACE_RESCUE_REWARD = {"renown": 4, "discoveryProgress": 1}
 TRIBE_CAVE_RACE_MARK_REWARD = {"renown": 1, "discoveryProgress": 1}
 TRIBE_CAVE_RACE_COOP_REWARD = {"renown": 2, "discoveryProgress": 1, "tradeReputation": 1}
+TRIBE_CAVE_RACE_RIVAL_RESCUE_REWARD = {"renown": 3, "discoveryProgress": 1, "tradeReputation": 1}
+TRIBE_CAVE_RACE_NAME_CLAIM_REWARD = {"renown": 4, "discoveryProgress": 1}
 TRIBE_CAVE_RACE_RESCUE_RECORD_LIMIT = 6
 TRIBE_CAVE_RETURN_MARK_ACTIVE_MINUTES = 22
 TRIBE_CAVE_RETURN_MARK_LIMIT = 5
@@ -133,6 +135,18 @@ TRIBE_CAVE_RACE_ACTIONS = {
         "key": "cooperate",
         "label": "借标合作",
         "summary": "沿其他部落留下的路标互认路线，换取发现、声望和短时信任。",
+        "animation": "ritual"
+    },
+    "rescue_rival": {
+        "key": "rescue_rival",
+        "label": "救援别队",
+        "summary": "沿失踪队伍线索找回别部落成员，双方长期信任提高。",
+        "animation": "guard"
+    },
+    "claim_lost_name": {
+        "key": "claim_lost_name",
+        "label": "夺失踪名",
+        "summary": "抢先把失踪岔洞记入本部落名下，留下证据争议和传说竞争。",
         "animation": "ritual"
     }
 }
@@ -715,6 +729,8 @@ TRIBE_REVERSE_VICTORY_TARGETS = {
 TRIBE_MYTH_CLAIM_ACTIVE_MINUTES = 45
 TRIBE_MYTH_CLAIM_LIMIT = 6
 TRIBE_DOMINANT_MYTH_LIMIT = 5
+TRIBE_MYTH_DIVERGENCE_ACTIVE_MINUTES = 180
+TRIBE_MYTH_DIVERGENCE_LIMIT = 6
 TRIBE_MYTH_INFLUENCE_TARGET = 3
 TRIBE_HISTORY_FACT_ACTIVE_MINUTES = 50
 TRIBE_HISTORY_FACT_LIMIT = 6
@@ -727,24 +743,38 @@ TRIBE_HISTORY_FACT_MEDIATOR_TRADE = 1
 TRIBE_MYTH_INTERPRETATIONS = {
     "hearth": {
         "label": "火种护佑",
+        "symbol": "火",
+        "tone": "hearth",
         "summary": "把这件事解释为营火、食物与部落守护的征兆。",
         "reward": {"food": 4, "renown": 2}
     },
     "trail": {
         "label": "旧路显现",
+        "symbol": "路",
+        "tone": "trail",
         "summary": "把这件事解释为旧路重新露面，适合继续探索。",
         "reward": {"discoveryProgress": 1, "renown": 2}
     },
     "trade": {
         "label": "互市佳兆",
+        "symbol": "市",
+        "tone": "trade",
         "summary": "把这件事解释为交换与信任正在靠近。",
         "reward": {"tradeReputation": 1, "renown": 1}
     },
     "border": {
         "label": "守边誓言",
+        "symbol": "边",
+        "tone": "border",
         "summary": "把这件事解释为守住边界、整理标记的誓言。",
         "reward": {"wood": 4, "renown": 2}
     }
+}
+TRIBE_MYTH_SUPPORT_METHODS = {
+    "ritual": {"label": "仪式", "summary": "用公开仪式把这个解释推到图腾和营火旁。", "influenceBonus": 1},
+    "song": {"label": "传唱", "summary": "用旧歌、路歌或火边短句传播这个解释。", "influenceBonus": 1},
+    "evidence": {"label": "证据", "summary": "用痕迹、见证或来源链压实这个解释。", "influenceBonus": 2},
+    "border_theater": {"label": "边境戏台", "summary": "把说法演给边界另一侧听，特别适合同源争夺。", "influenceBonus": 2}
 }
 SEASON_OBJECTIVE_DURATION_MINUTES = 12
 SEASON_CHAIN_TARGET = 3
@@ -1036,6 +1066,32 @@ TRIBE_STANDING_RITUAL_PUZZLES = {
         "hintLabel": "星下方位",
         "hintSummary": "先看北星，再看东边亮光，最后让南位火光把队列接住。",
         "reward": {"discoveryProgress": 1, "renown": 4}
+    }
+}
+TRIBE_STANDING_RITUAL_OUTCOMES = {
+    "correct": {
+        "label": "方位正确",
+        "summary": "提示方位被补齐，仪式被讲成一次清楚的共同校准。",
+        "rumorTone": "笃定",
+        "mythSource": "提示方位",
+        "mythSummary": "神话解释来自天气、天象、旧歌或地图记忆给出的正向提示。",
+        "reward": {"renown": 2}
+    },
+    "offset": {
+        "label": "方位偏差",
+        "summary": "队列有缺口或偏离，传闻会留下仍可复述的误差。",
+        "rumorTone": "迟疑",
+        "mythSource": "偏差传闻",
+        "mythSummary": "神话解释来自站错位置、缺席方位和围观者的补述。",
+        "reward": {"renown": 1, "discoveryProgress": 1}
+    },
+    "reverse": {
+        "label": "故意反向",
+        "summary": "收束者把队列反过来解释，奖励较轻但会留下更强的神话分歧。",
+        "rumorTone": "反向",
+        "mythSource": "反向解释",
+        "mythSummary": "神话解释来自长老或首领主动把提示倒读后的公开说法。",
+        "reward": {"tradeReputation": 1, "renown": 1}
     }
 }
 TRIBE_STANDING_RITUAL_LANDMARK_BONUSES = {

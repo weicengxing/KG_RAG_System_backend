@@ -40,6 +40,9 @@ class GameSeasonTabooMixin:
         return None
 
     def _season_taboo_context_for_key(self, tribe: dict, taboo_key: str) -> dict | None:
+        weather_context = self._weather_temper_taboo_context(tribe, taboo_key) if hasattr(self, "_weather_temper_taboo_context") else None
+        if weather_context:
+            return weather_context
         sources = self._season_taboo_context_sources(tribe)
         for context_key, context in TRIBE_SEASON_TABOO_CONTEXTS.items():
             if context.get("tabooKey") != taboo_key:

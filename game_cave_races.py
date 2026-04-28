@@ -28,10 +28,17 @@ class GameCaveRaceMixin:
             rescue_methods = self._public_cave_rescue_methods(tribe) if race.get("status") == "rescue" else []
             route_marks = [item for item in (race.get("routeMarks", []) or []) if isinstance(item, dict)]
             cooperations = [item for item in (race.get("cooperations", []) or []) if isinstance(item, dict)]
+            missing_teams = [item for item in (race.get("missingTeams", []) or []) if isinstance(item, dict)]
+            rival_resolutions = [item for item in (race.get("rivalResolutions", []) or []) if isinstance(item, dict)]
             race_open = race.get("status", "active") in {"active", "claimed"}
             has_own_mark = any(item.get("tribeId") == tribe_id for item in route_marks)
             has_other_mark = any(item.get("tribeId") and item.get("tribeId") != tribe_id for item in route_marks)
             has_own_coop = any(item.get("tribeId") == tribe_id for item in cooperations)
+            open_rival_clues = [
+                item for item in missing_teams
+                if item.get("status", "missing") == "missing" and item.get("tribeId") != tribe_id
+            ]
+            has_rival_resolution = any(item.get("tribeId") == tribe_id for item in rival_resolutions)
             public.append({
                 "id": race.get("id"),
                 "type": "cave_rescue_clue" if race.get("status") == "rescue" else "rare_cave_race",
@@ -53,10 +60,14 @@ class GameCaveRaceMixin:
                 "routeKey": race.get("routeKey", ""),
                 "routeMarks": route_marks[-TRIBE_CAVE_RACE_RESCUE_RECORD_LIMIT:],
                 "cooperations": cooperations[-TRIBE_CAVE_RACE_RESCUE_RECORD_LIMIT:],
+                "missingTeams": missing_teams[-TRIBE_CAVE_RACE_RESCUE_RECORD_LIMIT:],
+                "rivalResolutions": rival_resolutions[-TRIBE_CAVE_RACE_RESCUE_RECORD_LIMIT:],
                 "canClaim": race.get("status") == "active" and not race.get("firstExplorerTribeId"),
                 "canRescue": race.get("status") == "rescue" and rescue.get("status") == "missing",
                 "canLeaveMarker": race_open and not has_own_mark,
-                "canCooperate": race_open and has_other_mark and not has_own_coop
+                "canCooperate": race_open and has_other_mark and not has_own_coop,
+                "canRescueRival": race_open and bool(open_rival_clues) and not has_rival_resolution,
+                "canClaimLostName": race_open and bool(open_rival_clues) and not has_rival_resolution
             })
         return public
 
@@ -427,6 +438,8 @@ class GameCaveRaceMixin:
             "routeKey": route_key,
             "routeMarks": [],
             "cooperations": [],
+            "missingTeams": [],
+            "rivalResolutions": [],
             "sourceTribeId": tribe.get("id"),
             "sourceTribeName": tribe.get("name", "部落"),
             "x": max(-490, min(490, x)),
@@ -456,6 +469,26 @@ class GameCaveRaceMixin:
                 if isinstance(race, dict) and race.get("id") == race_id:
                     race.update(patch)
 
+    def _sync_cave_race_missing_resolution(self, race_id: str, missing_team_id: str, resolution: dict, close_rescue: bool):
+        for target in self.tribes.values():
+            for race in target.get("cave_races", []) or []:
+                if not isinstance(race, dict) or race.get("id") != race_id:
+                    continue
+                race.setdefault("rivalResolutions", []).append(dict(resolution))
+                race["rivalResolutions"] = race["rivalResolutions"][-TRIBE_CAVE_RACE_RESCUE_RECORD_LIMIT:]
+                for clue in race.get("missingTeams", []) or []:
+                    if isinstance(clue, dict) and clue.get("id") == missing_team_id:
+                        clue["status"] = "rescued" if close_rescue else "name_claimed"
+                        clue["resolvedByTribeId"] = resolution.get("tribeId")
+                        clue["resolvedByTribeName"] = resolution.get("tribeName")
+                        clue["resolvedActionKey"] = resolution.get("actionKey")
+                        clue["resolvedAt"] = resolution.get("createdAt")
+                rescue = race.get("rescue") or {}
+                if close_rescue and rescue.get("missingTeamId") == missing_team_id:
+                    rescue["status"] = "rescued_by_rival"
+                    rescue["resolvedByTribeName"] = resolution.get("tribeName")
+                    race["status"] = "claimed" if race.get("firstExplorerTribeId") else "active"
+
     def _sync_cave_race_first_result(self, race_id: str, tribe: dict, member_name: str):
         for target in self.tribes.values():
             for race in target.get("cave_races", []) or []:
@@ -482,7 +515,7 @@ class GameCaveRaceMixin:
             await self._send_tribe_error(player_id, "这条路线正在营救或已经结束")
             return
         action = TRIBE_CAVE_RACE_ACTIONS.get(action_key)
-        if action_key not in {"leave_marker", "cooperate"} or not action:
+        if action_key not in {"leave_marker", "cooperate", "rescue_rival", "claim_lost_name"} or not action:
             await self._send_tribe_error(player_id, "未知洞穴竞速动作")
             return
         member = tribe.get("members", {}).get(player_id, {})
@@ -491,6 +524,8 @@ class GameCaveRaceMixin:
         now_text = now.isoformat()
         route_marks = [dict(item) for item in (race.get("routeMarks", []) or []) if isinstance(item, dict)]
         cooperations = [dict(item) for item in (race.get("cooperations", []) or []) if isinstance(item, dict)]
+        missing_teams = [dict(item) for item in (race.get("missingTeams", []) or []) if isinstance(item, dict)]
+        rival_resolutions = [dict(item) for item in (race.get("rivalResolutions", []) or []) if isinstance(item, dict)]
 
         if action_key == "leave_marker":
             if any(item.get("tribeId") == tribe_id for item in route_marks):
@@ -512,6 +547,74 @@ class GameCaveRaceMixin:
             detail = f"{member_name}在{race.get('label', '稀有洞穴')}留下竞速路标：{'、'.join(reward_parts) or '路线已公开'}。"
             self._add_tribe_history(tribe, "cave", "洞穴竞速路标", detail, player_id, {"kind": "cave_race_marker", "raceId": race_id, "mark": mark, "rewardParts": reward_parts})
             await self._publish_world_rumor("cave", "洞穴竞速路标", f"{tribe.get('name', '部落')}在{race.get('caveLabel', '洞穴')}短时岔洞留下竞速路标，后来者可以借读。", {"raceId": race_id, "tribeId": tribe_id})
+            await self._notify_tribe(tribe_id, detail)
+            await self._broadcast_all_cave_race_states()
+            return
+
+        if action_key in {"rescue_rival", "claim_lost_name"}:
+            clue = next((item for item in missing_teams if item.get("status", "missing") == "missing" and item.get("tribeId") != tribe_id), None)
+            if not clue:
+                await self._send_tribe_error(player_id, "没有可介入的别队失踪线索")
+                return
+            if any(item.get("tribeId") == tribe_id and item.get("missingTeamId") == clue.get("id") for item in rival_resolutions):
+                await self._send_tribe_error(player_id, "本部落已经处理过这条别队失踪线索")
+                return
+            partner_id = clue.get("tribeId")
+            partner_tribe = self.tribes.get(partner_id)
+            reward = TRIBE_CAVE_RACE_RIVAL_RESCUE_REWARD if action_key == "rescue_rival" else TRIBE_CAVE_RACE_NAME_CLAIM_REWARD
+            reward_parts = self._apply_cave_race_reward(tribe, reward)
+            resolution = {
+                "id": f"cave_race_rival_{action_key}_{tribe_id}_{int(now.timestamp() * 1000)}_{random.randint(100, 999)}",
+                "raceId": race_id,
+                "missingTeamId": clue.get("id"),
+                "actionKey": action_key,
+                "actionLabel": action.get("label", "介入失踪线索"),
+                "tribeId": tribe_id,
+                "tribeName": tribe.get("name", "部落"),
+                "memberName": member_name,
+                "partnerTribeId": partner_id,
+                "partnerTribeName": clue.get("tribeName", "别队"),
+                "missingMemberName": clue.get("missingMemberName", "队友"),
+                "createdAt": now_text
+            }
+            relation = tribe.setdefault("boundary_relations", {}).setdefault(partner_id, {})
+            reverse = partner_tribe.setdefault("boundary_relations", {}).setdefault(tribe_id, {}) if partner_tribe else None
+            if action_key == "rescue_rival":
+                relation["tradeTrust"] = min(10, int(relation.get("tradeTrust", 0) or 0) + 2)
+                relation["lastAction"] = "cave_race_rival_rescue"
+                relation["lastActionAt"] = now_text
+                if reverse is not None:
+                    reverse["tradeTrust"] = min(10, int(reverse.get("tradeTrust", 0) or 0) + 2)
+                    reverse["lastAction"] = "cave_race_rival_rescue"
+                    reverse["lastActionAt"] = now_text
+                reward_parts.append("信任+2")
+                resolution["summary"] = f"{member_name}沿{clue.get('tribeName', '别队')}失踪线索救回{clue.get('missingMemberName', '队友')}，双方留下长期信任。"
+                self._sync_cave_race_missing_resolution(race_id, clue.get("id"), resolution, True)
+                detail = f"{member_name}救回{clue.get('tribeName', '别队')}在{race.get('label', '稀有洞穴')}失踪的{clue.get('missingMemberName', '队友')}：{'、'.join(reward_parts)}。"
+                self._add_tribe_history(tribe, "cave", "救援别队失踪者", detail, player_id, {"kind": "cave_race_rival_rescue", "raceId": race_id, "resolution": resolution, "rewardParts": reward_parts})
+                if partner_tribe:
+                    self._add_tribe_history(partner_tribe, "cave", "别队救回失踪者", f"{tribe.get('name', '部落')}沿竞速线索救回{clue.get('missingMemberName', '队友')}，双方信任+2。", player_id, {"kind": "cave_race_rival_rescue_echo", "raceId": race_id, "resolution": resolution})
+                await self._publish_world_rumor("cave", "洞穴竞速救援反转", f"{tribe.get('name', '部落')}没有夺名，而是在{race.get('caveLabel', '洞穴')}救回{clue.get('tribeName', '别队')}失踪者。", {"raceId": race_id, "tribeId": tribe_id, "partnerTribeId": partner_id})
+            else:
+                relation["score"] = max(-9, int(relation.get("score", 0) or 0) - 1)
+                relation["warPressure"] = min(9, int(relation.get("warPressure", 0) or 0) + 1)
+                relation["lastAction"] = "cave_race_name_claim"
+                relation["lastActionAt"] = now_text
+                if reverse is not None:
+                    reverse["score"] = max(-9, int(reverse.get("score", 0) or 0) - 1)
+                    reverse["warPressure"] = min(9, int(reverse.get("warPressure", 0) or 0) + 1)
+                    reverse["lastAction"] = "incoming_cave_race_name_claim"
+                    reverse["lastActionAt"] = now_text
+                reward_parts.append("争议证据+1")
+                resolution["summary"] = f"{member_name}抢先把{race.get('caveLabel', '洞穴')}失踪岔路记入本部落名下，和{clue.get('tribeName', '别队')}留下传说竞争。"
+                resolution["evidenceDispute"] = True
+                resolution["legendContest"] = True
+                self._sync_cave_race_missing_resolution(race_id, clue.get("id"), resolution, False)
+                detail = f"{member_name}趁{clue.get('tribeName', '别队')}失踪，抢先记下{race.get('label', '稀有洞穴')}名声：{'、'.join(reward_parts)}。"
+                self._add_tribe_history(tribe, "cave", "夺失踪名", detail, player_id, {"kind": "cave_race_name_claim", "raceId": race_id, "resolution": resolution, "rewardParts": reward_parts})
+                if partner_tribe:
+                    self._add_tribe_history(partner_tribe, "cave", "洞穴夺名争议", f"{tribe.get('name', '部落')}趁失踪线索抢先记名，留下证据争议和传说竞争。", player_id, {"kind": "cave_race_name_claim_dispute", "raceId": race_id, "resolution": resolution})
+                await self._publish_world_rumor("cave", "洞穴夺名争议", f"{tribe.get('name', '部落')}趁{clue.get('tribeName', '别队')}失踪，抢先把{race.get('caveLabel', '洞穴')}岔路写进本部落传说。", {"raceId": race_id, "tribeId": tribe_id, "partnerTribeId": partner_id, "evidenceDispute": True})
             await self._notify_tribe(tribe_id, detail)
             await self._broadcast_all_cave_race_states()
             return
@@ -594,6 +697,9 @@ class GameCaveRaceMixin:
             if hasattr(self, "_record_oral_map_context_reference"):
                 oral_reference, oral_lineage = self._record_oral_map_context_reference(tribe, "cave_race", race.get("label", "稀有洞穴首探"), member_name, "首探成功")
             reward_parts = self._apply_cave_race_reward(tribe, TRIBE_CAVE_RACE_FIRST_REWARD)
+            observer_shift = self._apply_observer_outcome_shift(tribe, "cave_race", race_id) if hasattr(self, "_apply_observer_outcome_shift") else None
+            if observer_shift:
+                reward_parts.extend(observer_shift.get("rewardParts", []))
             self._sync_cave_race_first_result(race_id, tribe, member_name)
             self._record_map_memory(
                 tribe,
@@ -610,17 +716,21 @@ class GameCaveRaceMixin:
                 detail += f" 引用了{oral_reference.get('actionLabel', '口述地图')}。"
             if oral_lineage:
                 detail += f" 沉淀出{oral_lineage.get('label', '路线讲述谱系')}。"
-            self._add_tribe_history(tribe, "cave", "稀有洞穴首探", detail, player_id, {"kind": "cave_race_first", "raceId": race_id, "rewardParts": reward_parts, "supports": supports, "oralMapReference": oral_reference, "oralMapLineage": oral_lineage})
+            if observer_shift:
+                detail += f" {observer_shift.get('summary')}"
+            self._add_tribe_history(tribe, "cave", "稀有洞穴首探", detail, player_id, {"kind": "cave_race_first", "raceId": race_id, "rewardParts": reward_parts, "supports": supports, "oralMapReference": oral_reference, "oralMapLineage": oral_lineage, "observerShift": observer_shift})
             await self._publish_world_rumor("cave", "稀有洞穴首探", f"{tribe.get('name', '部落')}由{member_name}抢下{race.get('caveLabel', '洞穴')}短时岔洞首探。", {"raceId": race_id, "tribeId": tribe_id})
             await self._notify_tribe(tribe_id, detail)
             await self._broadcast_all_cave_race_states()
             return
 
+        missing_team_id = f"cave_race_missing_{tribe_id}_{int(datetime.now().timestamp() * 1000)}_{random.randint(100, 999)}"
         race["status"] = "rescue"
         race["activeUntil"] = datetime.fromtimestamp(datetime.now().timestamp() + TRIBE_CAVE_RACE_RESCUE_MINUTES * 60).isoformat()
         target = max(1, min(TRIBE_CAVE_RACE_RESCUE_TARGET, len(tribe.get("members", {}) or {}) or 1))
         race["rescue"] = {
             "status": "missing",
+            "missingTeamId": missing_team_id,
             "missingPlayerId": player_id,
             "missingMemberName": member_name,
             "progress": 0,
@@ -630,6 +740,20 @@ class GameCaveRaceMixin:
             "supportLabels": [item.get("label") for item in supports],
             "createdAt": datetime.now().isoformat()
         }
+        missing_teams = [dict(item) for item in (race.get("missingTeams", []) or []) if isinstance(item, dict)]
+        missing_teams.append({
+            "id": missing_team_id,
+            "status": "missing",
+            "tribeId": tribe_id,
+            "tribeName": tribe.get("name", "部落"),
+            "missingPlayerId": player_id,
+            "missingMemberName": member_name,
+            "target": target,
+            "supportLabels": [item.get("label") for item in supports],
+            "createdAt": race["rescue"].get("createdAt"),
+            "activeUntil": race.get("activeUntil")
+        })
+        self._sync_cave_race_shared_fields(race_id, {"missingTeams": missing_teams[-TRIBE_CAVE_RACE_RESCUE_RECORD_LIMIT:]})
         oral_reference = None
         oral_lineage = None
         if hasattr(self, "_record_oral_map_context_reference"):
@@ -640,8 +764,9 @@ class GameCaveRaceMixin:
         if oral_lineage:
             detail += f" 沉淀出{oral_lineage.get('label', '路线讲述谱系')}。"
         self._add_tribe_history(tribe, "cave", "洞穴失踪线索", detail, player_id, {"kind": "cave_race_missing", "raceId": race_id, "supports": supports, "oralMapReference": oral_reference, "oralMapLineage": oral_lineage})
+        await self._publish_world_rumor("cave", "洞穴竞速失踪线索", f"{tribe.get('name', '部落')}在{race.get('caveLabel', '洞穴')}竞速中留下失踪线索，别队可以救援、夺名或继续留标。", {"raceId": race_id, "tribeId": tribe_id, "missingTeamId": missing_team_id})
         await self._notify_tribe(tribe_id, detail)
-        await self.broadcast_tribe_state(tribe_id)
+        await self._broadcast_all_cave_race_states()
 
     async def advance_cave_rescue(self, player_id: str, race_id: str, method_key: str = "echo_locate"):
         tribe_id = self.player_tribes.get(player_id)
@@ -732,6 +857,9 @@ class GameCaveRaceMixin:
         for key, value in reward_bonus.items():
             reward[key] = int(reward.get(key, 0) or 0) + int(value or 0)
         reward_parts = self._apply_cave_race_reward(tribe, reward)
+        observer_shift = self._apply_observer_outcome_shift(tribe, "cave_race", race_id) if hasattr(self, "_apply_observer_outcome_shift") else None
+        if observer_shift:
+            reward_parts.extend(observer_shift.get("rewardParts", []))
         memory = self._record_map_memory(
             tribe,
             "cave_rescue",
@@ -745,6 +873,19 @@ class GameCaveRaceMixin:
         race["status"] = "resolved"
         rescue["status"] = "rescued"
         rescue["completedAt"] = datetime.now().isoformat()
+        missing_team_id = rescue.get("missingTeamId")
+        if missing_team_id:
+            for target_tribe in self.tribes.values():
+                for target_race in target_tribe.get("cave_races", []) or []:
+                    if not isinstance(target_race, dict) or target_race.get("id") != race_id:
+                        continue
+                    for clue in target_race.get("missingTeams", []) or []:
+                        if isinstance(clue, dict) and clue.get("id") == missing_team_id:
+                            clue["status"] = "self_rescued"
+                            clue["resolvedByTribeId"] = tribe_id
+                            clue["resolvedByTribeName"] = tribe.get("name", "部落")
+                            clue["resolvedActionKey"] = "self_rescue"
+                            clue["resolvedAt"] = rescue["completedAt"]
         record = self._record_cave_rescue_aftermath(tribe, race, rescue, method, member_name, reward_parts)
         return_mark = self._create_cave_return_mark(tribe, race, rescue, method, member_name)
         tile_trace = None
@@ -776,10 +917,12 @@ class GameCaveRaceMixin:
             detail += f" 营救路线引用了{route_proof_reference.get('label', '禁地路证')}。"
         if route_proof_guardian:
             detail += f" {route_proof_guardian.get('memberName', member_name)}获得短时“路证守护者”称号。"
-        self._add_tribe_history(tribe, "cave", "完成洞穴营救", detail, player_id, {"kind": "cave_rescue_complete", "raceId": race_id, "rewardParts": reward_parts, "memoryId": memory.get("id") if memory else "", "methodKey": method.get("key"), "record": record, "returnMark": return_mark, "oralMapReference": oral_reference, "oralMapLineage": oral_lineage, "routeProofReference": route_proof_reference, "routeProofGuardian": route_proof_guardian})
+        if observer_shift:
+            detail += f" {observer_shift.get('summary')}"
+        self._add_tribe_history(tribe, "cave", "完成洞穴营救", detail, player_id, {"kind": "cave_rescue_complete", "raceId": race_id, "rewardParts": reward_parts, "memoryId": memory.get("id") if memory else "", "methodKey": method.get("key"), "record": record, "returnMark": return_mark, "oralMapReference": oral_reference, "oralMapLineage": oral_lineage, "routeProofReference": route_proof_reference, "routeProofGuardian": route_proof_guardian, "observerShift": observer_shift})
         await self._publish_world_rumor("cave", "洞穴营救完成", f"{tribe.get('name', '部落')}循着短时岔洞的失踪线索救回了队友。", {"raceId": race_id, "tribeId": tribe_id})
         await self._notify_tribe(tribe_id, detail)
-        await self.broadcast_tribe_state(tribe_id)
+        await self._broadcast_all_cave_race_states()
         await self._broadcast_current_map()
 
     async def organize_cave_return_mark(self, player_id: str, mark_id: str, action_key: str):

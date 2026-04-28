@@ -40,6 +40,7 @@ class GameStandingRitualMixin:
             "minParticipants": TRIBE_STANDING_RITUAL_MIN_PARTICIPANTS,
             "landmarkRadius": TRIBE_STANDING_RITUAL_LANDMARK_RADIUS,
             "landmarkBonuses": TRIBE_STANDING_RITUAL_LANDMARK_BONUSES,
+            "outcomes": TRIBE_STANDING_RITUAL_OUTCOMES,
             "createdAt": ritual.get("createdAt"),
             "activeUntil": ritual.get("activeUntil")
         }
@@ -199,10 +200,16 @@ class GameStandingRitualMixin:
             return None
         participants = [item for item in ritual.get("participants", []) or [] if isinstance(item, dict)]
         filled = {}
+        stationed_count = 0
+        offslot_count = 0
         for item in participants:
             key = item.get("stationKey")
+            if key:
+                stationed_count += 1
             if key and item.get("stationMatched") and key not in filled:
                 filled[key] = item
+            elif key and not item.get("stationMatched"):
+                offslot_count += 1
         slots = []
         missing = []
         for slot in puzzle.get("slots", []) or []:
@@ -221,10 +228,28 @@ class GameStandingRitualMixin:
         return {
             "slots": slots,
             "filledCount": len(filled),
+            "stationedCount": stationed_count,
+            "offslotCount": offslot_count,
             "target": len(slots),
             "missingLabels": missing,
             "completed": bool(slots) and not missing
         }
+
+    def _standing_ritual_outcome(self, requested_key: str, puzzle_result: dict | None) -> dict:
+        requested_key = requested_key if requested_key in TRIBE_STANDING_RITUAL_OUTCOMES else ""
+        if requested_key == "correct" and puzzle_result and not puzzle_result.get("completed"):
+            return {}
+        if requested_key in ("offset", "reverse"):
+            key = requested_key
+        elif puzzle_result and puzzle_result.get("completed"):
+            key = "correct"
+        elif puzzle_result:
+            key = "offset"
+        else:
+            key = requested_key or "correct"
+        config = dict(TRIBE_STANDING_RITUAL_OUTCOMES.get(key, TRIBE_STANDING_RITUAL_OUTCOMES["correct"]))
+        config["key"] = key
+        return config
 
     def _public_standing_ritual_puzzle(self, ritual: dict) -> dict | None:
         puzzle = ritual.get("puzzle")
@@ -432,7 +457,7 @@ class GameStandingRitualMixin:
         await self._notify_tribe(tribe_id, detail)
         await self.broadcast_tribe_state(tribe_id)
 
-    async def complete_standing_ritual(self, player_id: str):
+    async def complete_standing_ritual(self, player_id: str, outcome_key: str = ""):
         tribe_id = self.player_tribes.get(player_id)
         tribe = self.tribes.get(tribe_id)
         if not tribe:
@@ -451,38 +476,57 @@ class GameStandingRitualMixin:
             await self._send_tribe_error(player_id, f"至少需要 {TRIBE_STANDING_RITUAL_MIN_PARTICIPANTS} 名成员站位")
             return
         puzzle_result = self._standing_ritual_puzzle_result(ritual)
-        if puzzle_result and not puzzle_result.get("completed"):
+        outcome = self._standing_ritual_outcome(outcome_key, puzzle_result)
+        if not outcome:
             missing = "、".join(puzzle_result.get("missingLabels", []) or [])
-            await self._send_tribe_error(player_id, f"方位谜题还缺：{missing or '正确方位'}")
+            await self._send_tribe_error(player_id, f"正向收束还缺：{missing or '正确方位'}")
             return
         config = TRIBE_STANDING_RITUAL_OPTIONS.get(ritual.get("key"), {})
-        reward_parts = self._apply_standing_ritual_reward(tribe, config.get("reward", {}))
-        if len(participants) >= int(ritual.get("target", TRIBE_STANDING_RITUAL_TARGET_PARTICIPANTS) or TRIBE_STANDING_RITUAL_TARGET_PARTICIPANTS):
+        outcome_key = outcome.get("key", "correct")
+        reward_parts = self._apply_standing_ritual_reward(tribe, outcome.get("reward", {}))
+        if outcome_key == "correct":
+            reward_parts.extend(self._apply_standing_ritual_reward(tribe, config.get("reward", {})))
+        if outcome_key == "correct" and len(participants) >= int(ritual.get("target", TRIBE_STANDING_RITUAL_TARGET_PARTICIPANTS) or TRIBE_STANDING_RITUAL_TARGET_PARTICIPANTS):
             reward_parts.extend(self._apply_standing_ritual_reward(tribe, config.get("fullReward", {})))
-        if puzzle_result:
+        if outcome_key == "correct" and puzzle_result:
             reward_parts.extend(self._apply_standing_ritual_reward(tribe, (ritual.get("puzzle") or {}).get("reward", {})))
         if hasattr(self, "_apply_personality_culture_reward"):
             reward_parts.extend(self._apply_personality_culture_reward(tribe, "ritual"))
+        observer_shift = self._apply_observer_outcome_shift(tribe, "standing_ritual", ritual.get("id")) if hasattr(self, "_apply_observer_outcome_shift") else None
+        if observer_shift:
+            reward_parts.extend(observer_shift.get("rewardParts", []))
         ritual["status"] = "completed"
         ritual["completedAt"] = datetime.now().isoformat()
         ritual["completedBy"] = player_id
         ritual["puzzleResult"] = puzzle_result
+        ritual["puzzleOutcome"] = outcome
+        ritual["rewardParts"] = reward_parts
+        ritual["observerShift"] = observer_shift
         tribe.setdefault("standing_ritual_history", []).append(ritual)
         tribe["standing_ritual_history"] = tribe["standing_ritual_history"][-TRIBE_STANDING_RITUAL_HISTORY_LIMIT:]
 
         stance_labels = "、".join([item.get("stanceLabel", "见证者") for item in participants])
-        detail = f"{member.get('name', '管理者')} 收束{ritual.get('label', '站位仪式')}，{len(participants)} 名成员完成站位：{stance_labels}。{'、'.join(reward_parts) or '仪式已写入历史'}。"
+        detail = f"{member.get('name', '管理者')} 以{outcome.get('label', '方位结果')}收束{ritual.get('label', '站位仪式')}，{len(participants)} 名成员完成站位：{stance_labels}。{'、'.join(reward_parts) or '仪式已写入历史'}。"
         if puzzle_result:
             slot_labels = "、".join([slot.get("label", "") for slot in puzzle_result.get("slots", [])])
-            detail += f" 方位谜题已对齐：{slot_labels}。"
-        self._add_tribe_history(tribe, "ritual", "完成站位仪式", detail, player_id, {"kind": "standing_ritual_complete", "ritual": ritual, "rewardParts": reward_parts})
+            if outcome_key == "correct":
+                detail += f" 方位谜题已对齐：{slot_labels}。"
+            elif outcome_key == "reverse":
+                detail += f" 收束者故意倒读{slot_labels}，神话来源记为{outcome.get('mythSource', '反向解释')}。"
+            else:
+                missing = "、".join(puzzle_result.get("missingLabels", []) or [])
+                detail += f" 方位留下偏差：{missing or '队列次序'}，神话来源记为{outcome.get('mythSource', '偏差传闻')}。"
+        detail += f" 传闻语气：{outcome.get('rumorTone', '笃定')}；神话解释来源：{outcome.get('mythSource', '提示方位')}。"
+        if observer_shift:
+            detail += f" {observer_shift.get('summary')}"
+        self._add_tribe_history(tribe, "ritual", "完成站位仪式", detail, player_id, {"kind": "standing_ritual_complete", "ritual": ritual, "rewardParts": reward_parts, "observerShift": observer_shift})
         if hasattr(self, "_create_celebration_echo"):
             self._create_celebration_echo(tribe, "ritual", ritual.get("label", "站位仪式"), player_id, ritual.get("id", ""))
         await self._publish_world_rumor(
             "ritual",
             "多人站位仪式",
-            f"{tribe.get('name', '部落')} 完成{ritual.get('label', '站位仪式')}，把{stance_labels}写进了共同传闻。",
-            {"tribeId": tribe_id, "ritualKey": ritual.get("key")}
+            f"{tribe.get('name', '部落')} 以{outcome.get('label', '方位结果')}完成{ritual.get('label', '站位仪式')}，{outcome.get('rumorTone', '笃定')}口风把{stance_labels}写进共同传闻。",
+            {"tribeId": tribe_id, "ritualKey": ritual.get("key"), "outcomeKey": outcome_key, "mythSource": outcome.get("mythSource")}
         )
         await self._notify_tribe(tribe_id, detail)
         await self.broadcast_tribe_state(tribe_id)
